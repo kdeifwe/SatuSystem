@@ -1,0 +1,43 @@
+{
+  "name": "satusystem",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@hapi/boom": "^10.0.1",
+    "@mozilla/readability": "^0.6.0",
+    "@supabase/ssr": "^0.12.0",
+    "@supabase/supabase-js": "^2.108.2",
+    "@whiskeysockets/baileys": "^7.0.0-rc13",
+    "cheerio": "^1.2.0",
+    "date-fns": "^4.4.0",
+    "jsdom": "^29.1.1",
+    "lucide-react": "^0.439.0",
+    "mammoth": "^1.12.0",
+    "next": "14.2.5",
+    "pdf-parse": "^2.4.5",
+    "pino": "^10.3.1",
+    "qrcode": "^1.5.4",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "telegram": "^2.26.22",
+    "unpdf": "^1.6.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "18.3.3",
+    "autoprefixer": "10.4.21",
+    "dotenv": "^17.4.2",
+    "eslint": "8.57.0",
+    "eslint-config-next": "14.2.5",
+    "postcss": "8.4.44",
+    "tailwindcss": "3.4.5",
+    "typescript": "5.5.4"
+  }
+}

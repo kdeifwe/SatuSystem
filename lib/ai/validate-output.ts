@@ -53,7 +53,7 @@ export function validateAgentAnswer(answer: string): ValidationResult {
   }
 
   const sentenceCount = text.split(/[.!?]+/).filter((segment) => segment.trim().length > 0).length;
-  if (sentenceCount > 3) {
+  if (sentenceCount > 4) {
     errors.push('Слишком много предложений в одном сообщении');
   }
 

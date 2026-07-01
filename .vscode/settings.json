@@ -1,0 +1,8 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^node -e \"const fs=require\\('fs'\\); const data = fs\\.readFileSync\\('\\.env\\.local','utf8'\\); const m = data\\.match\\(/NEXT_PUBLIC_SUPABASE_ANON_KEY=\\(\\.\\+\\)/\\); if\\(!m\\)\\{console\\.error\\('NEXT_PUBLIC_SUPABASE_ANON_KEY not found'\\); process\\.exit\\(1\\);\\} const key=m\\[1\\]\\.trim\\(\\); try\\{const payload=JSON\\.parse\\(Buffer\\.from\\(key\\.split\\('\\.'\\)\\[1\\],'base64'\\)\\.toString\\(\\)\\); console\\.log\\(payload\\.role\\);\\} catch\\(e\\)\\{console\\.error\\('decode error', e\\.message\\); process\\.exit\\(1\\);\\} \"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}
