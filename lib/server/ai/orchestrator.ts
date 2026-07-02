@@ -3,6 +3,9 @@ import { geminiFetch, GEMINI_CHAT_MODEL } from '@/lib/server/ai/gemini-client';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { splitAgentMessage, calculateTypingDelay } from '@/lib/server/ai/message-splitter';
 import { injectHandoffSection, normalizeHandoffConfig, type HandoffConfig } from '@/lib/server/ai/handoff';
+import { sendTelegramNotification } from '@/lib/extensions/telegram-notify';
+import { PRODUCTION_TOOL_DECLARATIONS, type ToolCall } from '@/lib/ai/tools/registry';
+import { executeTool, type ToolContext } from '@/lib/ai/tools/executor';
 
 export interface ChatMessage {
   role: 'user' | 'model';
@@ -38,7 +41,7 @@ async function readAgentCapabilities(admin: ReturnType<typeof createAdminClient>
   return normalizeHandoffConfig((agentData?.general_capabilities as Record<string, unknown> | null)?.handoff_config);
 }
 
-async function ensureLeadContext(admin: ReturnType<typeof createAdminClient>, agentId: string, userMessage: string) {
+async function ensureLeadContext(admin: ReturnType<typeof createAdminClient>, agentId: string, userMessage: string, externalLeadId?: string) {
   const { data: agentData, error: agentError } = await admin
     .from('agents')
     .select('org_id')
@@ -46,9 +49,53 @@ async function ensureLeadContext(admin: ReturnType<typeof createAdminClient>, ag
     .single();
 
   if (agentError || !agentData?.org_id) {
-    return { leadId: null, conversationId: null };
+    return { leadId: null, conversationId: null, orgId: null };
   }
 
+  // If externalLeadId is provided (e.g., from Telegram webhook), use it directly
+  if (externalLeadId) {
+    const { data: existingLead } = await admin
+      .from('leads')
+      .select('id')
+      .eq('id', externalLeadId)
+      .single();
+
+    if (!existingLead) {
+      console.warn(`[orchestrator] External lead not found: ${externalLeadId}`);
+      return { leadId: null, conversationId: null, orgId: agentData.org_id };
+    }
+
+    // Use the provided lead and find/create conversation
+    let { data: conversation } = await admin
+      .from('conversations')
+      .select('id')
+      .eq('lead_id', externalLeadId)
+      .eq('agent_id', agentId)
+      .order('started_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (!conversation) {
+      const { data: createdConversation } = await admin
+        .from('conversations')
+        .insert({ lead_id: externalLeadId, agent_id: agentId })
+        .select('id')
+        .single();
+      conversation = createdConversation;
+    }
+
+    if (conversation?.id) {
+      await admin.from('messages').insert({
+        conversation_id: conversation.id,
+        sender: 'user',
+        content: userMessage,
+      });
+    }
+
+    return { leadId: externalLeadId, conversationId: conversation?.id ?? null, orgId: agentData.org_id };
+  }
+
+  // Otherwise, use sandbox lead (for direct API calls, not Telegram)
   const externalId = `sandbox:${agentId}`;
   let { data: lead } = await admin
     .from('leads')
@@ -72,7 +119,7 @@ async function ensureLeadContext(admin: ReturnType<typeof createAdminClient>, ag
   }
 
   if (!lead?.id) {
-    return { leadId: null, conversationId: null };
+    return { leadId: null, conversationId: null, orgId: agentData.org_id };
   }
 
   let { data: conversation } = await admin
@@ -101,7 +148,7 @@ async function ensureLeadContext(admin: ReturnType<typeof createAdminClient>, ag
     });
   }
 
-  return { leadId: lead.id, conversationId: conversation?.id ?? null };
+  return { leadId: lead.id, conversationId: conversation?.id ?? null, orgId: agentData.org_id };
 }
 
 async function appendMessage(admin: ReturnType<typeof createAdminClient>, conversationId: string | null, sender: 'ai' | 'system', content: string) {
@@ -116,6 +163,7 @@ async function appendMessage(admin: ReturnType<typeof createAdminClient>, conver
 
 async function executeRedirectToOperator(
   admin: ReturnType<typeof createAdminClient>,
+  agentId: string,
   leadId: string | null,
   conversationId: string | null,
   reason: string,
@@ -139,6 +187,37 @@ async function executeRedirectToOperator(
     await appendMessage(admin, conversationId, 'ai', clientMessage);
   }
 
+  try {
+    const { data: settingsRow } = await admin
+      .from('extension_settings')
+      .select('config')
+      .eq('agent_id', agentId)
+      .eq('extension_type', 'telegram_notifications')
+      .maybeSingle();
+
+    const config = (settingsRow?.config as { recipients?: string[]; events?: { operator_needed?: { enabled?: boolean } } } | null) ?? {};
+    const isEnabled = config.events?.operator_needed?.enabled !== false;
+    const recipientIds = Array.isArray(config.recipients) ? config.recipients : [];
+
+    if (isEnabled && recipientIds.length) {
+      const { data: profiles } = await admin
+        .from('profiles')
+        .select('telegram_chat_id')
+        .in('id', recipientIds);
+
+      for (const profile of profiles ?? []) {
+        if (profile.telegram_chat_id) {
+          await sendTelegramNotification(
+            profile.telegram_chat_id,
+            `🔔 Лид запросил оператора. Причина: ${normalizedReason}`
+          );
+        }
+      }
+    }
+  } catch (error) {
+    console.error('[orchestrator] failed to send Telegram handoff notification', error);
+  }
+
   return {
     answer: clientMessage,
     handoffMessage,
@@ -156,11 +235,22 @@ function tryExtractToolCalls(parts: Array<Record<string, any>> | undefined): Too
     }));
 }
 
+function extractTextFromParts(parts: Array<Record<string, unknown>> | undefined): string {
+  if (!Array.isArray(parts)) return '';
+
+  return parts
+    .filter((part) => typeof part?.text === 'string')
+    .map((part) => part.text)
+    .join('\n')
+    .trim();
+}
+
 export async function runAgentTurn(
   agentId: string,
   systemPrompt: string,
   userMessage: string,
   history: ChatMessage[],
+  externalLeadId?: string, // Optional: for Telegram/webhook-identified leads
 ): Promise<AgentTurnResult> {
   const admin = createAdminClient();
   const handoffConfig = await readAgentCapabilities(admin, agentId);
@@ -187,6 +277,9 @@ ${kbContext}
 
 Правило: отвечай ТОЛЬКО на основе информации выше. Если данных нет — честно скажи об этом.`;
 
+  const toolDeclarations = PRODUCTION_TOOL_DECLARATIONS;
+  console.log('[PROD_TOOL_DECLS]', toolDeclarations.map((declaration) => declaration.name));
+
   const res = await geminiFetch(GEMINI_CHAT_MODEL, 'generateContent', {
     system_instruction: { parts: [{ text: fullSystemPrompt }] },
     contents: [
@@ -194,20 +287,7 @@ ${kbContext}
       { role: 'user', parts: [{ text: userMessage }] },
     ],
     tools: [{
-      functionDeclarations: [{
-        name: 'redirectToOperator',
-        description: 'Передать диалог оператору и отключить AI',
-        parameters: {
-          type: 'object',
-          properties: {
-            reason: {
-              type: 'string',
-              description: 'Причина передачи оператора',
-            },
-          },
-          required: ['reason'],
-        },
-      }],
+      functionDeclarations: toolDeclarations,
     }],
     toolConfig: {
       functionCallingConfig: { mode: 'AUTO' },
@@ -216,31 +296,121 @@ ${kbContext}
 
   if (!res.ok) {
     const errText = await res.text();
+    try {
+      // record consecutive AI error
+      const { data: existing } = await admin.from('ai_error_counters').select('consecutive_errors').eq('agent_id', agentId).maybeSingle();
+      const prev = existing?.consecutive_errors ?? 0;
+      const next = prev + 1;
+      await admin.from('ai_error_counters').upsert({ agent_id: agentId, consecutive_errors: next, last_error_at: new Date() });
+      if (next >= 3) {
+        await admin.from('notification_log').insert({
+          org_id: (await admin.from('agents').select('org_id').eq('id', agentId).maybeSingle()).data?.org_id,
+          agent_id: agentId,
+          lead_id: null,
+          event_type: 'ai_error',
+          payload: { error: errText ?? `status ${res.status}`, attempts: next },
+          delivery_status: 'pending'
+        });
+        // reset counter after enqueue
+        await admin.from('ai_error_counters').update({ consecutive_errors: 0 }).eq('agent_id', agentId);
+      }
+    } catch (e) {
+      console.error('[orchestrator] failed to record ai_error counter', e);
+    }
+
     throw new Error(`Gemini API error ${res.status}: ${errText}`);
   }
 
   const data = await res.json();
-  const parts = data.candidates?.[0]?.content?.parts as Array<Record<string, any>> | undefined;
-  const answer = parts?.filter((part) => typeof part?.text === 'string').map((part) => part.text).join('\n') ?? '';
-  const toolCalls = tryExtractToolCalls(parts);
-
-  const { leadId, conversationId } = await ensureLeadContext(admin, agentId, userMessage);
-  let finalAnswer = answer;
+  // reset consecutive error counter on success
+  try {
+    await admin.from('ai_error_counters').update({ consecutive_errors: 0 }).eq('agent_id', agentId);
+  } catch (e) {
+    // non-fatal
+  }
+  let currentParts = data.candidates?.[0]?.content?.parts as Array<Record<string, any>> | undefined;
+  let finalAnswer = extractTextFromParts(currentParts);
   let handoffMessage: string | undefined;
+  let handoffTriggered = false;
 
-  if (handoffConfig.enabled && toolCalls.length > 0) {
-    const toolCall = toolCalls[0];
-    if (toolCall.name === 'redirectToOperator') {
-      const result = await executeRedirectToOperator(
-        admin,
-        leadId,
-        conversationId,
-        String(toolCall.args.reason ?? 'Передача оператору'),
-        handoffConfig,
-      );
-      finalAnswer = result.answer;
-      handoffMessage = result.handoffMessage;
+  const { leadId, conversationId, orgId } = await ensureLeadContext(admin, agentId, userMessage, externalLeadId);
+  const toolContext: ToolContext = {
+    leadId: leadId ?? '',
+    agentId,
+    orgId: orgId ?? '',
+    conversationId: conversationId ?? '',
+    isSandbox: false,
+  };
+  const allowedToolNames = toolDeclarations.map((declaration) => declaration.name);
+  let toolCalls = tryExtractToolCalls(currentParts);
+  let iterations = 0;
+  let toolsUsed: string[] = [];
+
+  while (iterations < 5 && toolCalls.length > 0) {
+    iterations += 1;
+    const toolResults: Array<Record<string, unknown>> = [];
+
+    for (const toolCall of toolCalls) {
+      if (!allowedToolNames.includes(toolCall.name)) {
+        toolResults.push({ name: toolCall.name, result: null, error: `Инструмент ${toolCall.name} не разрешён для этого агента.` });
+        continue;
+      }
+
+      toolsUsed.push(toolCall.name);
+      console.log('[PROD_TOOL] calling', { agentId, conversationId, name: toolCall.name, args: toolCall.args });
+      const toolResult = await executeTool(toolCall as ToolCall, toolContext);
+      toolResults.push({ name: toolCall.name, result: toolResult.result, error: toolResult.error });
+      console.log('[PROD_TOOL_RESULT]', { agentId, name: toolCall.name, result: toolResult.result, error: toolResult.error });
+
+      if (toolCall.name === 'redirectToOperator' && toolResult.result && !toolResult.error) {
+        handoffTriggered = true;
+        break;
+      }
     }
+
+    if (handoffTriggered) {
+      break;
+    }
+
+    const functionResponseParts = toolResults.map((result) => ({
+      functionResponse: {
+        name: result.name,
+        response: result.error ? { error: result.error } : { result: result.result },
+      },
+    }));
+    console.log('[PROD_TOOL_FOLLOWUP]', { agentId, toolResults, functionResponseParts });
+
+    const followUpRes = await geminiFetch(GEMINI_CHAT_MODEL, 'generateContent', {
+      system_instruction: { parts: [{ text: fullSystemPrompt }] },
+      contents: [
+        ...history.map((m) => ({ role: m.role === 'user' ? 'user' : 'model', parts: [{ text: m.text }] })),
+        { role: 'user', parts: [{ text: userMessage }] },
+        { role: 'model', parts: currentParts ?? [] },
+        { role: 'user', parts: functionResponseParts },
+      ],
+      tools: [{
+        functionDeclarations: toolDeclarations,
+      }],
+      toolConfig: {
+        functionCallingConfig: { mode: 'AUTO' },
+      },
+    });
+
+    if (!followUpRes.ok) {
+      const errText = await followUpRes.text();
+      throw new Error(`Gemini API error ${followUpRes.status}: ${errText}`);
+    }
+
+    const followUpData = await followUpRes.json();
+    currentParts = followUpData.candidates?.[0]?.content?.parts as Array<Record<string, any>> | undefined;
+    finalAnswer = extractTextFromParts(currentParts) || finalAnswer;
+    console.log('[PROD_TOOL_FOLLOWUP_RESPONSE]', { agentId, answer: finalAnswer, toolCalls: tryExtractToolCalls(currentParts) });
+    toolCalls = tryExtractToolCalls(currentParts);
+  }
+
+  if (handoffTriggered) {
+    console.log('[PROD_HANDOFF_TRIGGERED]', { agentId, leadId, conversationId, reason: toolsUsed.join(',') });
+    finalAnswer = finalAnswer || 'Сейчас подключу коллегу, пожалуйста, подождите.';
   }
 
   if (!finalAnswer.trim()) {
