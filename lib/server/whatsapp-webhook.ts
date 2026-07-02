@@ -192,6 +192,28 @@ async function processIncomingWhatsAppMessage(body: any) {
       lead = newLead;
     }
 
+    // Detect lead_returned: if we have a recorded last_inbound_at and it was long ago
+    try {
+      const { data: rts } = await admin.from('lead_repeat_touch_state').select('last_inbound_at').eq('lead_id', lead.id).maybeSingle();
+      const lastInbound = rts?.last_inbound_at ? new Date(rts.last_inbound_at) : null;
+      if (lastInbound) {
+        const ms = Date.now() - lastInbound.getTime();
+        const days = ms / (1000 * 60 * 60 * 24);
+        if (days >= 1) {
+          await admin.from('notification_log').insert({
+            org_id: channel.org_id,
+            agent_id: agent.id,
+            lead_id: lead.id,
+            event_type: 'lead_returned',
+            payload: { lead_name: lead.name, days_silent: Math.floor(days), message_preview: String(text).slice(0, 200) },
+            delivery_status: 'pending',
+          });
+        }
+      }
+    } catch (e) {
+      console.error('[whatsapp webhook] failed to check lead_returned', e);
+    }
+
     if (!lead) {
       return;
     }

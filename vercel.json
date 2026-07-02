@@ -1,7 +1,15 @@
 {
   "crons": [
     {
-      "path": "/api/cron/scenarios",
+      "path": "/api/cron/ai-silent-check",
+      "schedule": "*/2 * * * *"
+    },
+    {
+      "path": "/api/cron/repeat-touches",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/worker-health-check",
       "schedule": "*/15 * * * *"
     }
   ]

@@ -130,6 +130,28 @@ async function handleUpdate(update: any, agentId: string) {
       lead = newLead;
     }
 
+      // Detect lead_returned: if we have a recorded last_inbound_at and it was long ago
+      try {
+        const { data: rts } = await admin.from('lead_repeat_touch_state').select('last_inbound_at').eq('lead_id', lead.id).maybeSingle();
+        const lastInbound = rts?.last_inbound_at ? new Date(rts.last_inbound_at) : null;
+        if (lastInbound) {
+          const ms = Date.now() - lastInbound.getTime();
+          const days = ms / (1000 * 60 * 60 * 24);
+          if (days >= 1) {
+            await admin.from('notification_log').insert({
+              org_id: agent.org_id,
+              agent_id: agentId,
+              lead_id: lead.id,
+              event_type: 'lead_returned',
+              payload: { lead_name: lead.name, days_silent: Math.floor(days), message_preview: String(text).slice(0, 200) },
+              delivery_status: 'pending',
+            });
+          }
+        }
+      } catch (e) {
+        console.error('[TG webhook] failed to check lead_returned', e);
+      }
+
     console.log('[TG webhook] Lead:', lead.id, 'ai_enabled:', lead.ai_enabled);
 
     // 5. Получаем или создаём conversation
@@ -232,7 +254,34 @@ async function handleUpdate(update: any, agentId: string) {
       });
 
       const sendData = await sendRes.json();
-      console.log('[TG webhook] Message sent:', sendData.ok, sendData.error_code);
+        console.log('[TG webhook] Message sent:', sendData.ok, sendData.error_code);
+        if (!sendRes.ok || !sendData?.ok) {
+          try {
+            const { data: existing } = await admin.from('channel_error_counters').select('consecutive_errors').eq('channel_type', 'telegram').maybeSingle();
+            const prev = existing?.consecutive_errors ?? 0;
+            const next = prev + 1;
+            await admin.from('channel_error_counters').upsert({ channel_type: 'telegram', consecutive_errors: next, last_error_at: new Date() });
+            if (next >= 3) {
+              await admin.from('notification_log').insert({
+                org_id: agent.org_id,
+                agent_id: agentId,
+                lead_id: null,
+                event_type: 'channel_down',
+                payload: { channel_type: 'telegram', channel_name: 'Telegram Bot', error_message: JSON.stringify(sendData), time: new Date() },
+                delivery_status: 'pending',
+              });
+              await admin.from('channel_error_counters').update({ consecutive_errors: 0 }).eq('channel_type', 'telegram');
+            }
+          } catch (e) {
+            console.error('[TG webhook] failed to update channel_error_counters', e);
+          }
+        } else {
+          try {
+            await admin.from('channel_error_counters').update({ consecutive_errors: 0 }).eq('channel_type', 'telegram');
+          } catch (e) {
+            // ignore
+          }
+        }
 
       // Сохраняем ответ AI
       await admin.from('messages').insert({

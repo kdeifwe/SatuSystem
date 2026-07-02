@@ -5,3 +5,5 @@ out
 .env
 .env.local
 /baileys-auth
+tsconfig.tsbuildinfo
+supabase/.temp/
