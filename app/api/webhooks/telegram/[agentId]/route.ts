@@ -15,13 +15,21 @@ export async function POST(
   req: NextRequest,
   { params }: { params: { agentId: string } }
 ) {
-  const body = await req.json();
-  
+  const rawBody = await req.text();
+  let body: any = {};
+
+  try {
+    body = rawBody ? JSON.parse(rawBody) : {};
+  } catch (err) {
+    console.error('[TG webhook] Invalid JSON body:', err, 'rawBody:', rawBody.slice(0, 500));
+    return NextResponse.json({ ok: true });
+  }
+
   // Запускаем обработку асинхронно
-  handleUpdate(body, params.agentId).catch(err => 
+  handleUpdate(body, params.agentId).catch(err =>
     console.error('[TG webhook] Unhandled error:', err)
   );
-  
+
   return NextResponse.json({ ok: true });
 }
 
@@ -184,7 +192,7 @@ async function handleUpdate(update: any, agentId: string) {
     const systemPrompt = agent.system_prompt_compiled ?? 
       `Ты ${agent.name}. Отвечай кратко и по-человечески.`;
 
-    const { answer } = await runAgentTurn(agentId, systemPrompt, text, historyFormatted);
+    const { answer } = await runAgentTurn(agentId, systemPrompt, text, historyFormatted, lead.id);
 
     console.log('[TG webhook] AI answer:', answer.slice(0, 100));
 
