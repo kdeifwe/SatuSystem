@@ -1,5 +1,7 @@
 import { createServiceClient } from '../../supabase/service.ts';
 import { generateEmbedding } from '../embeddings.ts';
+import { enqueueNotification } from '../../notifications.ts';
+import { sendTelegramNotification } from '../../extensions/telegram-notify.ts';
 import { type ToolCall, type ToolResult } from './registry.ts';
 
 export interface ToolContext {
@@ -89,6 +91,10 @@ async function searchKnowledgeBase(args: { query: string; top_k?: number }, ctx:
 
 async function redirectToOperator(args: { reason: string; priority?: string }, ctx: ToolContext) {
   if (ctx.isSandbox) {
+    await enqueueNotification('operator_needed', ctx.leadId, ctx.agentId, {
+      reason: args.reason,
+      priority: args.priority ?? 'normal',
+    }, { orgId: ctx.orgId, skipDedupCheck: true });
     return { success: true, sandbox_mode: true };
   }
 
@@ -100,6 +106,11 @@ async function redirectToOperator(args: { reason: string; priority?: string }, c
     lead_id: ctx.leadId,
     note: `🔄 AI передал диалог оператору. Причина: ${args.reason}. Приоритет: ${args.priority ?? 'normal'}`,
   });
+
+  await enqueueNotification('operator_needed', ctx.leadId, ctx.agentId, {
+    reason: args.reason,
+    priority: args.priority ?? 'normal',
+  }, { orgId: ctx.orgId });
 
   return {
     success: true,
@@ -215,6 +226,23 @@ async function updateLeadInfo(args: { lead_id: string; fields: Record<string, un
   }).eq('id', args.lead_id).eq('org_id', ctx.orgId);
 
   if (error) throw new Error(`Ошибка обновления данных лида: ${error.message}`);
+
+  const phone = args.fields.phone as string | undefined;
+  const email = args.fields.email as string | undefined;
+
+  if (phone || email) {
+    for (const contactType of ['phone', 'email']) {
+      if ((contactType === 'phone' && phone) || (contactType === 'email' && email)) {
+        await enqueueNotification('contact_received', args.lead_id, ctx.agentId, {
+          phone: contactType === 'phone' ? phone : undefined,
+          email: contactType === 'email' ? email : undefined,
+          lead_id: args.lead_id,
+          lead_name: directUpdate.name || args.fields.name || '—',
+        }, { orgId: ctx.orgId });
+      }
+    }
+  }
+
   return { success: true, updated_fields: Object.keys(args.fields) };
 }
 
@@ -235,12 +263,176 @@ async function addLeadNote(args: { lead_id: string; note: string }, ctx: ToolCon
 
 async function sendCustomNotification(args: { message: string; target: string }, ctx: ToolContext) {
   const supabase = createServiceClient();
+
   await supabase.from('messages').insert({
     conversation_id: ctx.conversationId,
     sender: 'system',
     content: `📢 Уведомление команде (${args.target}): ${args.message}`,
   });
-  return { success: true, target: args.target };
+
+  if (ctx.isSandbox) {
+    console.log('[TOOL] sendCustomNotification: sandbox mode, skipping Telegram send', {
+      conversationId: ctx.conversationId,
+      target: args.target,
+    });
+    return { success: true, telegram_sent: false, reason: 'sandbox_mode' };
+  }
+
+  const { data: conversation, error: conversationError } = await supabase
+    .from('conversations')
+    .select('lead_id')
+    .eq('id', ctx.conversationId)
+    .single();
+
+  if (conversationError || !conversation?.lead_id) {
+    console.warn('[TOOL] sendCustomNotification: unable to resolve lead from conversation', {
+      conversationId: ctx.conversationId,
+      error: conversationError?.message,
+    });
+    return { success: true, telegram_sent: false, reason: 'no_recipient' };
+  }
+
+  const { data: lead, error: leadError } = await supabase
+    .from('leads')
+    .select('assigned_to, org_id')
+    .eq('id', conversation.lead_id)
+    .single();
+
+  if (leadError || !lead) {
+    console.warn('[TOOL] sendCustomNotification: unable to resolve lead', {
+      leadId: conversation.lead_id,
+      error: leadError?.message,
+    });
+    return { success: true, telegram_sent: false, reason: 'no_recipient' };
+  }
+
+  const orgId = lead.org_id;
+  let telegramChatIds: string[] = [];
+
+  if (args.target === 'assigned_operator') {
+    if (!lead.assigned_to) {
+      console.warn('[TOOL] sendCustomNotification: no assigned operator for lead', {
+        leadId: conversation.lead_id,
+      });
+      return { success: true, telegram_sent: false, reason: 'no_recipient' };
+    }
+
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('telegram_chat_id')
+      .eq('id', lead.assigned_to)
+      .single();
+
+    if (profileError || !profile?.telegram_chat_id) {
+      console.warn('[TOOL] sendCustomNotification: assigned operator has no telegram_chat_id', {
+        assigned_to: lead.assigned_to,
+        error: profileError?.message,
+      });
+      return { success: true, telegram_sent: false, reason: 'no_recipient' };
+    }
+
+    try {
+      await sendTelegramNotification(profile.telegram_chat_id, args.message);
+      return { success: true, telegram_sent: true, reason: 'sent' };
+    } catch (error) {
+      console.error('[TOOL] sendCustomNotification: failed to send Telegram notification', error);
+      return { success: true, telegram_sent: false, reason: 'send_failed' };
+    }
+  }
+
+  if (args.target === 'owner') {
+    const { data: ownerMember, error: ownerError } = await supabase
+      .from('org_members')
+      .select('user_id')
+      .eq('org_id', orgId)
+      .eq('role', 'owner')
+      .limit(1)
+      .maybeSingle();
+
+    if (ownerError || !ownerMember?.user_id) {
+      console.warn('[TOOL] sendCustomNotification: owner not found for org', { orgId, error: ownerError?.message });
+      return { success: true, telegram_sent: false, reason: 'no_recipient' };
+    }
+
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('telegram_chat_id')
+      .eq('id', ownerMember.user_id)
+      .single();
+
+    if (profileError || !profile?.telegram_chat_id) {
+      console.warn('[TOOL] sendCustomNotification: owner has no telegram_chat_id', {
+        ownerId: ownerMember.user_id,
+        error: profileError?.message,
+      });
+      return { success: true, telegram_sent: false, reason: 'no_recipient' };
+    }
+
+    try {
+      await sendTelegramNotification(profile.telegram_chat_id, args.message);
+      return { success: true, telegram_sent: true, reason: 'sent' };
+    } catch (error) {
+      console.error('[TOOL] sendCustomNotification: failed to send Telegram notification', error);
+      return { success: true, telegram_sent: false, reason: 'send_failed' };
+    }
+  }
+
+  if (args.target === 'all_team') {
+    const { data: members, error: membersError } = await supabase
+      .from('org_members')
+      .select('user_id')
+      .eq('org_id', orgId);
+
+    if (membersError || !members?.length) {
+      console.warn('[TOOL] sendCustomNotification: no org members found', { orgId, error: membersError?.message });
+      return { success: true, telegram_sent: false, reason: 'no_recipient' };
+    }
+
+    const memberIds = members.map((member) => member.user_id).filter(Boolean) as string[];
+    const { data: profiles, error: profilesError } = await supabase
+      .from('profiles')
+      .select('telegram_chat_id')
+      .in('id', memberIds)
+      .not('telegram_chat_id', 'is', null);
+
+    if (profilesError || !profiles?.length) {
+      console.warn('[TOOL] sendCustomNotification: no telegram chat ids for org members', {
+        orgId,
+        error: profilesError?.message,
+      });
+      return { success: true, telegram_sent: false, reason: 'no_recipient' };
+    }
+
+    telegramChatIds = profiles.map((profile) => profile.telegram_chat_id).filter(Boolean) as string[];
+    if (telegramChatIds.length === 0) {
+      console.warn('[TOOL] sendCustomNotification: no telegram chat ids available for org members', { orgId });
+      return { success: true, telegram_sent: false, reason: 'no_recipient' };
+    }
+
+    let delivered = 0;
+    let failed = 0;
+
+    for (const chatId of telegramChatIds) {
+      try {
+        await sendTelegramNotification(chatId, args.message);
+        delivered += 1;
+      } catch (error) {
+        console.error('[TOOL] sendCustomNotification: failed to send Telegram notification', error);
+        failed += 1;
+      }
+    }
+
+    return {
+      success: true,
+      telegram_sent: delivered > 0,
+      delivered,
+      failed,
+      reason: delivered > 0 ? 'sent' : 'send_failed',
+    };
+  }
+
+  console.warn('[TOOL] sendCustomNotification: unknown target', { target: args.target });
+  return { success: true, telegram_sent: false, reason: 'unknown_target' };
 }
 
 async function scheduleMessage(args: { lead_id: string; message: string; send_at: string }, ctx: ToolContext) {
