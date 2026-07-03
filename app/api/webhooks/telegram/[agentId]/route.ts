@@ -263,8 +263,6 @@ async function handleUpdate(update: any, agentId: string) {
             const prev = existing?.consecutive_errors ?? 0;
             const next = prev + 1;
             await admin.from('channel_error_counters').upsert({ channel_id: channelId, consecutive_errors: next, last_error_at: new Date(), last_error_message: JSON.stringify(sendData), updated_at: new Date().toISOString() });
-            // Ensure updated_at is applied (explicit update to avoid any upsert edge cases)
-            try { await admin.from('channel_error_counters').update({ updated_at: new Date().toISOString() }).eq('channel_id', channelId); } catch (e) {}
             if (next >= 3) {
               await admin.from('notification_log').insert({
                 org_id: agent.org_id,
@@ -275,7 +273,6 @@ async function handleUpdate(update: any, agentId: string) {
                 delivery_status: 'pending',
               });
               await admin.from('channel_error_counters').update({ consecutive_errors: 0, updated_at: new Date().toISOString() }).eq('channel_id', channelId);
-              try { await admin.from('channel_error_counters').update({ updated_at: new Date().toISOString() }).eq('channel_id', channelId); } catch (e) {}
             }
           } catch (e) {
             console.error('[TG webhook] failed to update channel_error_counters', e);
@@ -284,7 +281,6 @@ async function handleUpdate(update: any, agentId: string) {
           try {
             const channelId = channel?.id ?? null;
             await admin.from('channel_error_counters').update({ consecutive_errors: 0, updated_at: new Date().toISOString() }).eq('channel_id', channelId);
-            try { await admin.from('channel_error_counters').update({ updated_at: new Date().toISOString() }).eq('channel_id', channelId); } catch (e) {}
           } catch (e) {
             // ignore
           }

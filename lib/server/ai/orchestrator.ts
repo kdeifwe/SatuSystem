@@ -302,7 +302,6 @@ ${kbContext}
       const prev = existing?.consecutive_errors ?? 0;
       const next = prev + 1;
       await admin.from('ai_error_counters').upsert({ agent_id: agentId, consecutive_errors: next, last_error_at: new Date(), updated_at: new Date().toISOString() });
-      try { await admin.from('ai_error_counters').update({ updated_at: new Date().toISOString() }).eq('agent_id', agentId); } catch (e) {}
       if (next >= 3) {
         await admin.from('notification_log').insert({
           org_id: (await admin.from('agents').select('org_id').eq('id', agentId).maybeSingle()).data?.org_id,
@@ -314,7 +313,6 @@ ${kbContext}
         });
         // reset counter after enqueue
         await admin.from('ai_error_counters').update({ consecutive_errors: 0, updated_at: new Date().toISOString() }).eq('agent_id', agentId);
-        try { await admin.from('ai_error_counters').update({ updated_at: new Date().toISOString() }).eq('agent_id', agentId); } catch (e) {}
       }
     } catch (e) {
       console.error('[orchestrator] failed to record ai_error counter', e);
@@ -327,7 +325,6 @@ ${kbContext}
   // reset consecutive error counter on success
   try {
     await admin.from('ai_error_counters').update({ consecutive_errors: 0, updated_at: new Date().toISOString() }).eq('agent_id', agentId);
-    try { await admin.from('ai_error_counters').update({ updated_at: new Date().toISOString() }).eq('agent_id', agentId); } catch (e) {}
   } catch (e) {
     // non-fatal
   }

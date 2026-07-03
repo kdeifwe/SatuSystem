@@ -43,7 +43,6 @@ export async function sendWhatsAppMessage(
       const prev = existing?.consecutive_errors ?? 0;
       const next = prev + 1;
       await admin.from('channel_error_counters').upsert({ channel_id: channelId, consecutive_errors: next, last_error_at: new Date(), last_error_message: errText, updated_at: new Date().toISOString() });
-      try { await admin.from('channel_error_counters').update({ updated_at: new Date().toISOString() }).eq('channel_id', channelId); } catch (e) {}
       if (next >= 3) {
         await admin.from('notification_log').insert({
           org_id: null,
@@ -54,7 +53,6 @@ export async function sendWhatsAppMessage(
           delivery_status: 'pending'
         });
         await admin.from('channel_error_counters').update({ consecutive_errors: 0, updated_at: new Date().toISOString() }).eq('channel_id', channelId);
-        try { await admin.from('channel_error_counters').update({ updated_at: new Date().toISOString() }).eq('channel_id', channelId); } catch (e) {}
       }
     } catch (e) {
       console.error('[whatsapp] failed to update channel_error_counters', e);

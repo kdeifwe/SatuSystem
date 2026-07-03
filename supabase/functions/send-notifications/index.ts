@@ -241,7 +241,6 @@ Deno.serve(async () => {
         const prev = existing?.consecutive_errors ?? 0;
         const next = prev + 1;
         await supabase.from('channel_error_counters').upsert({ channel_id: channelId, consecutive_errors: next, last_error_at: new Date(), last_error_message: String(error), updated_at: new Date().toISOString() });
-        try { await supabase.from('channel_error_counters').update({ updated_at: new Date().toISOString() }).eq('channel_id', channelId); } catch (e) {}
         if (next >= 3) {
           // Enqueue channel_down notification
           await supabase.from('notification_log').insert({
@@ -253,7 +252,6 @@ Deno.serve(async () => {
             delivery_status: 'pending'
           });
           await supabase.from('channel_error_counters').update({ consecutive_errors: 0, updated_at: new Date().toISOString() }).eq('channel_id', channelId);
-          try { await supabase.from('channel_error_counters').update({ updated_at: new Date().toISOString() }).eq('channel_id', channelId); } catch (e) {}
         }
       } catch (e) {
         console.error('[send-notifications] failed to update channel_error_counters', e);
