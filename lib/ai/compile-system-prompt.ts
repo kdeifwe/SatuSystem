@@ -1,6 +1,6 @@
 import { createServiceClient } from '../supabase/service.ts';
 import { BASE_POLICY } from './base-policy.ts';
-import { PRODUCTION_TOOL_DECLARATIONS, PRODUCTION_TOOL_NAMES, ALL_TOOL_DECLARATIONS } from './tools/registry.ts';
+import { PRODUCTION_TOOL_DECLARATIONS, ALL_TOOL_DECLARATIONS } from './tools/registry.ts';
 
 interface AgentConfig {
   id: string;
@@ -51,9 +51,8 @@ export function buildSystemPrompt(
   org: OrgConfig,
   customTools: Array<{ name?: string | null }>
 ): string {
-  const productionToolNames = [...PRODUCTION_TOOL_NAMES];
   const customToolNames = customTools.map((t) => t.name).filter(Boolean);
-  const availableToolNames = [...productionToolNames, ...customToolNames, ...ALL_TOOL_DECLARATIONS.map((d) => d.name)];
+  const availableToolNames = [...ALL_TOOL_DECLARATIONS.map((d) => d.name), ...customToolNames];
 
   const generalCapabilities = agent.general_capabilities as Record<string, unknown> | null;
   const allowedTools = Array.isArray(generalCapabilities?.allowed_tools)
