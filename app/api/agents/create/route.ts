@@ -22,7 +22,7 @@ export async function POST() {
       return NextResponse.json({ error: 'Организация не найдена' }, { status: 400 });
     }
 
-    // Создаём агента
+    // Создаём агента с дефолтными allowed_tools
     const { data, error } = await supabase
       .from('agents')
       .insert({
@@ -32,6 +32,9 @@ export async function POST() {
         org_id: membership.org_id,
         model: GEMINI_CHAT_MODEL,
         is_active: true,
+        general_capabilities: {
+          allowed_tools: ['searchKnowledgeBase', 'redirectToOperator', 'getCurrentDate', 'add_lead_note'],
+        },
       })
       .select('id')
       .single();

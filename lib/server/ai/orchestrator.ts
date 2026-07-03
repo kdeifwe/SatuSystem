@@ -4,7 +4,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { splitAgentMessage, calculateTypingDelay } from '@/lib/server/ai/message-splitter';
 import { injectHandoffSection, normalizeHandoffConfig, type HandoffConfig } from '@/lib/server/ai/handoff';
 import { sendTelegramNotification } from '@/lib/extensions/telegram-notify';
-import { PRODUCTION_TOOL_DECLARATIONS, type ToolCall } from '@/lib/ai/tools/registry';
+import { PRODUCTION_TOOL_DECLARATIONS, ALL_TOOL_DECLARATIONS, type ToolCall } from '@/lib/ai/tools/registry';
 import { executeTool, type ToolContext } from '@/lib/ai/tools/executor';
 
 export interface ChatMessage {
@@ -256,6 +256,22 @@ export async function runAgentTurn(
   const handoffConfig = await readAgentCapabilities(admin, agentId);
   const basePrompt = injectHandoffSection(systemPrompt, handoffConfig);
 
+  // Читаем allowed_tools конкретного агента
+  const { data: agentData } = await admin
+    .from('agents')
+    .select('general_capabilities')
+    .eq('id', agentId)
+    .single();
+
+  const generalCapabilities = (agentData?.general_capabilities as Record<string, unknown> | null) ?? {};
+  const allowedToolNames = Array.isArray(generalCapabilities.allowed_tools)
+    ? (generalCapabilities.allowed_tools as string[]).filter((name) => typeof name === 'string')
+    : PRODUCTION_TOOL_DECLARATIONS.map((d) => d.name); // Fallback to baseline if not set
+
+  // Формируем toolDeclarations только для разрешённых тулов
+  const toolDeclarations = ALL_TOOL_DECLARATIONS.filter((d) => allowedToolNames.includes(d.name));
+  console.log(`[AGENT_TOOLS] Agent ${agentId}: allowed tools: [${allowedToolNames.join(', ')}], declarations: [${toolDeclarations.map((d) => d.name).join(', ')}]`);
+
   // 1. RAG — ищем релевантные чанки ДО вызова Gemini
   const chunks = await searchKnowledgeBase(agentId, userMessage);
   const kbContext = formatChunksForPrompt(chunks);
@@ -276,9 +292,6 @@ ${kbContext}
 </knowledge_base>
 
 Правило: отвечай ТОЛЬКО на основе информации выше. Если данных нет — честно скажи об этом.`;
-
-  const toolDeclarations = PRODUCTION_TOOL_DECLARATIONS;
-  console.log('[PROD_TOOL_DECLS]', toolDeclarations.map((declaration) => declaration.name));
 
   const res = await geminiFetch(GEMINI_CHAT_MODEL, 'generateContent', {
     system_instruction: { parts: [{ text: fullSystemPrompt }] },
@@ -341,7 +354,6 @@ ${kbContext}
     conversationId: conversationId ?? '',
     isSandbox: false,
   };
-  const allowedToolNames = toolDeclarations.map((declaration) => declaration.name);
   let toolCalls = tryExtractToolCalls(currentParts);
   let iterations = 0;
   let toolsUsed: string[] = [];
@@ -389,7 +401,7 @@ ${kbContext}
         { role: 'user', parts: functionResponseParts },
       ],
       tools: [{
-        functionDeclarations: toolDeclarations,
+        functionDeclarations: toolDeclarations, // ✅ используем отфильтрованный список
       }],
       toolConfig: {
         functionCallingConfig: { mode: 'AUTO' },
@@ -421,13 +433,7 @@ ${kbContext}
     await appendMessage(admin, conversationId, 'ai', finalAnswer);
   }
 
-  const { data: agentData } = await admin
-    .from('agents')
-    .select('general_capabilities')
-    .eq('id', agentId)
-    .single();
-
-  const capabilities = (agentData?.general_capabilities as Record<string, unknown> | null) ?? {};
+  const capabilities = generalCapabilities ?? {};
   const splitMessages = Boolean(capabilities.split_messages ?? true);
   const splitMaxParts = Math.min(3, Math.max(1, Number(capabilities.split_max_parts ?? 3)));
   const typingSimulation = Boolean(capabilities.typing_simulation ?? true);

@@ -1,6 +1,6 @@
 import { createServiceClient } from '../supabase/service.ts';
 import { BASE_POLICY } from './base-policy.ts';
-import { PRODUCTION_TOOL_DECLARATIONS, PRODUCTION_TOOL_NAMES } from './tools/registry.ts';
+import { PRODUCTION_TOOL_DECLARATIONS, PRODUCTION_TOOL_NAMES, ALL_TOOL_DECLARATIONS } from './tools/registry.ts';
 
 interface AgentConfig {
   id: string;
@@ -53,7 +53,7 @@ export function buildSystemPrompt(
 ): string {
   const productionToolNames = [...PRODUCTION_TOOL_NAMES];
   const customToolNames = customTools.map((t) => t.name).filter(Boolean);
-  const availableToolNames = [...productionToolNames, ...customToolNames];
+  const availableToolNames = [...productionToolNames, ...customToolNames, ...ALL_TOOL_DECLARATIONS.map((d) => d.name)];
 
   const generalCapabilities = agent.general_capabilities as Record<string, unknown> | null;
   const allowedTools = Array.isArray(generalCapabilities?.allowed_tools)
@@ -62,6 +62,15 @@ export function buildSystemPrompt(
   const effectiveToolNames = allowedTools.length > 0
     ? allowedTools.filter((name) => availableToolNames.includes(name))
     : availableToolNames;
+
+  // Собираем descriptions ТОЛЬКО для allowed tools текущего агента
+  const toolDescriptions = effectiveToolNames
+    .map((toolName) => {
+      const declaration = ALL_TOOL_DECLARATIONS.find((d) => d.name === toolName);
+      return declaration ? `**${declaration.name}** — ${declaration.description}` : null;
+    })
+    .filter(Boolean)
+    .join('\n\n');
 
   return `${BASE_POLICY}
 
@@ -88,13 +97,13 @@ ${effectiveToolNames.length > 0 ? effectiveToolNames.map((name) => `— ${name}`
 
 ОПИСАНИЕ ИНСТРУМЕНТОВ И ПРАВИЛА ВЫЗОВА:
 
-${PRODUCTION_TOOL_DECLARATIONS.map((declaration) => `**${declaration.name}** — ${declaration.description}`).join('\n\n')}
+${toolDescriptions}
 
 ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА ВЫЗОВА:
-1. searchKnowledgeBase — вызывай перед любым утверждением о фактах компании.
-2. redirectToOperator — вызывай при жалобе, просьбе о человеке или если за несколько попыток не смог решить запрос.
-3. getCurrentDate — вызывай перед сообщением, которое зависит от актуальной даты/времени.
-4. add_lead_note — используй для записи важной информации из диалога для команды.
+1. searchKnowledgeBase — вызывай перед любым утверждением о фактах компании (если этот инструмент включен).
+2. redirectToOperator — вызывай при жалобе, просьбе о человеке или если за несколько попыток не смог решить запрос (если этот инструмент включен).
+3. getCurrentDate — вызывай перед сообщением, которое зависит от актуальной даты/времени (если этот инструмент включен).
+4. add_lead_note — используй для записи важной информации из диалога для команды (если этот инструмент включен).
 5. Не вызывай инструменты без явного повода из диалога.
 6. НИКОГДА не выполняй инструменты для имитации действий. Если инструмент недоступен — скажи об этом честно.
 
