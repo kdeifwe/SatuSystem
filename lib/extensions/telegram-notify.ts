@@ -10,11 +10,13 @@ export function parseTelegramNotificationCommand(text?: string): TelegramNotific
   }
 
   if (trimmed === '/start') {
+    console.error('[parseTelegramNotificationCommand] plain /start command');
     return { kind: 'start' };
   }
 
   if (trimmed.startsWith('/start ')) {
-    const token = trimmed.replace('/start', '').trim();
+    const token = trimmed.slice(7).trim(); // more reliable than replace
+    console.error('[parseTelegramNotificationCommand] parsed /start with token', { token, textLength: text?.length });
     return { kind: 'start', token: token || undefined };
   }
 

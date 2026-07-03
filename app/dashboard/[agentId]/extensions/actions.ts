@@ -146,14 +146,54 @@ export async function getTelegramExtensionData(agentId: string): Promise<Telegra
   };
 }
 
+const TELEGRAM_LINK_TOKEN_TTL_MINUTES = 60;
+
 export async function generateTelegramLinkToken(profileId: string) {
   if (!profileId) {
     return { error: 'Профиль не найден' };
   }
 
   const admin = createAdminClient();
+  const now = new Date();
+
+  const { data: existingProfile, error: selectError } = await admin
+    .from('profiles')
+    .select('telegram_link_token, telegram_link_token_expires_at')
+    .eq('id', profileId)
+    .maybeSingle();
+
+  if (selectError) {
+    return { error: 'Не удалось создать ссылку' };
+  }
+
+  const existingToken = existingProfile?.telegram_link_token;
+  const existingExpiry = existingProfile?.telegram_link_token_expires_at;
+
+  if (existingToken && existingExpiry) {
+    const expiryDate = new Date(existingExpiry);
+    const isValid = expiryDate > now;
+    console.log('[generateTelegramLinkToken] checking existing token', {
+      profileId,
+      token: existingToken,
+      expiry: existingExpiry,
+      now: now.toISOString(),
+      isValid,
+    });
+    if (isValid) {
+      const botUsername = process.env.TELEGRAM_NOTIFICATIONS_BOT_USERNAME ?? 'your_notification_bot';
+      console.log('[generateTelegramLinkToken] reusing existing token', { profileId, token: existingToken });
+      return {
+        success: true,
+        link: `https://t.me/${botUsername}?start=${existingToken}`,
+        expiresAt: existingExpiry,
+      };
+    }
+  }
+
+  console.log('[generateTelegramLinkToken] generating new token', { profileId });
+
   const token = randomUUID();
-  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+  const expiresAt = new Date(now.getTime() + TELEGRAM_LINK_TOKEN_TTL_MINUTES * 60 * 1000).toISOString();
 
   const { error } = await admin
     .from('profiles')

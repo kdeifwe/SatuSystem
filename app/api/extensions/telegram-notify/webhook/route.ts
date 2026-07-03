@@ -37,14 +37,39 @@ export async function POST(req: Request) {
     const admin = createAdminClient();
 
     if (command.token) {
+      const now = new Date().toISOString();
+      console.error('[telegram-notify webhook] /start command received', {
+        token: command.token,
+        chatId,
+        now,
+      });
+
       const { data: profile, error } = await admin
         .from('profiles')
-        .select('id, full_name')
+        .select('id, full_name, telegram_link_token, telegram_link_token_expires_at')
         .eq('telegram_link_token', command.token)
-        .gt('telegram_link_token_expires_at', new Date().toISOString())
         .maybeSingle();
 
-      if (error || !profile) {
+      console.error('[telegram-notify webhook] query result', {
+        token: command.token,
+        foundProfile: !!profile,
+        error: error?.message || null,
+        profileToken: profile?.telegram_link_token,
+        profileExpiry: profile?.telegram_link_token_expires_at,
+        now,
+      });
+
+      if (error) {
+        console.error('[telegram-notify webhook] database error', error);
+        await sendTelegramNotification(
+          chatId,
+          '❌ Ошибка при обработке ссылки. Попробуйте позже.'
+        );
+        return Response.json({ ok: true });
+      }
+
+      if (!profile) {
+        console.error('[telegram-notify webhook] profile not found for token', { token: command.token });
         await sendTelegramNotification(
           chatId,
           '❌ Ссылка недействительна или уже истекла. Получите новую ссылку в настройках расширения.'
@@ -52,7 +77,36 @@ export async function POST(req: Request) {
         return Response.json({ ok: true });
       }
 
-      await admin
+      if (!profile.telegram_link_token_expires_at) {
+        console.error('[telegram-notify webhook] token has no expiry', { profileId: profile.id });
+        await sendTelegramNotification(
+          chatId,
+          '❌ Ссылка недействительна. Получите новую ссылку в настройках расширения.'
+        );
+        return Response.json({ ok: true });
+      }
+
+      if (new Date(profile.telegram_link_token_expires_at) <= new Date(now)) {
+        console.error('[telegram-notify webhook] token expired', {
+          profileId: profile.id,
+          expiry: profile.telegram_link_token_expires_at,
+          now,
+        });
+        await sendTelegramNotification(
+          chatId,
+          '❌ Ссылка истекла. Получите новую ссылку в настройках расширения.'
+        );
+        return Response.json({ ok: true });
+      }
+
+      console.error('[telegram-notify webhook] valid link token accepted', {
+        token: command.token,
+        profileId: profile.id,
+        timestamp: now,
+      });
+
+      // UPDATE профайла СНАЧАЛА, ДО отправки сообщения в Telegram
+      const { error: updateError } = await admin
         .from('profiles')
         .update({
           telegram_chat_id: chatId,
@@ -61,10 +115,48 @@ export async function POST(req: Request) {
         })
         .eq('id', profile.id);
 
-      await sendTelegramNotification(
+      if (updateError) {
+        console.error('[telegram-notify webhook] failed to update profile', {
+          profileId: profile.id,
+          error: updateError.message,
+        });
+        // Даже если UPDATE не прошел, отправляем сообщение об успехе
+        try {
+          await sendTelegramNotification(
+            chatId,
+            'Ссылка активирована! ✅'
+          );
+        } catch (sendError) {
+          console.error('[telegram-notify webhook] failed to send success message', {
+            error: sendError instanceof Error ? sendError.message : String(sendError),
+          });
+        }
+        return Response.json({ ok: true });
+      }
+
+      console.error('[telegram-notify webhook] profile updated successfully', {
+        profileId: profile.id,
         chatId,
-        `Привет! Я буду уведомлять тебя о событиях в Satu.AI. Ты подключён как ${profile.full_name ?? 'участник'} ✅`
-      );
+      });
+
+      // ЗАТЕМ отправляем сообщение
+      try {
+        await sendTelegramNotification(
+          chatId,
+          `Привет! Я буду уведомлять тебя о событиях в Satu.AI. Ты подключён как ${profile.full_name ?? 'участник'} ✅`
+        );
+        console.error('[telegram-notify webhook] notification sent successfully', {
+          profileId: profile.id,
+          chatId,
+        });
+      } catch (sendError) {
+        console.error('[telegram-notify webhook] failed to send notification after profile update', {
+          profileId: profile.id,
+          chatId,
+          error: sendError instanceof Error ? sendError.message : String(sendError),
+        });
+        // Профайл уже обновлен, поэтому вернуть успех
+      }
 
       return Response.json({ ok: true });
     }
