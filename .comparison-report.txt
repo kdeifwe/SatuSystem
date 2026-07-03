@@ -1,0 +1,163 @@
+СРАВНЕНИЕ СХЕМЫ БД С ФАЙЛАМИ МИГРАЦИЙ
+=====================================
+
+Проверка подключения: ✅ OK
+
+АНАЛИЗ ТАБЛИЦ
+=============
+
+1. extension_settings (миграция: 20260630121000_create_extension_settings.sql)
+   ✅ СОВПАДАЕТ
+   
+   DB Schema:
+   - id: uuid NOT NULL (DEFAULT gen_random_uuid())
+   - agent_id: uuid NOT NULL
+   - extension_type: text NOT NULL
+   - is_active: boolean DEFAULT false
+   - config: jsonb NOT NULL DEFAULT '{}'::jsonb
+   - updated_by: uuid
+   - created_at: timestamptz DEFAULT now()
+   - updated_at: timestamptz DEFAULT now()
+   
+   Миграция объявляет: ✓ все колонки совпадают
+
+---
+
+2. notification_log (миграция: 20260630123000_create_notification_log.sql)
+   ✅ СОВПАДАЕТ
+   
+   DB Schema:
+   - id: uuid NOT NULL (DEFAULT gen_random_uuid())
+   - org_id: uuid NOT NULL
+   - agent_id: uuid
+   - lead_id: uuid
+   - event_type: text NOT NULL
+   - custom_condition_key: text
+   - recipient_profile_id: uuid
+   - payload: jsonb
+   - attempts: integer DEFAULT 0
+   - delivery_status: text DEFAULT 'pending'::text
+   - sent_at: timestamptz DEFAULT now()
+   - last_error: text
+   
+   Миграция объявляет: ✓ все колонки совпадают
+
+---
+
+3. lead_repeat_touch_state (миграция: 20260630124000_create_lead_repeat_touch_state.sql)
+   ✅ СОВПАДАЕТ
+   
+   DB Schema:
+   - lead_id: uuid NOT NULL (primary key)
+   - attempts_sent: integer DEFAULT 0
+   - last_attempt_at: timestamptz
+   - last_inbound_at: timestamptz
+   - updated_at: timestamptz DEFAULT now()
+   
+   Миграция объявляет: ✓ все колонки совпадают
+
+---
+
+4. scheduled_messages (миграция: 20260630126000_create_scheduled_messages.sql)
+   ✅ СОВПАДАЕТ
+   
+   DB Schema:
+   - id: uuid NOT NULL (DEFAULT gen_random_uuid())
+   - org_id: uuid NOT NULL
+   - lead_id: uuid NOT NULL
+   - conversation_id: uuid
+   - content: text NOT NULL
+   - send_at: timestamptz NOT NULL
+   - source: text NOT NULL
+   - status: text DEFAULT 'pending'::text
+   - attempts: integer DEFAULT 0
+   - last_error: text
+   - created_by: uuid
+   - created_at: timestamptz DEFAULT now()
+   - sent_at_actual: timestamptz
+   
+   Миграция объявляет: ✓ все колонки совпадают
+
+---
+
+5. ai_error_counters (миграция: 20260630135000_create_ai_error_counters.sql)
+   ❌ НЕ СОВПАДАЕТ
+   
+   Миграция объявляет:
+   - agent_id: uuid primary key references agents(id) on delete cascade
+   - consecutive_errors: int default 0
+   - last_error_at: timestamptz
+   
+   БД РЕАЛЬНО СОДЕРЖИТ (ЛИШНИЕ КОЛОНКИ):
+   - agent_id: uuid NOT NULL (primary key)
+   - consecutive_errors: integer DEFAULT 0 ✓
+   - last_error_at: timestamptz ✓
+   + last_error_message: text ⚠️ ЛИШНЯЯ КОЛОНКА
+   + updated_at: timestamptz DEFAULT now() ⚠️ ЛИШНЯЯ КОЛОНКА
+
+---
+
+6. channel_error_counters (миграция: 20260630136000_create_channel_error_counters.sql)
+   ❌ НЕ СОВПАДАЕТ (КРИТИЧНО)
+   
+   Миграция объявляет:
+   - channel_type: text primary key
+   - consecutive_errors: int default 0
+   - last_error_at: timestamptz
+   
+   БД РЕАЛЬНО СОДЕРЖИТ:
+   - channel_id: uuid NOT NULL ⚠️ ДРУГОЙ ТИП И ИМЯ
+   - consecutive_errors: integer DEFAULT 0 ✓
+   - last_error_at: timestamptz ✓
+   + last_error_message: text ⚠️ ЛИШНЯЯ КОЛОНКА
+   + updated_at: timestamptz DEFAULT now() ⚠️ ЛИШНЯЯ КОЛОНКА
+   
+   КРИТИЧНОЕ НЕСОВПАДЕНИЕ:
+   - Миграция говорит: channel_type TEXT (primary key)
+   - БД содержит: channel_id UUID (не primary key)
+   
+   Это выглядит как последовательные ALTER TABLE или миграция не применилась правильно.
+
+---
+
+7. subscriptions (миграция: 00000000000000_init.sql, строки 193-201)
+   ✅ СОВПАДАЕТ
+   
+   Миграция объявляет:
+   - id: uuid primary key default gen_random_uuid()
+   - org_id: uuid references organizations(id) on delete cascade
+   - provider: text check (provider in ('paddle','kzt_provider'))
+   - plan: text
+   - status: text
+   - renews_at: timestamptz
+   - created_at: timestamptz default now()
+   
+   БД РЕАЛЬНО СОДЕРЖИТ: ✓ все совпадает
+   
+   СОСТОЯНИЕ: Таблица существует, но пустая (0 строк)
+   По SPEC.md раздел 0: модуль "Подписка" убран целиком и не должен существовать.
+   
+   РЕШЕНИЕ ТРЕБУЕТСЯ: удалить таблицу или оставить неиспользуемой?
+
+---
+
+ИТОГОВЫЙ ОТЧЁТ
+===============
+
+✅ Таблицы СОВПАДАЮТ с миграциями (5/7):
+   - extension_settings
+   - notification_log
+   - lead_repeat_touch_state
+   - scheduled_messages
+   - subscriptions (но требуется решение по удалению)
+
+❌ Таблицы НЕ СОВПАДАЮТ (2/7):
+   - ai_error_counters: +2 лишние колонки (last_error_message, updated_at)
+   - channel_error_counters: КРИТИЧНАЯ ОШИБКА — первичный ключ и тип совсем другие
+                            + 2 лишние колонки (last_error_message, updated_at)
+
+ВЫВОД:
+- ai_error_counters и channel_error_counters содержат ДОПОЛНИТЕЛЬНЫЕ колонки
+- channel_error_counters имеет критичное несовпадение структуры первичного ключа
+- Это указывает на то, что после миграции 20260630136000 были применены дополнительные ALTER TABLE команды
+- Скорее всего эти изменения находятся в более новых миграциях (после 20260702120000)

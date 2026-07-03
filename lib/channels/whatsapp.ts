@@ -25,10 +25,23 @@ export async function sendWhatsAppMessage(
     const errText = JSON.stringify(errBody);
     try {
       const admin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { autoRefreshToken: false, persistSession: false } });
-      const { data: existing } = await admin.from('channel_error_counters').select('consecutive_errors').eq('channel_type', 'whatsapp').maybeSingle();
+      // Try to find matching channel by phoneNumberId in credentials, fallback to first active whatsapp channel
+      const { data: channels } = await admin.from('channels').select('id, credentials').eq('type', 'whatsapp');
+      let channelId = null;
+      for (const ch of (channels ?? [])) {
+        try {
+          const cred = ch.credentials || {};
+          if (cred?.phoneNumberId == phoneNumberId || cred?.phone_number_id == phoneNumberId) {
+            channelId = ch.id;
+            break;
+          }
+        } catch (e) {}
+        if (!channelId && (channels?.length ?? 0) > 0) channelId = channels[0].id;
+      }
+      const { data: existing } = await admin.from('channel_error_counters').select('consecutive_errors').eq('channel_id', channelId).maybeSingle();
       const prev = existing?.consecutive_errors ?? 0;
       const next = prev + 1;
-      await admin.from('channel_error_counters').upsert({ channel_type: 'whatsapp', consecutive_errors: next, last_error_at: new Date() });
+      await admin.from('channel_error_counters').upsert({ channel_id: channelId, consecutive_errors: next, last_error_at: new Date(), last_error_message: errText });
       if (next >= 3) {
         await admin.from('notification_log').insert({
           org_id: null,
@@ -38,7 +51,7 @@ export async function sendWhatsAppMessage(
           payload: { channel_type: 'whatsapp', channel_name: 'WhatsApp', error_message: errText, time: new Date() },
           delivery_status: 'pending'
         });
-        await admin.from('channel_error_counters').update({ consecutive_errors: 0 }).eq('channel_type', 'whatsapp');
+        await admin.from('channel_error_counters').update({ consecutive_errors: 0 }).eq('channel_id', channelId);
       }
     } catch (e) {
       console.error('[whatsapp] failed to update channel_error_counters', e);

@@ -1,4 +1,4 @@
-﻿import {
+import {
   GEMINI_API_BASE,
   GEMINI_EMBEDDING_MODEL,
   GEMINI_EMBEDDING_OUTPUT_DIMENSIONALITY,
@@ -55,9 +55,10 @@ function normalizeEmbedding(values: number[]): number[] {
 
 export async function generateEmbedding(text: string): Promise<number[]> {
   const models = getEmbeddingModelCandidates();
+  let lastError: Error | null = null;
 
   for (let attempt = 0; attempt < RETRY_ATTEMPTS; attempt++) {
-    let lastError: Error | null = null;
+    lastError = null;
 
     for (const model of models) {
       try {
@@ -110,9 +111,10 @@ export async function generateEmbeddingsBatch(texts: string[]): Promise<Embeddin
  */
 export async function generateQueryEmbedding(query: string): Promise<number[]> {
   const models = getEmbeddingModelCandidates();
+  let lastError: Error | null = null;
 
   for (let attempt = 0; attempt < RETRY_ATTEMPTS; attempt++) {
-    let lastError: Error | null = null;
+    lastError = null;
 
     for (const model of models) {
       try {

@@ -7,3 +7,4 @@ out
 /baileys-auth
 tsconfig.tsbuildinfo
 supabase/.temp/
+backups/

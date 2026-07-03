@@ -211,18 +211,20 @@ Deno.serve(async () => {
       continue;
     }
 
-    try {
-      const text = renderMessage(row);
+      try {
+        const text = renderMessage(row);
 
-      await sendTelegramMessage(String(profile.telegram_chat_id), text);
+        await sendTelegramMessage(String(profile.telegram_chat_id), text);
 
-      await supabase
-        .from('notification_log')
-        .update({ delivery_status: 'sent', attempts: (row.attempts ?? 0) + 1 })
-        .eq('id', row.id);
+        await supabase
+          .from('notification_log')
+          .update({ delivery_status: 'sent', attempts: (row.attempts ?? 0) + 1 })
+          .eq('id', row.id);
       // reset channel error counter on success
       try {
-        await supabase.from('channel_error_counters').update({ consecutive_errors: 0 }).eq('channel_type', 'telegram');
+        const { data: channel } = await supabase.from('channels').select('id').eq('type', 'telegram').maybeSingle();
+        const channelId = channel?.id ?? null;
+        await supabase.from('channel_error_counters').update({ consecutive_errors: 0 }).eq('channel_id', channelId);
       } catch (e) {
         console.error('[send-notifications] failed to reset channel error counter', e);
       }
@@ -233,10 +235,12 @@ Deno.serve(async () => {
         .eq('id', row.id);
 
       try {
-        const { data: existing } = await supabase.from('channel_error_counters').select('consecutive_errors').eq('channel_type', 'telegram').maybeSingle();
+        const { data: channel } = await supabase.from('channels').select('id').eq('type', 'telegram').maybeSingle();
+        const channelId = channel?.id ?? null;
+        const { data: existing } = await supabase.from('channel_error_counters').select('consecutive_errors').eq('channel_id', channelId).maybeSingle();
         const prev = existing?.consecutive_errors ?? 0;
         const next = prev + 1;
-        await supabase.from('channel_error_counters').upsert({ channel_type: 'telegram', consecutive_errors: next, last_error_at: new Date() });
+        await supabase.from('channel_error_counters').upsert({ channel_id: channelId, consecutive_errors: next, last_error_at: new Date(), last_error_message: String(error) });
         if (next >= 3) {
           // Enqueue channel_down notification
           await supabase.from('notification_log').insert({
@@ -247,7 +251,7 @@ Deno.serve(async () => {
             payload: { channel_type: 'telegram', channel_name: 'Telegram Bot', error_message: String(error), time: new Date() },
             delivery_status: 'pending'
           });
-          await supabase.from('channel_error_counters').update({ consecutive_errors: 0 }).eq('channel_type', 'telegram');
+          await supabase.from('channel_error_counters').update({ consecutive_errors: 0 }).eq('channel_id', channelId);
         }
       } catch (e) {
         console.error('[send-notifications] failed to update channel_error_counters', e);

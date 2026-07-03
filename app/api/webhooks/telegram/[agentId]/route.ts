@@ -257,10 +257,11 @@ async function handleUpdate(update: any, agentId: string) {
         console.log('[TG webhook] Message sent:', sendData.ok, sendData.error_code);
         if (!sendRes.ok || !sendData?.ok) {
           try {
-            const { data: existing } = await admin.from('channel_error_counters').select('consecutive_errors').eq('channel_type', 'telegram').maybeSingle();
+            const channelId = channel?.id ?? null;
+            const { data: existing } = await admin.from('channel_error_counters').select('consecutive_errors').eq('channel_id', channelId).maybeSingle();
             const prev = existing?.consecutive_errors ?? 0;
             const next = prev + 1;
-            await admin.from('channel_error_counters').upsert({ channel_type: 'telegram', consecutive_errors: next, last_error_at: new Date() });
+            await admin.from('channel_error_counters').upsert({ channel_id: channelId, consecutive_errors: next, last_error_at: new Date(), last_error_message: JSON.stringify(sendData) });
             if (next >= 3) {
               await admin.from('notification_log').insert({
                 org_id: agent.org_id,
@@ -270,7 +271,7 @@ async function handleUpdate(update: any, agentId: string) {
                 payload: { channel_type: 'telegram', channel_name: 'Telegram Bot', error_message: JSON.stringify(sendData), time: new Date() },
                 delivery_status: 'pending',
               });
-              await admin.from('channel_error_counters').update({ consecutive_errors: 0 }).eq('channel_type', 'telegram');
+              await admin.from('channel_error_counters').update({ consecutive_errors: 0 }).eq('channel_id', channelId);
             }
           } catch (e) {
             console.error('[TG webhook] failed to update channel_error_counters', e);

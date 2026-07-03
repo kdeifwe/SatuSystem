@@ -267,6 +267,11 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
   }
 
   let finalReply = (parts as Array<Record<string, unknown>>).filter((part) => typeof part?.text === 'string').map((part) => part.text).join('\n').trim();
+  let rawReply = finalReply;
+  let attempt = 1;
+  let tokens_input = response.payload.usageMetadata?.promptTokenCount ?? 0;
+  let tokens_output = response.payload.usageMetadata?.candidatesTokenCount ?? 0;
+  let validationErrors: string[] = [];
 
   if (fallbackReason) {
     finalReply = fallbackReason;
@@ -280,7 +285,9 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
     throw new Error('Gemini вернул пустой ответ после обработки инструментов');
   }
 
-  const validation = validateAgentAnswer(finalReply);
+  let validation = validateAgentAnswer(finalReply);
+  validationErrors = validation.valid ? [] : validation.errors;
+
   if (!validation.valid && !validationAttempted) {
     validationAttempted = true;
     console.warn('[AGENT] validation failed, retrying once', { agentId, errors: validation.errors });
@@ -288,6 +295,12 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
     const retryParts = retryResponse.payload.parts;
     const retryReply = (retryParts as Array<Record<string, unknown>>).filter((part) => typeof part?.text === 'string').map((part) => part.text).join('\n').trim();
     const retryValidation = validateAgentAnswer(retryReply);
+    attempt = 2;
+    rawReply = retryReply;
+    tokens_input += retryResponse.payload.usageMetadata?.promptTokenCount ?? 0;
+    tokens_output += retryResponse.payload.usageMetadata?.candidatesTokenCount ?? 0;
+    validationErrors = retryValidation.valid ? [] : retryValidation.errors;
+
     if (retryValidation.valid) {
       finalReply = retryReply;
     } else {
@@ -300,10 +313,17 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
 
   await admin.from('ai_call_logs').insert({
     conversation_id: conversationId,
-    request: { agent_id: agentId, message: userMessage, tools_used: toolsUsed, iterations, validation_errors: validation.valid ? [] : validation.errors },
-    response: { reply: finalReply },
-    tokens_input: response.payload.usageMetadata?.promptTokenCount ?? 0,
-    tokens_output: response.payload.usageMetadata?.candidatesTokenCount ?? 0,
+    request: {
+      agent_id: agentId,
+      message: userMessage,
+      tools_used: toolsUsed,
+      iterations,
+      validation_errors: validationErrors,
+      attempt,
+    },
+    response: { raw: rawReply, final: finalReply },
+    tokens_input,
+    tokens_output,
     latency_ms: Date.now() - startTime,
   });
 
