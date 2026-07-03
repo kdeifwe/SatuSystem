@@ -36,12 +36,14 @@ export async function sendWhatsAppMessage(
             break;
           }
         } catch (e) {}
-        if (!channelId && (channels?.length ?? 0) > 0) channelId = channels[0].id;
       }
+      // fallback to first channel if none matched
+      if (!channelId && Array.isArray(channels) && channels.length > 0) channelId = channels[0].id;
       const { data: existing } = await admin.from('channel_error_counters').select('consecutive_errors').eq('channel_id', channelId).maybeSingle();
       const prev = existing?.consecutive_errors ?? 0;
       const next = prev + 1;
-      await admin.from('channel_error_counters').upsert({ channel_id: channelId, consecutive_errors: next, last_error_at: new Date(), last_error_message: errText });
+      await admin.from('channel_error_counters').upsert({ channel_id: channelId, consecutive_errors: next, last_error_at: new Date(), last_error_message: errText, updated_at: new Date().toISOString() });
+      try { await admin.from('channel_error_counters').update({ updated_at: new Date().toISOString() }).eq('channel_id', channelId); } catch (e) {}
       if (next >= 3) {
         await admin.from('notification_log').insert({
           org_id: null,
@@ -51,7 +53,8 @@ export async function sendWhatsAppMessage(
           payload: { channel_type: 'whatsapp', channel_name: 'WhatsApp', error_message: errText, time: new Date() },
           delivery_status: 'pending'
         });
-        await admin.from('channel_error_counters').update({ consecutive_errors: 0 }).eq('channel_id', channelId);
+        await admin.from('channel_error_counters').update({ consecutive_errors: 0, updated_at: new Date().toISOString() }).eq('channel_id', channelId);
+        try { await admin.from('channel_error_counters').update({ updated_at: new Date().toISOString() }).eq('channel_id', channelId); } catch (e) {}
       }
     } catch (e) {
       console.error('[whatsapp] failed to update channel_error_counters', e);

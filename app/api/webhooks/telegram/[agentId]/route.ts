@@ -258,10 +258,13 @@ async function handleUpdate(update: any, agentId: string) {
         if (!sendRes.ok || !sendData?.ok) {
           try {
             const channelId = channel?.id ?? null;
+            // temporary debug logging removed
             const { data: existing } = await admin.from('channel_error_counters').select('consecutive_errors').eq('channel_id', channelId).maybeSingle();
             const prev = existing?.consecutive_errors ?? 0;
             const next = prev + 1;
-            await admin.from('channel_error_counters').upsert({ channel_id: channelId, consecutive_errors: next, last_error_at: new Date(), last_error_message: JSON.stringify(sendData) });
+            await admin.from('channel_error_counters').upsert({ channel_id: channelId, consecutive_errors: next, last_error_at: new Date(), last_error_message: JSON.stringify(sendData), updated_at: new Date().toISOString() });
+            // Ensure updated_at is applied (explicit update to avoid any upsert edge cases)
+            try { await admin.from('channel_error_counters').update({ updated_at: new Date().toISOString() }).eq('channel_id', channelId); } catch (e) {}
             if (next >= 3) {
               await admin.from('notification_log').insert({
                 org_id: agent.org_id,
@@ -271,14 +274,17 @@ async function handleUpdate(update: any, agentId: string) {
                 payload: { channel_type: 'telegram', channel_name: 'Telegram Bot', error_message: JSON.stringify(sendData), time: new Date() },
                 delivery_status: 'pending',
               });
-              await admin.from('channel_error_counters').update({ consecutive_errors: 0 }).eq('channel_id', channelId);
+              await admin.from('channel_error_counters').update({ consecutive_errors: 0, updated_at: new Date().toISOString() }).eq('channel_id', channelId);
+              try { await admin.from('channel_error_counters').update({ updated_at: new Date().toISOString() }).eq('channel_id', channelId); } catch (e) {}
             }
           } catch (e) {
             console.error('[TG webhook] failed to update channel_error_counters', e);
           }
         } else {
           try {
-            await admin.from('channel_error_counters').update({ consecutive_errors: 0 }).eq('channel_type', 'telegram');
+            const channelId = channel?.id ?? null;
+            await admin.from('channel_error_counters').update({ consecutive_errors: 0, updated_at: new Date().toISOString() }).eq('channel_id', channelId);
+            try { await admin.from('channel_error_counters').update({ updated_at: new Date().toISOString() }).eq('channel_id', channelId); } catch (e) {}
           } catch (e) {
             // ignore
           }

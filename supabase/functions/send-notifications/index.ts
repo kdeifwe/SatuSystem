@@ -221,10 +221,10 @@ Deno.serve(async () => {
           .update({ delivery_status: 'sent', attempts: (row.attempts ?? 0) + 1 })
           .eq('id', row.id);
       // reset channel error counter on success
-      try {
+        try {
         const { data: channel } = await supabase.from('channels').select('id').eq('type', 'telegram').maybeSingle();
         const channelId = channel?.id ?? null;
-        await supabase.from('channel_error_counters').update({ consecutive_errors: 0 }).eq('channel_id', channelId);
+        await supabase.from('channel_error_counters').update({ consecutive_errors: 0, updated_at: new Date().toISOString() }).eq('channel_id', channelId);
       } catch (e) {
         console.error('[send-notifications] failed to reset channel error counter', e);
       }
@@ -240,7 +240,8 @@ Deno.serve(async () => {
         const { data: existing } = await supabase.from('channel_error_counters').select('consecutive_errors').eq('channel_id', channelId).maybeSingle();
         const prev = existing?.consecutive_errors ?? 0;
         const next = prev + 1;
-        await supabase.from('channel_error_counters').upsert({ channel_id: channelId, consecutive_errors: next, last_error_at: new Date(), last_error_message: String(error) });
+        await supabase.from('channel_error_counters').upsert({ channel_id: channelId, consecutive_errors: next, last_error_at: new Date(), last_error_message: String(error), updated_at: new Date().toISOString() });
+        try { await supabase.from('channel_error_counters').update({ updated_at: new Date().toISOString() }).eq('channel_id', channelId); } catch (e) {}
         if (next >= 3) {
           // Enqueue channel_down notification
           await supabase.from('notification_log').insert({
@@ -251,7 +252,8 @@ Deno.serve(async () => {
             payload: { channel_type: 'telegram', channel_name: 'Telegram Bot', error_message: String(error), time: new Date() },
             delivery_status: 'pending'
           });
-          await supabase.from('channel_error_counters').update({ consecutive_errors: 0 }).eq('channel_id', channelId);
+          await supabase.from('channel_error_counters').update({ consecutive_errors: 0, updated_at: new Date().toISOString() }).eq('channel_id', channelId);
+          try { await supabase.from('channel_error_counters').update({ updated_at: new Date().toISOString() }).eq('channel_id', channelId); } catch (e) {}
         }
       } catch (e) {
         console.error('[send-notifications] failed to update channel_error_counters', e);
