@@ -44,13 +44,14 @@ const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch
   const hookUrl = 'http://localhost:3001' + '/api/webhooks/telegram/' + agentId;
   console.log('Posting 3 test webhooks to', hookUrl);
   for (let i = 1; i <= 3; i++) {
+    const uniq = Date.now() + Math.floor(Math.random()*1000) + i;
     const body = {
-      update_id: 1000 + i,
+      update_id: uniq,
       message: {
-        message_id: 2000 + i,
+        message_id: uniq + 1000,
         chat: { id: -1 },
         from: { first_name: 'Test' },
-        text: `fail test ${i}`,
+        text: `fail test ${i} ${uniq}`,
       },
     };
     try {
