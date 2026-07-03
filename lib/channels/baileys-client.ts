@@ -13,6 +13,7 @@ import {
 import { createAdminClient } from '@/lib/supabase/admin';
 import { runAgentTurn } from '@/lib/server/ai/orchestrator';
 import { splitAgentMessage, calculateTypingDelay } from '@/lib/server/ai/message-splitter';
+import { enqueueNotification } from '@/lib/notifications';
 
 const { normalizeConnectionStatus, buildChannelStatusUpdate } = require('@/lib/channels/status-utils');
 
@@ -29,6 +30,7 @@ interface BaileysClientEntry extends BaileysClientInfo {
   sock: ReturnType<typeof makeWASocket>;
   reconnectAttempts: number;
   lastReconnectAt?: number;
+  lastDisconnectTime?: number;
   reconnectTimer?: ReturnType<typeof setTimeout>;
 }
 
@@ -347,6 +349,7 @@ async function createBaileysClient(agentId: string, forceNewAuth = false) {
       clientEntry.lastError = undefined;
       clientEntry.reconnectAttempts = 0;
       clientEntry.lastReconnectAt = undefined;
+      clientEntry.lastDisconnectTime = undefined;
       await syncChannelConnectionState(agentId, 'connected', true);
       return;
     }
@@ -358,7 +361,18 @@ async function createBaileysClient(agentId: string, forceNewAuth = false) {
       clientEntry.status = 'disconnected';
       clientEntry.qrDataUrl = undefined;
       clientEntry.lastError = update.lastDisconnect?.error?.message;
+      clientEntry.lastDisconnectTime = Date.now();
       await syncChannelConnectionState(agentId, 'disconnected', false);
+
+      // Send immediate disconnect notification
+      try {
+        await enqueueNotification('whatsapp_disconnected', null, agentId, {
+          reason: clientEntry.lastError || 'Unknown',
+          timestamp: new Date().toISOString(),
+        });
+      } catch (notifyErr) {
+        logger.error({ agentId, error: notifyErr }, 'Failed to enqueue WhatsApp disconnect notification');
+      }
 
       if (clientEntry.reconnectTimer) {
         clearTimeout(clientEntry.reconnectTimer);

@@ -17,7 +17,8 @@ export type NotificationEventType =
   | 'lead_returned'
   | 'scheduled_failed'
   | 'ai_error'
-  | 'worker_down';
+  | 'worker_down'
+  | 'whatsapp_disconnected';
 
 interface NotificationPayload {
   [key: string]: unknown;
@@ -39,6 +40,7 @@ const DEDUP_CONFIG: Record<NotificationEventType, { window?: number; key: string
   scheduled_failed: { window: undefined, key: ['scheduled_message_id', 'event_type'] }, // once per message
   ai_error: { window: 15 * 60 * 1000, key: ['agent_id', 'event_type'] },
   worker_down: { window: 15 * 60 * 1000, key: ['org_id', 'event_type'] },
+  whatsapp_disconnected: { window: 2 * 60 * 1000, key: ['agent_id', 'event_type'] }, // notify once per 2 min per agent
 };
 
 interface EnqueueOptions {
