@@ -79,7 +79,7 @@ export default function StatsPage() {
   }
 
   return (
-    <div className="max-w-7xl mx-auto px-6 py-8">
+    <div className="mx-auto min-h-full max-w-7xl px-6 py-8">
       <StatsHeader />
       
       <FilterPanel

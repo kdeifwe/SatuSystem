@@ -118,7 +118,9 @@ export default async function AgentLayout({
         </div>
       </aside>
 
-      <main className="flex-1 overflow-hidden">{children}</main>
+      <main className="flex-1 min-h-0 overflow-y-auto">
+        <div className="min-h-full">{children}</div>
+      </main>
     </div>
   );
 }
