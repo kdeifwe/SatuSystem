@@ -171,13 +171,15 @@ async function processIncomingWhatsAppMessage(body: any) {
 
     let { data: lead } = await admin
       .from('leads')
-      .select('id, ai_enabled')
+      .select('id, name, ai_enabled')
       .eq('channel_id', channel.id)
       .eq('external_id', phoneNumber)
       .maybeSingle();
 
+    let leadErr: unknown = null;
+
     if (!lead) {
-      const { data: newLead } = await admin
+      const { data: newLead, error } = await admin
         .from('leads')
         .insert({
           org_id: channel.org_id,
@@ -187,9 +189,19 @@ async function processIncomingWhatsAppMessage(body: any) {
           status: 'new',
           ai_enabled: true,
         })
-        .select('id, ai_enabled')
+        .select('id, name, ai_enabled')
         .single();
+      leadErr = error;
       lead = newLead;
+    }
+
+    if (!lead) {
+      if (leadErr) {
+        console.error('[whatsapp webhook] Failed to create lead:', leadErr);
+      } else {
+        console.error('[whatsapp webhook] failed to resolve lead', { phoneNumber });
+      }
+      return;
     }
 
     // Detect lead_returned: if we have a recorded last_inbound_at and it was long ago

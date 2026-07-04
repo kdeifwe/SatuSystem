@@ -44,12 +44,12 @@ const DEDUP_CONFIG: Record<NotificationEventType, { window?: number; key: string
 };
 
 interface EnqueueOptions {
-  leadId?: string;
-  agentId?: string;
-  orgId?: string;
-  channelId?: string;
-  scheduledMessageId?: string;
-  contactType?: string;
+  leadId?: string | null;
+  agentId?: string | null;
+  orgId?: string | null;
+  channelId?: string | null;
+  scheduledMessageId?: string | null;
+  contactType?: string | null;
   skipDedupCheck?: boolean;
 }
 

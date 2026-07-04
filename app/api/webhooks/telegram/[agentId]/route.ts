@@ -103,7 +103,7 @@ async function handleUpdate(update: any, agentId: string) {
     // 4. Получаем или создаём лида
     let { data: lead } = await admin
       .from('leads')
-      .select('id, ai_enabled')
+      .select('id, ai_enabled, name')
       .eq('channel_id', channel.id)
       .eq('external_id', chatId)
       .maybeSingle();
@@ -120,7 +120,7 @@ async function handleUpdate(update: any, agentId: string) {
           status: 'new',
           ai_enabled: true,
         })
-        .select('id, ai_enabled')
+        .select('id, ai_enabled, name')
         .single();
 
       if (leadErr || !newLead) {
