@@ -1,13 +1,30 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Plus, RotateCcw, Send, Paperclip, Mic, X, ThumbsDown, Copy } from 'lucide-react';
+import { Plus, RotateCcw, Send, Paperclip, Mic, X, ThumbsDown, Copy, Instagram } from 'lucide-react';
+
+interface RetrievalDebugChunk {
+  id: string;
+  content: string;
+  similarity: number;
+  priority?: string;
+  linkType?: string;
+  sourceTitle?: string;
+  sourceType?: string;
+  postType?: string;
+}
+
+interface RetrievalDebug {
+  primaryChunks: RetrievalDebugChunk[];
+  linkedChunks: RetrievalDebugChunk[];
+}
 
 interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp: Date;
   pending?: boolean;
+  retrievalDebug?: RetrievalDebug;
 }
 
 export default function SandboxPage({ params }: { params: { agentId: string } }) {
@@ -73,6 +90,7 @@ export default function SandboxPage({ params }: { params: { agentId: string } })
       }
 
       const answer = data.answer ?? data.error ?? 'Ошибка';
+      const retrievalDebug = data.retrievalDebug ?? null;
       const parts = Array.isArray(data.messageParts) && data.messageParts.length
         ? data.messageParts
         : [{ text: answer, delayMs: 0 }];
@@ -89,14 +107,14 @@ export default function SandboxPage({ params }: { params: { agentId: string } })
           }
           setMessages((current) => [
             ...current,
-            { role: 'assistant', content: part.text, timestamp: new Date(), pending: false },
+            { role: 'assistant', content: part.text, timestamp: new Date(), pending: false, retrievalDebug: index === parts.length - 1 ? retrievalDebug : undefined },
           ]);
         }
       } else {
         setMessages((current) =>
           current.map((message, messageIndex) =>
             messageIndex === assistantIndex
-              ? { ...message, content: answer, pending: false }
+              ? { ...message, content: answer, pending: false, retrievalDebug }
               : message,
           ),
         );
@@ -216,6 +234,52 @@ export default function SandboxPage({ params }: { params: { agentId: string } })
                     className={`${message.role === 'user' ? 'bg-blue-600 text-white rounded-br-sm' : message.role === 'system' ? 'bg-transparent px-0 py-0 text-gray-500' : 'bg-gray-100 text-gray-800 rounded-bl-sm'} max-w-[75%] px-4 py-3 rounded-2xl text-sm`}
                   >
                     {message.content}
+                    {message.role === 'assistant' && message.retrievalDebug ? (
+                      <div className="mt-3 space-y-2 border-t border-gray-200 pt-3 text-xs">
+                        <div>
+                          <div className="mb-1 font-semibold text-blue-600">Найдено по запросу</div>
+                          <div className="space-y-1">
+                            {message.retrievalDebug.primaryChunks.length === 0 ? (
+                              <div className="text-gray-500">Нет основных чанков</div>
+                            ) : message.retrievalDebug.primaryChunks.map((chunk) => (
+                              <div key={chunk.id} className="rounded-lg bg-white/70 p-2">
+                                <div className="flex items-center gap-2 font-medium text-gray-700">
+                                  {chunk.sourceType === 'instagram' ? <Instagram size={13} className="text-pink-500" /> : null}
+                                  <span>{chunk.sourceTitle || 'Источник'}</span>
+                                </div>
+                                <div className="line-clamp-3 text-gray-600">{chunk.content}</div>
+                                <div className="mt-1 text-[10px] uppercase tracking-wide text-gray-500">
+                                  {Math.round(chunk.similarity * 100)}% · {chunk.priority || 'chunk'}
+                                  {chunk.sourceType === 'instagram' ? ' · instagram' : ''}
+                                  {chunk.postType ? ` · ${chunk.postType}` : ''}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="mb-1 font-semibold text-amber-600">Подтянуто по связи</div>
+                          <div className="space-y-1">
+                            {message.retrievalDebug.linkedChunks.length === 0 ? (
+                              <div className="text-gray-500">Нет связанных чанков</div>
+                            ) : message.retrievalDebug.linkedChunks.map((chunk) => (
+                              <div key={chunk.id} className="rounded-lg border border-amber-200 bg-amber-50/70 p-2">
+                                <div className="flex items-center gap-2 font-medium text-gray-700">
+                                  {chunk.sourceType === 'instagram' ? <Instagram size={13} className="text-pink-500" /> : null}
+                                  <span>{chunk.sourceTitle || 'Связанный источник'}</span>
+                                </div>
+                                <div className="line-clamp-3 text-gray-600">{chunk.content}</div>
+                                <div className="mt-1 text-[10px] uppercase tracking-wide text-gray-500">
+                                  {chunk.linkType || 'linked'} · {Math.round(chunk.similarity * 100)}% · {chunk.priority || 'chunk'}
+                                  {chunk.sourceType === 'instagram' ? ' · instagram' : ''}
+                                  {chunk.postType ? ` · ${chunk.postType}` : ''}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               );

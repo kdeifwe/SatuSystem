@@ -28,7 +28,7 @@ test('buildStatsExportData creates expected worksheets and respects filters', ()
     outcome: 'goal',
   });
 
-  assert.deepEqual(exportData.sheets.map(sheet => sheet.name), [
+  assert.deepEqual(exportData.sheets.map((sheet: any) => sheet.name), [
     'Сводка',
     'Тренды по дням',
     'Источники лидов',

@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { normalizeCategory } from '@/lib/ai/knowledge/categories';
 import { embedText } from '@/lib/server/knowledge/processor';
+import { buildManualChunkMetadata } from '@/lib/knowledge-base/classification';
 
 const ALLOWED_TYPES = ['product', 'faq', 'procedure', 'contact', 'file', 'other', 'qa', 'contacts'];
 
@@ -82,20 +83,49 @@ export async function POST(request: NextRequest, { params }: { params: { agentId
 
     const embedding = await embedText(content);
     const admin = createAdminClient();
+
+    const { data: sourceData, error: sourceError } = await admin
+      .from('kb_sources')
+      .insert([
+        {
+          agent_id: params.agentId,
+          type: 'manual',
+          title,
+          raw_content: content,
+          status: 'done',
+          metadata: {
+            category: type,
+            type,
+            source_name: 'Manual Input',
+          },
+        },
+      ])
+      .select('id')
+      .single();
+
+    if (sourceError || !sourceData) {
+      return NextResponse.json({ error: sourceError?.message || 'Не удалось создать источник для ручного элемента' }, { status: 500 });
+    }
+
+    const metadata = buildManualChunkMetadata({
+      content,
+      title,
+      type,
+      sourceName: title,
+      chunkIndex: 0,
+    });
+
     const { data, error } = await admin
       .from('kb_chunks')
       .insert([
         {
-          source_id: null,
+          source_id: sourceData.id,
           agent_id: params.agentId,
           content,
           embedding,
-          metadata: {
-            category: type,
-            type,
-            title,
-            source_name: 'Manual Input',
-          },
+          priority: metadata.priority,
+          chunk_index: metadata.chunk_index,
+          metadata,
         },
       ])
       .select()
@@ -105,7 +135,13 @@ export async function POST(request: NextRequest, { params }: { params: { agentId
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    return NextResponse.json({ data });
+    await admin.rpc('refresh_kb_chunk_links', {
+      p_agent_id: params.agentId,
+      p_top_k: 3,
+      p_min_similarity: 0.75,
+    });
+
+    return NextResponse.json({ data, sourceId: sourceData.id });
   } catch (err) {
     return errorResponse(err);
   }

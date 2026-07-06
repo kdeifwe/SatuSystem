@@ -226,11 +226,13 @@ async function insertMessage(
   conversationId: string,
   sender: 'system' | 'ai',
   content: string,
+  origin: 'conversation' | 'scenario' | 'broadcast' | 'followup' = 'scenario',
 ) {
   await admin.from('messages').insert({
     conversation_id: conversationId,
     sender,
     content,
+    origin,
   });
 }
 
@@ -247,7 +249,7 @@ async function executeScenarioAction(
       if (!text) {
         throw new Error('Текст сообщения не задан');
       }
-      await insertMessage(admin, conversationId, 'system', text);
+      await insertMessage(admin, conversationId, 'system', text, 'scenario');
       await sendToChannel(lead, text, action.use_whatsapp_template ?? false, action.template_name);
       return;
     }
@@ -258,7 +260,7 @@ async function executeScenarioAction(
         throw new Error('Инструкция для ИИ не задана');
       }
       const answer = await runAiWrite(admin, conversationId, instruction);
-      await insertMessage(admin, conversationId, 'ai', answer);
+      await insertMessage(admin, conversationId, 'ai', answer, 'scenario');
       return;
     }
 
@@ -293,12 +295,13 @@ async function executeScenarioAction(
         throw new Error('Текст уведомления оператору не задан');
       }
       const notificationText = `🔔 ${message}`;
-      await insertMessage(admin, conversationId, 'system', notificationText);
+      await insertMessage(admin, conversationId, 'system', notificationText, 'scenario');
       if (lead.assigned_to) {
         await admin.from('messages').insert({
           conversation_id: conversationId,
           sender: 'system',
           content: `Уведомление оператору: ${notificationText}`,
+          origin: 'scenario',
         });
       }
       return;

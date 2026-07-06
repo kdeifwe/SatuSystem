@@ -1,11 +1,12 @@
- import { searchKnowledgeBase, formatChunksForPrompt } from '@/lib/knowledge-base/search';
-import { geminiFetch, GEMINI_CHAT_MODEL } from '@/lib/server/ai/gemini-client';
+ import { searchKnowledgeBaseWithLinks } from '@/lib/knowledge-base/search';
+import { geminiFetch, geminiCountTokens, GEMINI_CHAT_MODEL, GEMINI_PROMPT_MODEL } from '@/lib/server/ai/gemini-client';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { splitAgentMessage, calculateTypingDelay } from '@/lib/server/ai/message-splitter';
 import { injectHandoffSection, normalizeHandoffConfig, type HandoffConfig } from '@/lib/server/ai/handoff';
 import { sendTelegramNotification } from '@/lib/extensions/telegram-notify';
 import { PRODUCTION_TOOL_DECLARATIONS, ALL_TOOL_DECLARATIONS, type ToolCall } from '@/lib/ai/tools/registry';
 import { executeTool, type ToolContext } from '@/lib/ai/tools/executor';
+import { normalizeFunnelFlow } from '@/lib/funnel/normalize';
 
 export interface ChatMessage {
   role: 'user' | 'model';
@@ -24,6 +25,21 @@ export interface AgentTurnResult {
   splitMessages: boolean;
   typingSimulation: boolean;
   handoffMessage?: string;
+  retrievalDebug?: {
+    primaryChunks: Array<{ id: string; content: string; similarity: number; priority?: string; sourceTitle?: string; sourceType?: string; postType?: string }>;
+    linkedChunks: Array<{ id: string; content: string; similarity: number; linkType?: string; priority?: string; sourceTitle?: string; sourceType?: string; postType?: string }>;
+  };
+}
+
+interface GeminiClientResponse {
+  payload: {
+    parts: Array<Record<string, unknown>>;
+    finishReason?: string;
+    usageMetadata?: {
+      promptTokenCount?: number;
+      candidatesTokenCount?: number;
+    };
+  };
 }
 
 interface ToolCallRequest {
@@ -41,18 +57,53 @@ async function readAgentCapabilities(admin: ReturnType<typeof createAdminClient>
   return normalizeHandoffConfig((agentData?.general_capabilities as Record<string, unknown> | null)?.handoff_config);
 }
 
+function getEntryNodeId(flow: ReturnType<typeof normalizeFunnelFlow>): string | null {
+  return flow?.entryNodeId ? flow.entryNodeId : null;
+}
+
 async function ensureLeadContext(admin: ReturnType<typeof createAdminClient>, agentId: string, userMessage: string, externalLeadId?: string) {
   const { data: agentData, error: agentError } = await admin
     .from('agents')
-    .select('org_id')
+    .select('org_id, dialogue_flow')
     .eq('id', agentId)
     .single();
 
   if (agentError || !agentData?.org_id) {
-    return { leadId: null, conversationId: null, orgId: null };
+    return {
+      leadId: null,
+      conversationId: null,
+      orgId: null,
+      leadAttributes: null,
+      previousConversationSummary: null,
+      userMessageId: null,
+      isSandbox: false,
+    };
   }
 
-  // If externalLeadId is provided (e.g., from Telegram webhook), use it directly
+  const findLeadAttributes = async (leadId: string) => {
+    const { data: leadRow } = await admin
+      .from('leads')
+      .select('attributes')
+      .eq('id', leadId)
+      .single();
+
+    return (leadRow?.attributes as Record<string, unknown> | null) ?? null;
+  };
+
+  const findPreviousConversationSummary = async (leadId: string) => {
+    const { data: conversations } = await admin
+      .from('conversations')
+      .select('id, summary')
+      .eq('lead_id', leadId)
+      .eq('agent_id', agentId)
+      .order('started_at', { ascending: false })
+      .limit(2);
+
+    return Array.isArray(conversations) && conversations.length > 1
+      ? conversations[1]?.summary ?? null
+      : null;
+  };
+
   if (externalLeadId) {
     const { data: existingLead } = await admin
       .from('leads')
@@ -62,10 +113,17 @@ async function ensureLeadContext(admin: ReturnType<typeof createAdminClient>, ag
 
     if (!existingLead) {
       console.warn(`[orchestrator] External lead not found: ${externalLeadId}`);
-      return { leadId: null, conversationId: null, orgId: agentData.org_id };
+      return {
+        leadId: null,
+        conversationId: null,
+        orgId: agentData.org_id,
+        leadAttributes: null,
+        previousConversationSummary: null,
+        userMessageId: null,
+        isSandbox: false,
+      };
     }
 
-    // Use the provided lead and find/create conversation
     let { data: conversation } = await admin
       .from('conversations')
       .select('id')
@@ -76,26 +134,38 @@ async function ensureLeadContext(admin: ReturnType<typeof createAdminClient>, ag
       .maybeSingle();
 
     if (!conversation) {
+      const entryNodeId = getEntryNodeId(normalizeFunnelFlow(agentData?.dialogue_flow));
       const { data: createdConversation } = await admin
         .from('conversations')
-        .insert({ lead_id: externalLeadId, agent_id: agentId })
+        .insert({
+          lead_id: externalLeadId,
+          agent_id: agentId,
+          ...(entryNodeId ? { current_funnel_step: entryNodeId } : {}),
+        })
         .select('id')
         .single();
       conversation = createdConversation;
     }
 
-    if (conversation?.id) {
-      await admin.from('messages').insert({
-        conversation_id: conversation.id,
-        sender: 'user',
-        content: userMessage,
-      });
-    }
+    const insertedMessage = conversation?.id
+      ? await admin.from('messages').insert({
+          conversation_id: conversation.id,
+          sender: 'user',
+          content: userMessage,
+        }).select('id').single()
+      : null;
 
-    return { leadId: externalLeadId, conversationId: conversation?.id ?? null, orgId: agentData.org_id };
+    return {
+      leadId: externalLeadId,
+      conversationId: conversation?.id ?? null,
+      orgId: agentData.org_id,
+      leadAttributes: conversation?.id ? await findLeadAttributes(externalLeadId) : null,
+      previousConversationSummary: externalLeadId ? await findPreviousConversationSummary(externalLeadId) : null,
+      userMessageId: insertedMessage?.data?.id ?? null,
+      isSandbox: false,
+    };
   }
 
-  // Otherwise, use sandbox lead (for direct API calls, not Telegram)
   const externalId = `sandbox:${agentId}`;
   let { data: lead } = await admin
     .from('leads')
@@ -119,7 +189,15 @@ async function ensureLeadContext(admin: ReturnType<typeof createAdminClient>, ag
   }
 
   if (!lead?.id) {
-    return { leadId: null, conversationId: null, orgId: agentData.org_id };
+    return {
+      leadId: null,
+      conversationId: null,
+      orgId: agentData.org_id,
+      leadAttributes: null,
+      previousConversationSummary: null,
+      userMessageId: null,
+      isSandbox: true,
+    };
   }
 
   let { data: conversation } = await admin
@@ -132,23 +210,36 @@ async function ensureLeadContext(admin: ReturnType<typeof createAdminClient>, ag
     .maybeSingle();
 
   if (!conversation) {
+    const entryNodeId = getEntryNodeId(normalizeFunnelFlow(agentData?.dialogue_flow));
     const { data: createdConversation } = await admin
       .from('conversations')
-      .insert({ lead_id: lead.id, agent_id: agentId })
+      .insert({
+        lead_id: lead.id,
+        agent_id: agentId,
+        ...(entryNodeId ? { current_funnel_step: entryNodeId } : {}),
+      })
       .select('id')
       .single();
     conversation = createdConversation;
   }
 
-  if (conversation?.id) {
-    await admin.from('messages').insert({
-      conversation_id: conversation.id,
-      sender: 'user',
-      content: userMessage,
-    });
-  }
+  const insertedMessage = conversation?.id
+    ? await admin.from('messages').insert({
+        conversation_id: conversation.id,
+        sender: 'user',
+        content: userMessage,
+      }).select('id').single()
+    : null;
 
-  return { leadId: lead.id, conversationId: conversation?.id ?? null, orgId: agentData.org_id };
+  return {
+    leadId: lead.id,
+    conversationId: conversation?.id ?? null,
+    orgId: agentData.org_id,
+    leadAttributes: lead.id ? await findLeadAttributes(lead.id) : null,
+    previousConversationSummary: lead.id ? await findPreviousConversationSummary(lead.id) : null,
+    userMessageId: insertedMessage?.data?.id ?? null,
+    isSandbox: true,
+  };
 }
 
 async function appendMessage(admin: ReturnType<typeof createAdminClient>, conversationId: string | null, sender: 'ai' | 'system', content: string) {
@@ -245,21 +336,261 @@ function extractTextFromParts(parts: Array<Record<string, unknown>> | undefined)
     .trim();
 }
 
+const SUMMARY_TOKEN_THRESHOLD = 150_000;
+const SUMMARY_TAIL_MESSAGES = 30;
+
+function serializeMessagesForSummary(messages: Array<{ role: 'user' | 'model'; text: string }>) {
+  return messages
+    .map((message) => `${message.role === 'user' ? 'Клиент' : 'Агент'}: ${message.text}`)
+    .join('\n');
+}
+
+function serializeContentForTokenCount(
+  summary: string | null | undefined,
+  messages: Array<{ id: string; role: 'user' | 'model'; text: string }>,
+) {
+  const contents: Array<Record<string, unknown>> = [];
+  if (summary) {
+    contents.push({ role: 'user', parts: [{ text: summary }] });
+  }
+  for (const message of messages) {
+    contents.push({ role: message.role, parts: [{ text: message.text }] });
+  }
+  return contents;
+}
+
+async function estimateContentTokens(
+  contents: Array<Record<string, unknown>>,
+): Promise<{ tokens: number; fallback: boolean }> {
+  try {
+    const tokens = await geminiCountTokens(GEMINI_CHAT_MODEL, contents);
+    console.log(`[orchestrator] countTokens returned ${tokens} tokens for conversation context`);
+    return { tokens, fallback: false };
+  } catch (error) {
+    const fallbackTokens = Math.max(0, Math.ceil(JSON.stringify(contents).length / 2.5));
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.warn(
+      `[orchestrator] Gemini countTokens failed, using fallback estimate ${fallbackTokens} tokens. Error: ${errorMessage}`,
+    );
+    return { tokens: fallbackTokens, fallback: true };
+  }
+}
+
+async function loadConversationMessages(
+  admin: ReturnType<typeof createAdminClient>,
+  conversationId: string,
+  excludeMessageId?: string | null,
+) {
+  let query = admin
+    .from('messages')
+    .select('id, sender, content')
+    .eq('conversation_id', conversationId)
+    .order('created_at', { ascending: true });
+
+  if (excludeMessageId) {
+    query = query.neq('id', excludeMessageId);
+  }
+
+  const { data, error } = await query;
+  if (error) {
+    throw new Error(`Failed to load conversation messages: ${error.message}`);
+  }
+
+  return (data as Array<{ id: string; sender: string | null; content: string | null }> | null) ?? [];
+}
+
+async function callGemini(
+  modelName: string,
+  systemPrompt: string,
+  contents: Array<Record<string, unknown>>,
+  tools: Array<Record<string, unknown>>,
+  previousToolCalls?: Array<Record<string, unknown>>,
+  generationConfig: Record<string, unknown> = { temperature: 0.7, topP: 0.9, maxOutputTokens: 1024 },
+  retryCount = 0,
+): Promise<GeminiClientResponse> {
+  const body: Record<string, unknown> = {
+    system_instruction: { parts: [{ text: systemPrompt }] },
+    contents,
+    tools,
+    toolConfig: { functionCallingConfig: { mode: 'AUTO' } },
+    generationConfig,
+  };
+
+  const res = await geminiFetch(modelName, 'generateContent', body);
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Gemini API error ${res.status}: ${errText}`);
+  }
+
+  const data = await res.json();
+  const candidate = data.candidates?.[0] ?? null;
+  const parts = (candidate?.content?.parts as Array<Record<string, unknown>> | undefined) ?? [];
+  const usageMetadata = candidate?.usageMetadata ?? data.usageMetadata ?? {};
+
+  if ((candidate?.finishReason === 'MAX_TOKENS' || candidate?.finish_reason === 'MAX_TOKENS') && retryCount === 0) {
+    return callGemini(modelName, systemPrompt, contents, tools, previousToolCalls, generationConfig, 1);
+  }
+
+  return {
+    payload: {
+      parts,
+      finishReason: candidate?.finishReason ?? candidate?.finish_reason,
+      usageMetadata: {
+        promptTokenCount: usageMetadata?.promptTokenCount ?? usageMetadata?.prompt_tokens ?? 0,
+        candidatesTokenCount: usageMetadata?.candidatesTokenCount ?? usageMetadata?.candidates_tokens ?? 0,
+      },
+    },
+  };
+}
+
+async function summarizeConversationSegment(
+  admin: ReturnType<typeof createAdminClient>,
+  conversationId: string,
+  previousSummary: string | null,
+  messagesToCompress: Array<{ id: string; role: 'user' | 'model'; text: string }>,
+) {
+  const summaryPrompt = `Ты помощник, который сжимает историю диалога для AI-агента.
+Сохрани ключевые факты о клиенте, что обсуждалось, на что он возражал или просил, и текущий этап разговора.
+Верни только компактное резюме, без новых выводов и без повторения полного текста сообщений.
+
+${previousSummary ? `Предыдущее резюме:
+${previousSummary}
+
+` : ''}Сжимаемая часть диалога:
+${serializeMessagesForSummary(messagesToCompress)}\n`;
+
+  const start = Date.now();
+  const res = await callGemini(
+    GEMINI_PROMPT_MODEL,
+    summaryPrompt,
+    [{ role: 'user', parts: [{ text: summaryPrompt }] }],
+    [],
+    undefined,
+    { temperature: 0.2, topP: 0.25, maxOutputTokens: 1024 },
+  );
+
+  const summaryText = extractTextFromParts(res.payload.parts);
+  const latencyMs = Date.now() - start;
+  const tokensInput = res.payload.usageMetadata?.promptTokenCount ?? 0;
+  const tokensOutput = res.payload.usageMetadata?.candidatesTokenCount ?? 0;
+
+  await admin.from('ai_call_logs').insert({
+    conversation_id: conversationId,
+    request: {
+      type: 'summary',
+      model: GEMINI_PROMPT_MODEL,
+      prompt: summaryPrompt,
+      messages_compressed: messagesToCompress.length,
+      previous_summary_exists: Boolean(previousSummary),
+    },
+    response: {
+      summary: summaryText,
+      raw_parts: res.payload.parts,
+    },
+    tokens_input: tokensInput,
+    tokens_output: tokensOutput,
+    latency_ms: latencyMs,
+  });
+
+  await admin.from('conversations').update({
+    summary: summaryText,
+    summary_up_to_message_id: messagesToCompress.length > 0 ? messagesToCompress[messagesToCompress.length - 1].id : null,
+  }).eq('id', conversationId);
+
+  return {
+    summaryText,
+    summaryUpToMessageId: messagesToCompress.length > 0 ? messagesToCompress[messagesToCompress.length - 1].id : null,
+  };
+}
+
+async function buildConversationContext(
+  admin: ReturnType<typeof createAdminClient>,
+  conversationId: string,
+  excludeMessageId?: string | null,
+) {
+  const { data: conversation } = await admin
+    .from('conversations')
+    .select('summary, summary_up_to_message_id')
+    .eq('id', conversationId)
+    .single();
+
+  const allMessages = await loadConversationMessages(admin, conversationId, excludeMessageId);
+
+  const summaryUpToMessageId = conversation?.summary_up_to_message_id ?? null;
+  let messagesAfterSummary = allMessages;
+  if (summaryUpToMessageId) {
+    const boundaryIndex = allMessages.findIndex((item) => item.id === summaryUpToMessageId);
+    if (boundaryIndex >= 0) {
+      messagesAfterSummary = allMessages.slice(boundaryIndex + 1);
+    }
+  }
+
+  const formattedMessages = messagesAfterSummary
+    .filter((message) => message.content && message.content.trim())
+    .map((message) => ({
+      id: message.id,
+      role: (message.sender === 'user' ? 'user' : 'model') as 'user' | 'model',
+      text: message.content!.trim(),
+    }));
+
+  const tokenContents = serializeContentForTokenCount(conversation?.summary, formattedMessages);
+  const { tokens: totalTokens, fallback: tokenEstimateFallback } = await estimateContentTokens(tokenContents);
+  if (totalTokens <= SUMMARY_TOKEN_THRESHOLD) {
+    return {
+      conversationSummary: conversation?.summary ?? null,
+      messagesAfterSummary: formattedMessages,
+      summaryUpToMessageId,
+      contextTokenCount: totalTokens,
+      contextTokenCountFallback: tokenEstimateFallback,
+    };
+  }
+
+  const compressibleCount = Math.max(1, formattedMessages.length - SUMMARY_TAIL_MESSAGES);
+  const messagesToCompress = formattedMessages.slice(0, compressibleCount);
+  const tailMessages = formattedMessages.slice(compressibleCount);
+
+  if (messagesToCompress.length === 0) {
+    return {
+      conversationSummary: conversation?.summary ?? null,
+      messagesAfterSummary: formattedMessages,
+      summaryUpToMessageId,
+      contextTokenCount: totalTokens,
+      contextTokenCountFallback: tokenEstimateFallback,
+    };
+  }
+
+  const { summaryText, summaryUpToMessageId: updatedSummaryId } = await summarizeConversationSegment(
+    admin,
+    conversationId,
+    conversation?.summary ?? null,
+    messagesToCompress,
+  );
+
+  return {
+    conversationSummary: summaryText,
+    messagesAfterSummary: tailMessages,
+    summaryUpToMessageId: updatedSummaryId,
+    contextTokenCount: totalTokens,
+    contextTokenCountFallback: tokenEstimateFallback,
+  };
+}
+
 export async function runAgentTurn(
   agentId: string,
   systemPrompt: string,
   userMessage: string,
-  history: ChatMessage[],
+  history: ChatMessage[] = [],
   externalLeadId?: string, // Optional: for Telegram/webhook-identified leads
 ): Promise<AgentTurnResult> {
   const admin = createAdminClient();
+  const startTime = Date.now();
   const handoffConfig = await readAgentCapabilities(admin, agentId);
   const basePrompt = injectHandoffSection(systemPrompt, handoffConfig);
 
   // Читаем allowed_tools конкретного агента
   const { data: agentData } = await admin
     .from('agents')
-    .select('general_capabilities')
+    .select('general_capabilities, dialogue_flow')
     .eq('id', agentId)
     .single();
 
@@ -273,44 +604,90 @@ export async function runAgentTurn(
   console.log(`[AGENT_TOOLS] Agent ${agentId}: allowed tools: [${allowedToolNames.join(', ')}], declarations: [${toolDeclarations.map((d) => d.name).join(', ')}]`);
 
   // 1. RAG — ищем релевантные чанки ДО вызова Gemini
-  const chunks = await searchKnowledgeBase(agentId, userMessage);
-  const kbContext = formatChunksForPrompt(chunks);
+  const retrieval = await searchKnowledgeBaseWithLinks(agentId, userMessage);
+  const chunks = retrieval.primaryChunks;
+  const linkedChunks = retrieval.linkedChunks;
+  const kbContext = retrieval.contextText;
 
   console.log(`[RAG] Agent ${agentId}: найдено ${chunks.length} чанков для запроса "${userMessage.slice(0, 50)}..."`);
-  console.log(`[RAG] Топ-3 чанка:`, chunks.slice(0, 3).map(c => ({
-    similarity: c.similarity.toFixed(2),
-    preview: c.content.slice(0, 80),
+  console.log(`[RAG] Топ-3 чанка:`, chunks.slice(0, 3).map((chunk) => ({
+    similarity: chunk.similarity.toFixed(2),
+    preview: chunk.content.slice(0, 80),
   })));
 
-  // 2. Добавляем контекст базы знаний в system prompt
-  // ВАЖНО: контент пользователя — отдельным объектом в contents[],
-  // НЕ внутри system prompt (защита от prompt injection)
-  const fullSystemPrompt = `${basePrompt}
+  const { leadId, conversationId, orgId, leadAttributes, previousConversationSummary, userMessageId, isSandbox } = await ensureLeadContext(admin, agentId, userMessage, externalLeadId);
+  if (userMessageId) {
+    await admin.from('messages').update({
+      tool_calls: {
+        retrieval: {
+          query: userMessage,
+          primary_chunk_ids: chunks.map((chunk) => chunk.chunk_id),
+          linked_chunk_ids: linkedChunks.map((chunk) => chunk.id),
+          linked_chunk_types: linkedChunks.map((chunk) => ({ id: chunk.id, link_type: chunk.link_type, similarity: chunk.similarity })),
+        },
+      },
+    }).eq('id', userMessageId);
+  }
+  const flow = normalizeFunnelFlow(agentData?.dialogue_flow);
+  const { data: conversationState } = conversationId
+    ? await admin.from('conversations').select('current_funnel_step').eq('id', conversationId).single()
+    : { data: null };
 
-<knowledge_base>
-${kbContext}
-</knowledge_base>
+  const currentFunnelStep = conversationState?.current_funnel_step ?? flow?.entryNodeId ?? null;
+  if (conversationId && !conversationState?.current_funnel_step && flow?.entryNodeId) {
+    await admin.from('conversations').update({ current_funnel_step: flow.entryNodeId }).eq('id', conversationId);
+  }
 
-Правило: отвечай ТОЛЬКО на основе информации выше. Если данных нет — честно скажи об этом.`;
+  const conversationContext = conversationId
+    ? await buildConversationContext(admin, conversationId, userMessageId)
+    : {
+        conversationSummary: null,
+        messagesAfterSummary: history,
+        contextTokenCount: null,
+        contextTokenCountFallback: false,
+      };
 
-  const res = await geminiFetch(GEMINI_CHAT_MODEL, 'generateContent', {
-    system_instruction: { parts: [{ text: fullSystemPrompt }] },
-    contents: [
-      ...history.map((m) => ({ role: m.role === 'user' ? 'user' : 'model', parts: [{ text: m.text }] })),
+  const leadContextItems: string[] = [];
+  if (leadAttributes && Object.keys(leadAttributes).length > 0) {
+    leadContextItems.push(`Лид attributes:\n${JSON.stringify(leadAttributes, null, 2)}`);
+  }
+  if (previousConversationSummary) {
+    leadContextItems.push(`Предыдущее завершённое общение:\n${previousConversationSummary}`);
+  }
+
+  const leadContextBlock = leadContextItems.length > 0
+    ? `<lead_context>\n${leadContextItems.join('\n\n')}\n</lead_context>\n\n`
+    : '';
+
+  const previousConversationBlock = conversationContext.conversationSummary
+    ? `<previous_conversation_context>\n${conversationContext.conversationSummary}\n</previous_conversation_context>\n\n`
+    : '';
+
+  const stepContext = currentFunnelStep
+    ? `\n\nТы сейчас на шаге "${currentFunnelStep}". Если пора переходить дальше согласно условиям воронки — вызови advanceFunnelStep. Не пропускай шаги и не придумывай переходы, которых нет в описании воронки выше. ВАЖНО: если ты решил, что пора перейти на следующий шаг, сначала вызови advanceFunnelStep с stepId следующего шага и коротким reason, а уже потом продолжай диалог.`
+    : '';
+
+  const fullSystemPrompt = `${basePrompt}\n\n${leadContextBlock}${previousConversationBlock}${stepContext}\n\n<knowledge_base>\n${kbContext}\n</knowledge_base>\n\nПравило: отвечай ТОЛЬКО на основе информации выше. Если данных нет — честно скажи об этом.`;
+
+  const conversationContents = conversationContext.messagesAfterSummary.map((message) => ({
+    role: message.role === 'user' ? 'user' : 'model',
+    parts: [{ text: message.text }],
+  }));
+
+  let response: GeminiClientResponse;
+  let tokensInput = 0;
+  let tokensOutput = 0;
+
+  try {
+    response = await callGemini(GEMINI_CHAT_MODEL, fullSystemPrompt, [
+      ...conversationContents,
       { role: 'user', parts: [{ text: userMessage }] },
-    ],
-    tools: [{
-      functionDeclarations: toolDeclarations,
-    }],
-    toolConfig: {
-      functionCallingConfig: { mode: 'AUTO' },
-    },
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
+    ], [{ functionDeclarations: toolDeclarations }]);
+    tokensInput += response.payload.usageMetadata?.promptTokenCount ?? 0;
+    tokensOutput += response.payload.usageMetadata?.candidatesTokenCount ?? 0;
+  } catch (err) {
+    const errText = err instanceof Error ? err.message : String(err);
     try {
-      // record consecutive AI error
       const { data: existing } = await admin.from('ai_error_counters').select('consecutive_errors').eq('agent_id', agentId).maybeSingle();
       const prev = existing?.consecutive_errors ?? 0;
       const next = prev + 1;
@@ -321,42 +698,39 @@ ${kbContext}
           agent_id: agentId,
           lead_id: null,
           event_type: 'ai_error',
-          payload: { error: errText ?? `status ${res.status}`, attempts: next },
+          payload: { error: errText, attempts: next },
           delivery_status: 'pending'
         });
-        // reset counter after enqueue
         await admin.from('ai_error_counters').update({ consecutive_errors: 0, updated_at: new Date().toISOString() }).eq('agent_id', agentId);
       }
     } catch (e) {
       console.error('[orchestrator] failed to record ai_error counter', e);
     }
 
-    throw new Error(`Gemini API error ${res.status}: ${errText}`);
+    throw new Error(`Gemini API error: ${errText}`);
   }
 
-  const data = await res.json();
-  // reset consecutive error counter on success
   try {
     await admin.from('ai_error_counters').update({ consecutive_errors: 0, updated_at: new Date().toISOString() }).eq('agent_id', agentId);
   } catch (e) {
     // non-fatal
   }
-  let currentParts = data.candidates?.[0]?.content?.parts as Array<Record<string, any>> | undefined;
+  let currentParts = response.payload.parts;
   let finalAnswer = extractTextFromParts(currentParts);
   let handoffMessage: string | undefined;
   let handoffTriggered = false;
 
-  const { leadId, conversationId, orgId } = await ensureLeadContext(admin, agentId, userMessage, externalLeadId);
   const toolContext: ToolContext = {
     leadId: leadId ?? '',
     agentId,
     orgId: orgId ?? '',
     conversationId: conversationId ?? '',
-    isSandbox: false,
+    isSandbox,
   };
   let toolCalls = tryExtractToolCalls(currentParts);
   let iterations = 0;
   let toolsUsed: string[] = [];
+  const toolUsageCounts: Record<string, number> = {};
 
   while (iterations < 5 && toolCalls.length > 0) {
     iterations += 1;
@@ -368,6 +742,16 @@ ${kbContext}
         continue;
       }
 
+      const previousCalls = toolUsageCounts[toolCall.name] ?? 0;
+      if (toolCall.name === 'searchKnowledgeBase' && previousCalls >= 1) {
+        toolResults.push({
+          name: toolCall.name,
+          result: { skipped: true, reason: 'searchKnowledgeBase already used in this turn' },
+        });
+        continue;
+      }
+
+      toolUsageCounts[toolCall.name] = previousCalls + 1;
       toolsUsed.push(toolCall.name);
       console.log('[PROD_TOOL] calling', { agentId, conversationId, name: toolCall.name, args: toolCall.args });
       const toolResult = await executeTool(toolCall as ToolCall, toolContext);
@@ -392,29 +776,21 @@ ${kbContext}
     }));
     console.log('[PROD_TOOL_FOLLOWUP]', { agentId, toolResults, functionResponseParts });
 
-    const followUpRes = await geminiFetch(GEMINI_CHAT_MODEL, 'generateContent', {
-      system_instruction: { parts: [{ text: fullSystemPrompt }] },
-      contents: [
-        ...history.map((m) => ({ role: m.role === 'user' ? 'user' : 'model', parts: [{ text: m.text }] })),
+    const followUpResponse = await callGemini(
+      GEMINI_CHAT_MODEL,
+      fullSystemPrompt,
+      [
+        ...conversationContents,
         { role: 'user', parts: [{ text: userMessage }] },
         { role: 'model', parts: currentParts ?? [] },
         { role: 'user', parts: functionResponseParts },
       ],
-      tools: [{
-        functionDeclarations: toolDeclarations, // ✅ используем отфильтрованный список
-      }],
-      toolConfig: {
-        functionCallingConfig: { mode: 'AUTO' },
-      },
-    });
+      [{ functionDeclarations: toolDeclarations }],
+    );
 
-    if (!followUpRes.ok) {
-      const errText = await followUpRes.text();
-      throw new Error(`Gemini API error ${followUpRes.status}: ${errText}`);
-    }
-
-    const followUpData = await followUpRes.json();
-    currentParts = followUpData.candidates?.[0]?.content?.parts as Array<Record<string, any>> | undefined;
+    tokensInput += followUpResponse.payload.usageMetadata?.promptTokenCount ?? 0;
+    tokensOutput += followUpResponse.payload.usageMetadata?.candidatesTokenCount ?? 0;
+    currentParts = followUpResponse.payload.parts;
     finalAnswer = extractTextFromParts(currentParts) || finalAnswer;
     console.log('[PROD_TOOL_FOLLOWUP_RESPONSE]', { agentId, answer: finalAnswer, toolCalls: tryExtractToolCalls(currentParts) });
     toolCalls = tryExtractToolCalls(currentParts);
@@ -433,6 +809,38 @@ ${kbContext}
     await appendMessage(admin, conversationId, 'ai', finalAnswer);
   }
 
+  const rawReply = extractTextFromParts(currentParts);
+  if (conversationId) {
+    await admin.from('ai_call_logs').insert({
+      conversation_id: conversationId,
+      request: {
+        type: 'agent_response',
+        model: GEMINI_CHAT_MODEL,
+        user_message: userMessage,
+        context_mode: conversationContext.conversationSummary ? 'summary+tail' : 'full_history',
+        messages_in_context: conversationContext.messagesAfterSummary.length,
+        summary_used: Boolean(conversationContext.conversationSummary),
+        tools_used: toolsUsed,
+        iterations,
+        context_token_count: conversationContext.contextTokenCount ?? null,
+        context_token_count_fallback: conversationContext.contextTokenCountFallback ?? false,
+        retrieval: {
+          query: userMessage,
+          primary_chunk_ids: chunks.map((chunk) => chunk.chunk_id),
+          linked_chunk_ids: linkedChunks.map((chunk) => chunk.id),
+          linked_chunk_types: linkedChunks.map((chunk) => ({ id: chunk.id, link_type: chunk.link_type, similarity: chunk.similarity })),
+        },
+      },
+      response: {
+        raw: rawReply,
+        final: finalAnswer,
+      },
+      tokens_input: tokensInput,
+      tokens_output: tokensOutput,
+      latency_ms: Date.now() - startTime,
+    });
+  }
+
   const capabilities = generalCapabilities ?? {};
   const splitMessages = Boolean(capabilities.split_messages ?? true);
   const splitMaxParts = Math.min(3, Math.max(1, Number(capabilities.split_max_parts ?? 3)));
@@ -445,10 +853,31 @@ ${kbContext}
 
   return {
     answer: finalAnswer,
-    usedChunks: chunks.map(c => ({ id: c.chunk_id, similarity: c.similarity })),
+    usedChunks: chunks.map((chunk) => ({ id: chunk.chunk_id, similarity: chunk.similarity })),
     messageParts,
     splitMessages,
     typingSimulation,
     handoffMessage,
+    retrievalDebug: {
+      primaryChunks: chunks.map((chunk) => ({
+        id: chunk.chunk_id,
+        content: chunk.content,
+        similarity: chunk.similarity,
+        priority: chunk.priority,
+        sourceTitle: (chunk.metadata?.source_title as string | undefined) ?? undefined,
+        sourceType: (chunk.metadata?.source_type as string | undefined) ?? undefined,
+        postType: (chunk.metadata?.post_type as string | undefined) ?? undefined,
+      })),
+      linkedChunks: linkedChunks.map((chunk) => ({
+        id: chunk.id,
+        content: chunk.content,
+        similarity: chunk.similarity,
+        linkType: chunk.link_type,
+        priority: chunk.priority,
+        sourceTitle: (chunk.metadata?.source_title as string | undefined) ?? undefined,
+        sourceType: (chunk.metadata?.source_type as string | undefined) ?? undefined,
+        postType: (chunk.metadata?.post_type as string | undefined) ?? undefined,
+      })),
+    },
   };
 }

@@ -266,7 +266,7 @@ async function handleIncomingMessage(agentId: string, sock: ReturnType<typeof ma
     }
 
     const systemPrompt = agent.system_prompt_compiled ?? `Ты ${agent.name}. Отвечай кратко и по-человечески.`;
-    const { answer } = await runAgentTurn(agentId, systemPrompt, text, historyFormatted);
+    const { answer } = await runAgentTurn(agentId, systemPrompt, text, [], undefined);
 
     const caps = agent.general_capabilities ?? {};
     const parts = splitAgentMessage(answer, caps.split_messages ?? true, caps.split_max_parts ?? 2);

@@ -20,7 +20,7 @@ export async function GET(req: NextRequest, { params }: { params: { agentId: str
 
   const { data } = await getAdmin()
     .from('agents')
-    .select('id, name, role, goal, tone_of_voice, temperature, model, system_prompt_compiled, general_capabilities')
+    .select('id, name, role, goal, goal_status, undefined_close_statuses, response_wait_hours, tone_of_voice, temperature, model, communication_rules, human_communication_style, knowledge_base_principles, system_prompt_compiled, general_capabilities')
     .eq('id', params.agentId)
     .single();
 
@@ -46,11 +46,15 @@ export async function PATCH(req: NextRequest, { params }: { params: { agentId: s
     'name',
     'role',
     'goal',
+    'goal_status',
+    'undefined_close_statuses',
+    'response_wait_hours',
     'tone_of_voice',
     'temperature',
     'model',
     'communication_rules',
     'human_communication_style',
+    'knowledge_base_principles',
     'general_capabilities',
     'system_prompt_compiled',
   ];

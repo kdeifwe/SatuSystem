@@ -116,6 +116,14 @@ async function callGemini(
     generationConfig: { temperature: 0.7, topP: 0.9, maxOutputTokens: 1024 },
   };
 
+  if (process.env.LOG_GEMINI_RAW === '1') {
+    try {
+      console.log('[GEMINI][REQUEST_BODY]', JSON.stringify(body));
+    } catch (e) {
+      console.warn('[GEMINI] failed to stringify request body', e);
+    }
+  }
+
   if (previousToolCalls && previousToolCalls.length > 0) {
     body.contents = contents;
   }
@@ -127,6 +135,13 @@ async function callGemini(
   }
 
   const data = await res.json();
+  if (process.env.LOG_GEMINI_RAW === '1') {
+    try {
+      console.log('[GEMINI][RAW_RESPONSE]', JSON.stringify(data));
+    } catch (e) {
+      console.warn('[GEMINI] failed to stringify raw response', e);
+    }
+  }
   const candidate = data.candidates?.[0];
   const parts = (candidate?.content?.parts as Array<Record<string, unknown>> | undefined) ?? [];
   const finishReason = candidate?.finishReason ?? candidate?.finish_reason;
@@ -206,6 +221,8 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
   let searchLookupCount = 0;
   let handoffTriggered = false;
   let fallbackReason: string | null = null;
+  let forcedFinalization = false;
+  let accumulatedToolResults: Array<Record<string, unknown>> = [];
   let validationAttempted = false;
 
   while (iterations < 5) {
@@ -226,7 +243,10 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
       if (call.name === 'searchKnowledgeBase') {
         searchLookupCount += 1;
         if (searchLookupCount > 3) {
-          fallbackReason = 'Превышен лимит поисковых запросов за ход. Переключаю вас на коллегу.';
+          // trigger forced finalization using accumulated tool results instead of hardcoded fallback
+          forcedFinalization = true;
+          // set a safe, non-technical fallback reason to use only if forced-finalization fails
+          fallbackReason = 'Извините, я уточню информацию и вернусь с ответом.';
           toolResults.push({ name: call.name, result: null, error: 'Лимит поисковых запросов превышен' });
           break;
         }
@@ -236,6 +256,8 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
       console.log('[TOOL] calling', { agentId, conversationId, name: call.name, args: call.args, trigger: 'model function call' });
       const toolResult = await executeTool(call, toolContext);
       toolResults.push({ name: call.name, result: toolResult.result, error: toolResult.error });
+      // accumulate across iterations for possible forced finalization
+      accumulatedToolResults.push({ name: call.name, result: toolResult.result, error: toolResult.error });
 
       if (call.name === 'redirectToOperator' && toolResult.result && !toolResult.error) {
         handoffTriggered = true;
@@ -274,7 +296,53 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
   let validationErrors: string[] = [];
 
   if (fallbackReason) {
-    finalReply = fallbackReason;
+    // when fallbackReason is set we prefer to perform forced-finalization:
+    // call Gemini one final time WITHOUT tools, providing accumulated tool results
+    if (forcedFinalization) {
+      try {
+        const summarizedToolParts: Array<{ text: string }> = [];
+        for (const r of accumulatedToolResults) {
+          try {
+            if (r?.name === 'searchKnowledgeBase' && r?.result && typeof r.result === 'object' && Array.isArray((r.result as any).results)) {
+              const res = (r.result as any).results as Array<any>;
+              const previews = res.slice(0, 3).map((s) => s.content?.slice(0, 800) ?? '').filter(Boolean);
+              if (previews.length > 0) {
+                summarizedToolParts.push({ text: `Search results (${r.name}):\n${previews.join('\n---\n')}` });
+                continue;
+              }
+            }
+            summarizedToolParts.push({ text: `${r?.name}: ${JSON.stringify(r?.result)}` });
+          } catch (e) {
+            summarizedToolParts.push({ text: `${r?.name}: <unserializable result>` });
+          }
+        }
+
+        const finalContents = [
+          ...baseContents,
+          { role: 'model', parts },
+          { role: 'user', parts: summarizedToolParts },
+          { role: 'system', parts: [{ text: 'Сформулируй ответ клиенту на основе уже найденной информации выше, в human-tone, без упоминания поиска, лимитов или инструментов.' }] },
+        ];
+
+        const finalResponse = await callGemini(agent.model ?? GEMINI_CHAT_MODEL, compiledPrompt, finalContents, []);
+        const finalParts = finalResponse.payload.parts;
+        const finalText = (finalParts as Array<Record<string, unknown>>).filter((part) => typeof part?.text === 'string').map((part) => part.text).join('\n').trim();
+        if (finalText) {
+          finalReply = finalText;
+          rawReply = finalText;
+          // override tokens metrics for finalization
+          tokens_input += finalResponse.payload.usageMetadata?.promptTokenCount ?? 0;
+          tokens_output += finalResponse.payload.usageMetadata?.candidatesTokenCount ?? 0;
+        } else {
+          finalReply = fallbackReason;
+        }
+      } catch (e) {
+        console.warn('[AGENT] forced finalization failed', e);
+        finalReply = fallbackReason;
+      }
+    } else {
+      finalReply = fallbackReason;
+    }
   }
 
   if (handoffTriggered) {
@@ -305,7 +373,7 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
       finalReply = retryReply;
     } else {
       console.warn('[AGENT] retry validation failed', { agentId, errors: retryValidation.errors });
-      finalReply = 'Извините, я не могу точно сформулировать ответ сейчас. Подключу коллегу.';
+      finalReply = 'Извините, я уточню информацию и вернусь с ответом.';
     }
   }
 

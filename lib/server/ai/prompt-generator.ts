@@ -2,7 +2,7 @@ import { BusinessInfo, GeneratedPrompt } from './types';
 import { BASE_POLICY } from '../../ai/base-policy.ts';
 
 async function callGemini(apiKey: string, prompt: string, temp = 0.7): Promise<string> {
-  const models = ['gemini-2.0-flash', 'gemini-2.5-pro'];
+  const models = ['gemini-2.5-flash', 'gemini-2.5-pro'];
   for (const model of models) {
     try {
       const res = await fetch(

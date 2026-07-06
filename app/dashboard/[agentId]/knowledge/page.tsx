@@ -14,6 +14,8 @@ import {
   ArrowLeft,
   ArrowRight,
   ChevronDown,
+  RefreshCw,
+  Instagram,
 } from 'lucide-react';
 
 type Source = {
@@ -141,7 +143,7 @@ export default function KnowledgePage() {
   const [viewChunk, setViewChunk] = useState<Chunk | null>(null);
   const [uploadTab, setUploadTab] = useState<'file' | 'manual' | 'instagram' | 'gdocs'>('file');
   const [uploadFile, setUploadFile] = useState<File | null>(null);
-  const [instagramUsername, setInstagramUsername] = useState('');
+  const [instagramProfileUrl, setInstagramProfileUrl] = useState('');
   const [uploadGDocUrl, setUploadGDocUrl] = useState('');
   const [uploadUseAI, setUploadUseAI] = useState(true);
   const [manualTitle, setManualTitle] = useState('');
@@ -149,6 +151,7 @@ export default function KnowledgePage() {
   const [manualContent, setManualContent] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [isRefreshingLinks, setIsRefreshingLinks] = useState(false);
 
   const fetchSources = async () => {
     if (!agentId) return;
@@ -196,7 +199,7 @@ export default function KnowledgePage() {
   }, [agentId, activeTab, search, page, limit]);
 
   useEffect(() => {
-    if (!sources.some((source) => source.status === 'processing')) return;
+    if (!sources.some((source) => ['pending', 'processing'].includes(source.status))) return;
     const timer = window.setTimeout(() => {
       fetchSources();
     }, 3000);
@@ -247,6 +250,24 @@ export default function KnowledgePage() {
     fetchChunks();
   };
 
+  const handleRefreshLinks = async () => {
+    if (!agentId || isRefreshingLinks) return;
+    setIsRefreshingLinks(true);
+    try {
+      const response = await fetch(`/api/agents/${agentId}/knowledge/links/refresh`, { method: 'POST' });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Ошибка пересчёта связей');
+      }
+      alert('Связи пересчитаны');
+    } catch (error) {
+      console.error(error);
+      alert((error as Error).message);
+    } finally {
+      setIsRefreshingLinks(false);
+    }
+  };
+
   const handleFileUpload = async () => {
     if (!uploadFile) return;
     setIsUploading(true);
@@ -277,20 +298,20 @@ export default function KnowledgePage() {
   };
 
   const handleInstagramParse = async () => {
-    if (!instagramUsername.trim()) return;
+    if (!instagramProfileUrl.trim()) return;
     setIsUploading(true);
     try {
       const response = await fetch(`/api/agents/${agentId}/knowledge/instagram`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: instagramUsername }),
+        body: JSON.stringify({ profileUrl: instagramProfileUrl.trim() }),
       });
       const result = await response.json();
       if (!response.ok || result.error) {
         throw new Error(result.error || 'Ошибка анализа Instagram');
       }
       setUploadModal(false);
-      setInstagramUsername('');
+      setInstagramProfileUrl('');
       setUploadGDocUrl('');
       setUploadUseAI(true);
       fetchSources();
@@ -406,12 +427,22 @@ export default function KnowledgePage() {
                 Загружайте документы, содержащие информацию о вашем бизнесе: цены, виды услуг, товары, контакты и т.д.
               </p>
             </div>
-            <button
-              onClick={() => setUploadModal(true)}
-              className="inline-flex items-center gap-2 px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-700 hover:bg-gray-50 transition"
-            >
-              Загрузить ещё <span className="text-lg leading-none">+</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleRefreshLinks}
+                disabled={isRefreshingLinks}
+                className="inline-flex items-center gap-2 px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-700 hover:bg-gray-50 transition disabled:opacity-60"
+              >
+                <RefreshCw size={14} className={isRefreshingLinks ? 'animate-spin' : ''} />
+                Пересчитать связи
+              </button>
+              <button
+                onClick={() => setUploadModal(true)}
+                className="inline-flex items-center gap-2 px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-700 hover:bg-gray-50 transition"
+              >
+                Загрузить ещё <span className="text-lg leading-none">+</span>
+              </button>
+            </div>
           </div>
 
           <div className="space-y-2">
@@ -419,13 +450,18 @@ export default function KnowledgePage() {
               sources.map((source) => (
                 <div key={source.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 border border-gray-100 rounded-2xl hover:bg-gray-50 transition">
                   <div className="flex items-center gap-3 flex-1 min-w-0">
-                    <FileText size={20} className="text-gray-400 flex-shrink-0" />
+                    {source.type === 'instagram' ? (
+                      <Instagram size={20} className="text-pink-500 flex-shrink-0" />
+                    ) : (
+                      <FileText size={20} className="text-gray-400 flex-shrink-0" />
+                    )}
                     <div className="min-w-0">
                       <p className="text-sm font-medium text-gray-900 truncate">{source.title}</p>
                       <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-gray-500">
                         <span className="bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
                           {source.chunks_count} {pluralize(source.chunks_count, 'элемент', 'элемента', 'элементов')}
                         </span>
+                        {source.status === 'pending' && <span className="text-xs text-blue-600">ожидание...</span>}
                         {source.status === 'processing' && <span className="text-xs text-orange-600">обработка...</span>}
                         {(source.status === 'done' || source.status === 'ready') && <span className="text-xs text-green-600">готово</span>}
                         {source.status === 'error' && <span className="text-xs text-red-600">ошибка</span>}
@@ -695,33 +731,31 @@ export default function KnowledgePage() {
 {uploadTab === 'instagram' && (
       <div className="space-y-4">
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Instagram профиль</label>
-          <div className="flex gap-2">
-            <span className="flex items-center px-3 border border-r-0 border-gray-200 rounded-l-lg bg-gray-50 text-gray-500 text-sm">
-              @
-            </span>
-            <input
-              value={instagramUsername}
-              onChange={(event) => setInstagramUsername(event.target.value.replace('@', ''))}
-              placeholder="username"
-              className="flex-1 border border-gray-200 rounded-r-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Ссылка на Instagram-профиль</label>
+          <input
+            value={instagramProfileUrl}
+            onChange={(event) => setInstagramProfileUrl(event.target.value)}
+            placeholder="https://www.instagram.com/username/"
+            className="w-full border border-gray-200 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
           <p className="text-xs text-gray-400 mt-1">
-            Введите username без @ или вставьте полную ссылку на профиль
+            Вставьте ссылку на публичный аккаунт Instagram
           </p>
         </div>
-        <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
-          <p className="text-xs text-gray-700">
-            📸 Система проанализирует публичный профиль Instagram и добавит информацию о бизнесе в базу знаний агента
-          </p>
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+          <ul className="space-y-1">
+            <li>• Сканируются только публичные профили</li>
+            <li>• Сканируются последние 120 постов</li>
+            <li>• Если в постах неактуальная информация — рекомендуем загрузить через другой способ</li>
+            <li>• Загрузка может занять до 5 минут</li>
+          </ul>
         </div>
         <button
           onClick={handleInstagramParse}
-          disabled={!instagramUsername || isUploading}
+          disabled={!instagramProfileUrl.trim() || isUploading}
           className="w-full py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium disabled:opacity-50 hover:bg-blue-700 transition-colors"
         >
-          {isUploading ? 'Анализируем профиль...' : 'Добавить Instagram'}
+          {isUploading ? 'Сканируем профиль...' : 'Начать сканирование'}
                 </button>
               </div>
             )}

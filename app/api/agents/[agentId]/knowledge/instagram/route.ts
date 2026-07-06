@@ -1,67 +1,48 @@
 import { createAdminClient } from '@/lib/supabase/admin';
-import { processSource } from '@/lib/server/knowledge/processor';
+import { parseInstagramProfileUrl, processInstagramSource } from '@/lib/server/knowledge/instagram';
 
-const INSTAGRAM_ERROR_HINT = 'Instagram ограничивает автоматический доступ. Попробуйте скопировать нужный текст вручную через вкладку «Ввод вручную».';
-
-export async function POST(request: Request, { params }: { params: { agentId: string; sourceId?: string } }) {
+export async function POST(request: Request, { params }: { params: { agentId: string } }) {
   try {
-    const { username } = await request.json();
-    if (!username) {
-      return Response.json({ error: 'username required' }, { status: 400 });
+    const body = await request.json().catch(() => ({}));
+    const profileUrl = typeof body?.profileUrl === 'string'
+      ? body.profileUrl
+      : typeof body?.username === 'string'
+        ? body.username
+        : '';
+
+    console.log('[KB] Instagram POST payload:', { agentId: params.agentId, profileUrl });
+
+    if (!profileUrl.trim()) {
+      return Response.json({ error: 'profileUrl required' }, { status: 400 });
     }
 
-    const cleanUsername = String(username).replace('@', '').replace('https://www.instagram.com/', '').replace('/', '');
-
-    const profileRes = await fetch(`https://www.instagram.com/${cleanUsername}/`, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        Accept: 'text/html,application/xhtml+xml',
-        'Accept-Language': 'ru-RU,ru;q=0.9',
-      },
-    });
-
-    if (!profileRes.ok) {
-      return Response.json({ error: 'Не удалось загрузить Instagram профиль. Профиль может быть закрытым или недоступным.' }, { status: 400 });
+    const parsed = parseInstagramProfileUrl(profileUrl);
+    if (!parsed) {
+      return Response.json({ error: 'Введите корректную ссылку на публичный Instagram-профиль' }, { status: 400 });
     }
 
-    const html = await profileRes.text();
-    const match = html.match(/"biography":"([^"]*)"/);
-    const nameMatch = html.match(/"full_name":"([^"]*)"/);
-    const followersMatch = html.match(/"edge_followed_by":\{"count":(\d+)\}/);
-
-    const textContent = html
-      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, ' ')
-      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, ' ')
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, 15000);
-
-    if (!textContent.trim()) {
-      return Response.json({ error: 'Instagram не вернул содержимое профиля. Профиль может быть закрытым или недоступным.' }, { status: 400 });
+    if (!process.env.APIFY_API_TOKEN?.trim()) {
+      return Response.json(
+        { error: 'APIFY_API_TOKEN не задан. Добавьте токен в .env или Supabase Vault и повторите.' },
+        { status: 503 }
+      );
     }
-
-    const bio = match?.[1] || '';
-    const fullName = nameMatch?.[1] || cleanUsername;
-    const followers = followersMatch?.[1] || '0';
 
     const supabase = createAdminClient();
-    const title = `Instagram: @${cleanUsername} - ${new Date().toISOString().slice(0, 10)}`;
-    const content = `Instagram профиль: ${fullName} (@${cleanUsername})\nПодписчики: ${followers}\nBio: ${bio}\n\nКонтент страницы:\n${textContent}`;
-
     const { data: source, error: sourceError } = await supabase
       .from('kb_sources')
       .insert({
         agent_id: params.agentId,
-        type: 'website',
-        title,
-        raw_content: content,
-        status: 'processing',
+        type: 'instagram',
+        title: `@${parsed.handle}`,
+        raw_content: '',
+        status: 'pending',
         metadata: {
-          instagram_username: cleanUsername,
-          use_ai: true,
+          handle: parsed.handle,
+          requested_posts: 120,
+          provider: 'apify',
           source_type: 'instagram',
-          error_hint: INSTAGRAM_ERROR_HINT,
+          error_hint: 'Проверьте ссылку, профиль должен быть публичным и доступным для сканирования.',
         },
       })
       .select('id')
@@ -71,15 +52,36 @@ export async function POST(request: Request, { params }: { params: { agentId: st
       return Response.json({ error: sourceError?.message || 'Не удалось создать источник' }, { status: 500 });
     }
 
-    setImmediate(() => {
-      processSource(source.id, params.agentId, true).catch((error) => {
+    setImmediate(async () => {
+      try {
+        await processInstagramSource(source.id, params.agentId, parsed.profileUrl);
+      } catch (error: any) {
         console.error('[KB] Instagram processing failed:', source.id, error);
-      });
+        try {
+          const admin = createAdminClient();
+          await admin.from('kb_sources').update({
+            status: 'error',
+            metadata: {
+              ...(source.metadata || {}),
+              error: error?.message || String(error),
+              failed_at: new Date().toISOString(),
+            },
+          }).eq('id', source.id);
+        } catch (dbError) {
+          console.error('[KB] Instagram failed to update source status:', source.id, dbError);
+        }
+      }
     });
 
-    return Response.json({ sourceId: source.id, status: 'processing', username: cleanUsername });
-  } catch (e: any) {
-    console.error('[KB] Instagram parse failed:', e);
-    return Response.json({ error: e.message || 'Неизвестная ошибка' }, { status: 500 });
+    return Response.json({
+      sourceId: source.id,
+      source_id: source.id,
+      status: 'pending',
+      handle: parsed.handle,
+      message: 'Сканирование запущено',
+    });
+  } catch (error: any) {
+    console.error('[KB] Instagram parse failed:', error);
+    return Response.json({ error: error.message || 'Неизвестная ошибка' }, { status: 500 });
   }
 }

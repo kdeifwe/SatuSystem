@@ -3,7 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Sparkles, FileText, AlertCircle, CheckCircle2, AlertTriangle, AlertOctagon } from 'lucide-react';
+import { Sparkles, FileText, AlertCircle, CheckCircle2, AlertTriangle, AlertOctagon, Workflow } from 'lucide-react';
 
 type CriticismData = {
   root_cause: string;
@@ -152,6 +152,15 @@ export default function ImprovePage({ params }: { params: { agentId: string } })
                   className="w-full rounded-3xl bg-blue-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {loading ? 'Анализирую...' : 'Отправить'}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => router.push(`/dashboard/${params.agentId}/improve/flow`)}
+                  className="mt-3 flex w-full items-center justify-center gap-2 rounded-3xl border border-slate-200 bg-white px-6 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  <Workflow className="h-4 w-4" />
+                  Открыть конструктор воронки
                 </button>
               </div>
             </div>

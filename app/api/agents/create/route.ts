@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { GEMINI_CHAT_MODEL } from '@/lib/server/ai/gemini-client';
+import { compileAndSaveSystemPrompt } from '@/lib/ai/compile-system-prompt';
 
 export async function POST() {
   const supabase = createClient();
@@ -22,7 +23,24 @@ export async function POST() {
       return NextResponse.json({ error: 'Организация не найдена' }, { status: 400 });
     }
 
-    // Создаём агента с дефолтными allowed_tools
+    const { data: organization } = await supabase
+      .from('organizations')
+      .select('agent_defaults')
+      .eq('id', membership.org_id)
+      .single();
+
+    const defaults = (organization?.agent_defaults as Record<string, unknown> | null) ?? {};
+    const defaultAllowedTools = Array.isArray(defaults.default_allowed_tools)
+      ? defaults.default_allowed_tools.filter((tool): tool is string => typeof tool === 'string')
+      : ['searchKnowledgeBase', 'redirectToOperator', 'advanceFunnelStep', 'getCurrentDate', 'add_lead_note'];
+
+    const initialCommunicationStyle = typeof defaults.human_communication_style === 'string'
+      ? defaults.human_communication_style
+      : null;
+    const initialKnowledgeBasePrinciples = typeof defaults.knowledge_base_principles === 'string'
+      ? defaults.knowledge_base_principles
+      : null;
+
     const { data, error } = await supabase
       .from('agents')
       .insert({
@@ -32,8 +50,10 @@ export async function POST() {
         org_id: membership.org_id,
         model: GEMINI_CHAT_MODEL,
         is_active: true,
+        human_communication_style: initialCommunicationStyle,
+        knowledge_base_principles: initialKnowledgeBasePrinciples,
         general_capabilities: {
-          allowed_tools: ['searchKnowledgeBase', 'redirectToOperator', 'getCurrentDate', 'add_lead_note'],
+          allowed_tools: defaultAllowedTools,
         },
       })
       .select('id')
@@ -42,6 +62,8 @@ export async function POST() {
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
+
+    await compileAndSaveSystemPrompt(data.id);
 
     return NextResponse.json({ agentId: data.id });
   } catch (err) {

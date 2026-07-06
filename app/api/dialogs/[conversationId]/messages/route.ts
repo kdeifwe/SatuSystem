@@ -87,6 +87,7 @@ export async function POST(request: NextRequest, { params }: { params: { convers
       conversation_id: params.conversationId,
       sender: 'operator',
       content,
+      operator_id: user.id,
     })
     .select('id, sender, content, created_at')
     .single();

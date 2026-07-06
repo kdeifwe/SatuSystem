@@ -51,6 +51,24 @@ export const PRODUCTION_TOOL_DECLARATIONS: GeminiFunctionDeclaration[] = [
     },
   },
   {
+    name: 'advanceFunnelStep',
+    description: 'Вызывай, когда переходишь на следующий шаг воронки продаж согласно условиям перехода.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        stepId: {
+          type: 'STRING',
+          description: 'ID шага, на который переходишь.',
+        },
+        reason: {
+          type: 'STRING',
+          description: 'Краткая причина перехода.',
+        },
+      },
+      required: ['stepId', 'reason'],
+    },
+  },
+  {
     name: 'getCurrentDate',
     description: 'Возвращает текущую дату и время в часовом поясе организации.',
     parameters: {
@@ -191,6 +209,7 @@ export const AGENT_TOOLS: GeminiTool[] = [
 export type ToolName =
   | 'searchKnowledgeBase'
   | 'redirectToOperator'
+  | 'advanceFunnelStep'
   | 'getCurrentDate'
   | 'getMediaFiles'
   | 'update_lead_status'

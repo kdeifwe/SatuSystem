@@ -18,18 +18,65 @@ export interface KBSearchResult {
   metadata: Record<string, unknown>;
 }
 
-function rerankWithKeywords(
-  chunks: KBSearchResult[],
-  query: string
-): KBSearchResult[] {
-  const queryWords = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+export interface LinkedKBChunkResult {
+  id: string;
+  content: string;
+  similarity: number;
+  priority: string;
+  metadata: Record<string, unknown>;
+  link_type: string;
+}
+
+export interface KnowledgeBaseRetrievalResult {
+  primaryChunks: KBSearchResult[];
+  linkedChunks: LinkedKBChunkResult[];
+  contextText: string;
+}
+
+function rerankWithKeywords(chunks: KBSearchResult[], query: string): KBSearchResult[] {
+  const queryWords = query.toLowerCase().split(/\s+/).filter((word) => word.length > 2);
   return chunks
-    .map(chunk => {
+    .map((chunk) => {
       const content = chunk.content.toLowerCase();
-      const keywordBonus = queryWords.filter(w => content.includes(w)).length * 0.05;
+      const keywordBonus = queryWords.filter((word) => content.includes(word)).length * 0.05;
       return { ...chunk, similarity: Math.min(1, chunk.similarity + keywordBonus) };
     })
     .sort((a, b) => b.similarity - a.similarity);
+}
+
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+function buildContextText(primaryChunks: KBSearchResult[], linkedChunks: LinkedKBChunkResult[], maxTokens = 2000): string {
+  const sections: string[] = [];
+  const primarySections = primaryChunks.map((chunk, index) => {
+    const relevancePercent = Math.round(chunk.similarity * 100);
+    return `${index + 1}. [Релевантность: ${relevancePercent}%]\n${chunk.content}`;
+  });
+  sections.push(...primarySections);
+
+  const sortedLinked = [...linkedChunks].sort((a, b) => b.similarity - a.similarity);
+  const linkedSections: string[] = [];
+  let usedTokens = sections.join('\n\n').length > 0 ? estimateTokens(sections.join('\n\n')) : 0;
+
+  for (const chunk of sortedLinked) {
+    const section = `Связанный фрагмент [${chunk.link_type} • ${Math.round(chunk.similarity * 100)}%]:\n${chunk.content}`;
+    const sectionTokens = estimateTokens(section);
+    if (usedTokens + sectionTokens > maxTokens) {
+      break;
+    }
+    linkedSections.push(section);
+    usedTokens += sectionTokens;
+  }
+
+  if (linkedSections.length > 0) {
+    sections.push('');
+    sections.push('Связанные чанки:');
+    sections.push(...linkedSections);
+  }
+
+  return sections.join('\n\n');
 }
 
 export async function searchKnowledgeBase(
@@ -41,10 +88,9 @@ export async function searchKnowledgeBase(
   const supabase = getAdminClient();
 
   try {
-    // Генерировать эмбеддинг запроса с taskType RETRIEVAL_QUERY
     const queryEmbedding = await generateQueryEmbedding(query);
 
-    // Вызвать RPC функцию search_knowledge_base
+    // TODO: verify that public.search_knowledge_base exists in Supabase and is applied from DB migrations or manual SQL.
     const { data, error } = await supabase.rpc('search_knowledge_base', {
       p_agent_id: agentId,
       query_embedding: queryEmbedding,
@@ -54,7 +100,6 @@ export async function searchKnowledgeBase(
 
     if (error) throw error;
 
-    // Преобразовать результаты в KBSearchResult[] и переранжировать
     const results = (data || []).map((row: any) => ({
       chunk_id: row.chunk_id,
       source_id: row.source_id,
@@ -63,12 +108,47 @@ export async function searchKnowledgeBase(
       priority: row.priority,
       metadata: row.metadata || {},
     }));
-    
+
     return rerankWithKeywords(results, query);
   } catch (error) {
     console.error('Knowledge base search error:', error);
     return [];
   }
+}
+
+export async function searchKnowledgeBaseWithLinks(
+  agentId: string,
+  query: string,
+  topK = 10,
+  threshold = 0.3,
+): Promise<KnowledgeBaseRetrievalResult> {
+  const primaryChunks = await searchKnowledgeBase(agentId, query, topK, threshold);
+  const linkedChunkIds = primaryChunks.map((chunk) => chunk.chunk_id);
+  const linkedChunks = await getLinkedKBChunks(linkedChunkIds);
+
+  return {
+    primaryChunks,
+    linkedChunks,
+    contextText: buildContextText(primaryChunks, linkedChunks),
+  };
+}
+
+export async function getLinkedKBChunks(chunkIds: string[]): Promise<LinkedKBChunkResult[]> {
+  if (!chunkIds.length) return [];
+
+  const supabase = getAdminClient();
+  // TODO: verify that public.get_linked_kb_chunks exists in Supabase and is applied from DB migrations or manual SQL.
+  const { data, error } = await supabase.rpc('get_linked_kb_chunks', { p_chunk_ids: chunkIds });
+  if (error) throw error;
+
+  return (data || []).map((row: any) => ({
+    id: row.id,
+    content: row.content,
+    similarity: row.similarity,
+    priority: row.priority,
+    metadata: row.metadata || {},
+    link_type: row.link_type,
+  }));
 }
 
 export function formatChunksForPrompt(chunks: KBSearchResult[]): string {

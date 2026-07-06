@@ -1,6 +1,8 @@
 import { createServiceClient } from '../supabase/service.ts';
 import { BASE_POLICY } from './base-policy.ts';
-import { PRODUCTION_TOOL_DECLARATIONS, ALL_TOOL_DECLARATIONS } from './tools/registry.ts';
+import { ALL_TOOL_DECLARATIONS } from './tools/registry.ts';
+import { compileFlowToPrompt } from '../funnel/compile.ts';
+import { normalizeFunnelFlow } from '../funnel/normalize.ts';
 
 interface AgentConfig {
   id: string;
@@ -19,6 +21,53 @@ interface OrgConfig {
   name: string;
   timezone: string;
   currency: string;
+  agent_defaults?: Record<string, unknown> | null;
+}
+
+function normalizeStringList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean);
+  }
+
+  if (typeof value === 'string') {
+    return value
+      .split(/\r?\n/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  return [];
+}
+
+function normalizeText(value: unknown): string | null {
+  if (typeof value === 'string' && value.trim()) {
+    return value.trim();
+  }
+  return null;
+}
+
+function mergeAllowedTools(existingTools: unknown, defaultsTools: unknown): string[] {
+  const merged = new Set<string>();
+
+  for (const tool of normalizeStringList(existingTools)) {
+    if (tool) merged.add(tool);
+  }
+
+  for (const tool of normalizeStringList(defaultsTools)) {
+    if (tool) merged.add(tool);
+  }
+
+  return Array.from(merged);
+}
+
+function renderListBlock(title: string, items: string[]): string {
+  if (items.length === 0) return '';
+  return `${title}\n${items.map((item) => `- ${item}`).join('\n')}`;
+}
+
+function renderPlatformBlock(title: string, items: string[]): string {
+  if (items.length === 0) return '';
+  return `<${title}>\n${items.map((item) => `- ${item}`).join('\n')}\n</${title}>`;
 }
 
 export async function compileAndSaveSystemPrompt(agentId: string): Promise<string> {
@@ -26,7 +75,7 @@ export async function compileAndSaveSystemPrompt(agentId: string): Promise<strin
 
   const { data: agent, error } = await supabase
     .from('agents')
-    .select('*, organizations(name, timezone, currency)')
+    .select('*, organizations(name, timezone, currency, agent_defaults)')
     .eq('id', agentId)
     .single();
 
@@ -36,14 +85,43 @@ export async function compileAndSaveSystemPrompt(agentId: string): Promise<strin
     name: 'Компания',
     timezone: 'Asia/Almaty',
     currency: 'KZT',
+    agent_defaults: {},
   };
 
   const { data: customTools } = await supabase.from('custom_tools').select('name, type, config').eq('org_id', agent.org_id);
   const compiled = buildSystemPrompt(agent as AgentConfig, org, customTools ?? []);
 
-  await supabase.from('agents').update({ system_prompt_compiled: compiled }).eq('id', agentId);
+  const generalCapabilities = (agent.general_capabilities as Record<string, unknown> | null) ?? {};
+  const defaultToolNames = normalizeStringList((org.agent_defaults as Record<string, unknown> | null)?.default_allowed_tools);
+  const mergedAllowedTools = mergeAllowedTools(generalCapabilities.allowed_tools, defaultToolNames);
+
+  await supabase
+    .from('agents')
+    .update({
+      system_prompt_compiled: compiled,
+      general_capabilities: {
+        ...generalCapabilities,
+        allowed_tools: mergedAllowedTools,
+      },
+    })
+    .eq('id', agentId);
+
   console.log(`[PROMPT] System prompt compiled for agent ${agentId}, length: ${compiled.length}`);
   return compiled;
+}
+
+export async function compileAndSaveSystemPromptForOrganization(orgId: string): Promise<string[]> {
+  const supabase = createServiceClient();
+  const { data: agents } = await supabase.from('agents').select('id').eq('org_id', orgId);
+
+  if (!agents?.length) return [];
+
+  const compiledPrompts: string[] = [];
+  for (const agent of agents) {
+    compiledPrompts.push(await compileAndSaveSystemPrompt(agent.id));
+  }
+
+  return compiledPrompts;
 }
 
 export function buildSystemPrompt(
@@ -51,18 +129,18 @@ export function buildSystemPrompt(
   org: OrgConfig,
   customTools: Array<{ name?: string | null }>
 ): string {
-  const customToolNames = customTools.map((t) => t.name).filter(Boolean);
+  const customToolNames = customTools.map((t) => t.name).filter(Boolean) as string[];
   const availableToolNames = [...ALL_TOOL_DECLARATIONS.map((d) => d.name), ...customToolNames];
+  const defaults = (org.agent_defaults ?? {}) as Record<string, unknown>;
 
   const generalCapabilities = agent.general_capabilities as Record<string, unknown> | null;
-  const allowedTools = Array.isArray(generalCapabilities?.allowed_tools)
-    ? (generalCapabilities.allowed_tools as string[]).filter((name) => typeof name === 'string')
-    : availableToolNames;
-  const effectiveToolNames = allowedTools.length > 0
-    ? allowedTools.filter((name) => availableToolNames.includes(name))
-    : availableToolNames;
+  const configuredTools = Array.isArray(generalCapabilities?.allowed_tools)
+    ? (generalCapabilities.allowed_tools as string[]).filter((name): name is string => typeof name === 'string')
+    : [];
+  const defaultToolNames = normalizeStringList(defaults.default_allowed_tools);
+  const mergedAllowedTools = mergeAllowedTools(configuredTools, defaultToolNames);
+  const effectiveToolNames = mergedAllowedTools.filter((name) => availableToolNames.includes(name));
 
-  // Собираем descriptions ТОЛЬКО для allowed tools текущего агента
   const toolDescriptions = effectiveToolNames
     .map((toolName) => {
       const declaration = ALL_TOOL_DECLARATIONS.find((d) => d.name === toolName);
@@ -70,6 +148,52 @@ export function buildSystemPrompt(
     })
     .filter(Boolean)
     .join('\n\n');
+
+  const humanCommunicationDefaults = normalizeStringList(defaults.human_communication_style);
+  const humanCommunicationAgent = normalizeStringList(agent.human_communication_style);
+  const humanCommunicationItems = [
+    ...(humanCommunicationDefaults.length > 0 ? ['Базовые правила платформы:', ...humanCommunicationDefaults] : []),
+    ...(humanCommunicationAgent.length > 0 ? ['Дополнительно для этого агента:', ...humanCommunicationAgent] : []),
+  ];
+
+  const knowledgeBaseDefaults = normalizeStringList(defaults.knowledge_base_principles);
+  const knowledgeBaseAgent = normalizeStringList(agent.knowledge_base_principles);
+  const knowledgeBaseItems = [
+    ...(knowledgeBaseDefaults.length > 0 ? ['Базовые правила платформы:', ...knowledgeBaseDefaults] : []),
+    ...(knowledgeBaseAgent.length > 0 ? ['Дополнительно для этого агента:', ...knowledgeBaseAgent] : []),
+    'Если searchKnowledgeBase вернуло, что нет релевантных данных, не отвечай этим техническим сообщением клиенту. Используй то, что уже есть, уточни запрос или предложи подключить оператора в естественной форме, не называя это ошибкой.',
+  ];
+
+  const identityProtectionItems = normalizeStringList(defaults.identity_protection);
+  const handoff = (defaults.handoff as Record<string, unknown> | null) ?? {};
+  const handoffTriggers = normalizeStringList(handoff.triggers);
+  const handoffPhrasing = normalizeStringList(handoff.phrasing_examples);
+  const handoffNeverSay = normalizeStringList(handoff.never_say);
+  const handoffAfter = normalizeText(handoff.after_handoff);
+  const handoffBlockItems = [
+    ...(handoffTriggers.length > 0 ? [`Триггеры: ${handoffTriggers.join(', ')}`] : []),
+    ...(handoffPhrasing.length > 0 ? [`Фразы: ${handoffPhrasing.join(', ')}`] : []),
+    ...(handoffNeverSay.length > 0 ? [`Никогда не говорить: ${handoffNeverSay.join(', ')}`] : []),
+    ...(handoffAfter ? [`После передачи: ${handoffAfter}`] : []),
+  ];
+
+  const memoryModel = (defaults.memory_model as Record<string, unknown> | null) ?? {};
+  const memoryModelItems = [
+    normalizeText(memoryModel.within_conversation) ? `Внутри диалога: ${normalizeText(memoryModel.within_conversation)}` : null,
+    normalizeText(memoryModel.between_conversations) ? `Между диалогами: ${normalizeText(memoryModel.between_conversations)}` : null,
+  ].filter(Boolean) as string[];
+
+  const humanCommunicationBlock = renderListBlock('HUMAN_COMMUNICATION_STYLE', humanCommunicationItems);
+  const knowledgeBaseBlock = renderListBlock('KNOWLEDGE_BASE_PRINCIPLES', knowledgeBaseItems);
+  const identityProtectionBlock = renderPlatformBlock('IDENTITY_PROTECTION', identityProtectionItems);
+  const handoffBlock = renderPlatformBlock('HANDOFF_PROTOCOL', handoffBlockItems);
+  const memoryModelBlock = renderPlatformBlock('MEMORY_MODEL', memoryModelItems);
+
+  const dialogueFlowBlock = (() => {
+    const normalizedFlow = normalizeFunnelFlow(agent.dialogue_flow);
+    if (!normalizedFlow) return null;
+    return compileFlowToPrompt(normalizedFlow);
+  })();
 
   return `${BASE_POLICY}
 
@@ -81,13 +205,19 @@ ${agent.goal ?? 'Помогать клиентам компании получа
 
 ${agent.tone_of_voice ?? 'Профессиональный, дружелюбный, конкретный.'}
 
-${agent.human_communication_style ?? 'Пиши как живой человек, не как бот. Один вопрос за раз.'}
+${humanCommunicationBlock || 'Пиши как живой человек, не как бот. Один вопрос за раз.'}
 
 ${agent.communication_rules ?? '1. Не выдумывай факты. 2. Один вопрос за раз. 3. Если информации нет — честно скажи и предложи оператора.'}
 
-${agent.knowledge_base_principles ?? 'Используй только то, что вернул searchKnowledgeBase. Не додумывай и не интерполируй.'}
+${knowledgeBaseBlock || 'Используй только то, что вернул searchKnowledgeBase. Не додумывай и не интерполируй.'}
 
-${agent.dialogue_flow ? JSON.stringify(agent.dialogue_flow, null, 2) : '1. Приветствие и выяснение запроса клиента\n2. Поиск релевантной информации\n3. Ответ с конкретными фактами\n4. Уточнение следующего шага'}
+${identityProtectionBlock}
+
+${handoffBlock}
+
+${memoryModelBlock}
+
+${dialogueFlowBlock ?? (agent.dialogue_flow ? JSON.stringify(agent.dialogue_flow, null, 2) : '1. Приветствие и выяснение запроса клиента\n2. Поиск релевантной информации\n3. Ответ с конкретными фактами\n4. Уточнение следующего шага')}
 
 У тебя есть доступ только к этим инструментам:
 ${effectiveToolNames.length > 0 ? effectiveToolNames.map((name) => `— ${name}`).join('\n') : '— нет инструментов'}

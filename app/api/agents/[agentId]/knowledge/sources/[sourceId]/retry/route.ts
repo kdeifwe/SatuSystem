@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { processSource } from '@/lib/server/knowledge/processor';
+import { processInstagramSource } from '@/lib/server/knowledge/instagram';
 
 export async function POST(req: Request, { params }: { params: { agentId: string; sourceId: string } }) {
   try {
@@ -50,9 +51,22 @@ export async function POST(req: Request, { params }: { params: { agentId: string
 
     await admin.from('kb_chunks').delete().eq('source_id', params.sourceId).eq('agent_id', params.agentId);
 
-    setImmediate(() => processSource(params.sourceId, params.agentId, source.metadata?.use_ai !== false).catch((error) => {
-      console.error('[KB] Retry processing failed:', error);
-    }));
+    setImmediate(() => {
+      const isInstagramSource = source.type === 'instagram' || source.metadata?.source_type === 'instagram';
+      const instagramProfileUrl = source.metadata?.handle
+        ? `https://www.instagram.com/${String(source.metadata.handle).replace(/^@/, '')}/`
+        : source.title
+          ? `https://www.instagram.com/${String(source.title).replace(/^@/, '')}/`
+          : '';
+
+      const runRetry = isInstagramSource
+        ? processInstagramSource(params.sourceId, params.agentId, instagramProfileUrl)
+        : processSource(params.sourceId, params.agentId, source.metadata?.use_ai !== false);
+
+      return runRetry.catch((error) => {
+        console.error('[KB] Retry processing failed:', error);
+      });
+    });
 
     console.log('[KB] Retry triggered for source:', params.sourceId);
     return NextResponse.json({ success: true, status: 'processing' });

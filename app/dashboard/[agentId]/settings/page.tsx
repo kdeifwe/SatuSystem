@@ -3,14 +3,80 @@
 import { useEffect, useState } from 'react';
 import { Save, ToggleLeft, ToggleRight } from 'lucide-react';
 
+const DEFAULT_AGENT_MODEL = 'gemini-3.5-flash';
+
+const modelGroups: Array<{
+  key: string;
+  label: string;
+  description: string;
+  options: Array<{ value: string; label: string; disabled?: boolean }>;
+}> = [
+  {
+    key: 'text',
+    label: 'Текст / диалог',
+    description: 'Текстовые модели — для диалогов с клиентами в чате',
+    options: [
+      { value: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash — быстрый, дешёвый, для большинства диалогов' },
+      { value: 'gemini-3.1-pro', label: 'Gemini 3.1 Pro — сложные случаи, глубокое рассуждение' },
+      { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash — стабильная классика, дешевле 3.5' },
+      { value: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite — максимально дешёвый, для простых FAQ' },
+      { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro — более мощный вариант для сложных задач' },
+    ],
+  },
+  {
+    key: 'images',
+    label: 'Генерация изображений',
+    description: 'Изображения — агент сможет присылать сгенерированные визуалы',
+    options: [
+      {
+        value: 'gemini-3.1-flash-image',
+        label: 'Gemini 3.1 Flash Image — Nano Banana 2 — быстрая генерация/редактирование изображений (Скоро)',
+        disabled: true,
+      },
+      {
+        value: 'gemini-3-pro-image',
+        label: 'Gemini 3 Pro Image — Nano Banana Pro — студийное качество, точный текст на картинке (Скоро)',
+        disabled: true,
+      },
+    ],
+  },
+  {
+    key: 'video',
+    label: 'Генерация видео',
+    description: 'Видео — для будущих модулей рекламных роликов',
+    options: [
+      { value: 'veo-3.1', label: 'Veo 3.1 — кинематографичное видео со звуком (Скоро)', disabled: true },
+      { value: 'gemini-omni-flash', label: 'Gemini Omni Flash — быстрая генерация видео из текста (Скоро)', disabled: true },
+    ],
+  },
+  {
+    key: 'voice',
+    label: 'Голос',
+    description: 'Голос — для звонков через модуль Голосовой агент',
+    options: [
+      { value: 'gemini-2.5-flash-live', label: 'Gemini Live — голосовые звонки в реальном времени (Скоро)', disabled: true },
+      { value: 'gemini-3.1-flash-tts', label: 'Flash TTS — озвучка текста, дешёвый вариант (Скоро)', disabled: true },
+    ],
+  },
+  {
+    key: 'legacy',
+    label: 'Устаревшие / legacy',
+    description: 'Устаревшие варианты — для уже существующих агентов, которые ещё используют их',
+    options: [{ value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash — больше не доступен у Google (Скоро)', disabled: true }],
+  },
+];
+
 export default function SettingsPage({ params }: { params: { agentId: string } }) {
   const [settings, setSettings] = useState({
     name: '',
     role: '',
     goal: '',
     tone_of_voice: '',
+    communication_rules: '',
+    human_communication_style: '',
+    knowledge_base_principles: '',
     temperature: 0.7,
-    model: 'gemini-2.5-pro',
+    model: DEFAULT_AGENT_MODEL,
     split_messages: true,
     split_max_parts: 3,
     typing_simulation: true,
@@ -39,8 +105,11 @@ export default function SettingsPage({ params }: { params: { agentId: string } }
           role: data.role ?? '',
           goal: data.goal ?? '',
           tone_of_voice: data.tone_of_voice ?? '',
+          communication_rules: data.communication_rules ?? '',
+          human_communication_style: data.human_communication_style ?? '',
+          knowledge_base_principles: data.knowledge_base_principles ?? '',
           temperature: data.temperature ?? 0.7,
-          model: data.model ?? 'gemini-2.5-pro',
+          model: data.model ?? DEFAULT_AGENT_MODEL,
           split_messages: capabilities.split_messages ?? true,
           split_max_parts: capabilities.split_max_parts ?? 3,
           typing_simulation: capabilities.typing_simulation ?? true,
@@ -68,6 +137,9 @@ export default function SettingsPage({ params }: { params: { agentId: string } }
         role: settings.role,
         goal: settings.goal,
         tone_of_voice: settings.tone_of_voice,
+        communication_rules: settings.communication_rules,
+        human_communication_style: settings.human_communication_style,
+        knowledge_base_principles: settings.knowledge_base_principles,
         temperature: settings.temperature,
         model: settings.model,
         general_capabilities: {
@@ -182,6 +254,39 @@ export default function SettingsPage({ params }: { params: { agentId: string } }
         </section>
 
         <section>
+          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-gray-500">Коммуникация и правила</h2>
+          <div className="space-y-4">
+            <div>
+              <label className="mb-1 block text-sm font-medium text-gray-700">Правила общения</label>
+              <textarea
+                value={settings.communication_rules}
+                onChange={(event) => setSettings((current) => ({ ...current, communication_rules: event.target.value }))}
+                rows={3}
+                className="w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium text-gray-700">Стиль общения с людьми</label>
+              <textarea
+                value={settings.human_communication_style}
+                onChange={(event) => setSettings((current) => ({ ...current, human_communication_style: event.target.value }))}
+                rows={3}
+                className="w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium text-gray-700">Принципы работы с базой знаний</label>
+              <textarea
+                value={settings.knowledge_base_principles}
+                onChange={(event) => setSettings((current) => ({ ...current, knowledge_base_principles: event.target.value }))}
+                rows={3}
+                className="w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+              />
+            </div>
+          </div>
+        </section>
+
+        <section>
           <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-gray-500">Поведение в чате</h2>
           <div className="rounded-xl bg-gray-50 px-4">
             <Toggle
@@ -289,9 +394,23 @@ export default function SettingsPage({ params }: { params: { agentId: string } }
                 onChange={(event) => setSettings((current) => ({ ...current, model: event.target.value }))}
                 className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
               >
-                <option value="gemini-2.5-pro">Gemini 2.5 Pro (умнее)</option>
-                <option value="gemini-2.0-flash">Gemini 2.0 Flash (быстрее)</option>
+                {modelGroups.map((group) => (
+                  <optgroup key={group.key} label={group.label}>
+                    {group.options.map((option) => (
+                      <option key={option.value} value={option.value} disabled={option.disabled}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
               </select>
+              <div className="mt-2 space-y-1">
+                {modelGroups.map((group) => (
+                  <p key={group.key} className="text-xs text-gray-400">
+                    {group.description}
+                  </p>
+                ))}
+              </div>
             </div>
             <div>
               <label className="mb-2 block text-sm font-medium text-gray-700">

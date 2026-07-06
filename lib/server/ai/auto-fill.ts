@@ -50,7 +50,7 @@ Extract and return ONLY raw JSON (no markdown, no backticks, start with {, end w
 
 CRITICAL: Raw JSON only. No markdown. Start with { end with }.`;
 
-  const models = ['gemini-2.5-pro', 'gemini-2.0-flash'];
+  const models = ['gemini-2.5-flash', 'gemini-2.5-pro'];
   let lastError = '';
 
   for (const model of models) {

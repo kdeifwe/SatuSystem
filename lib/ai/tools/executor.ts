@@ -1,8 +1,10 @@
 import { createServiceClient } from '../../supabase/service.ts';
-import { generateEmbedding } from '../embeddings.ts';
+import { generateQueryEmbedding } from '../embeddings.ts';
 import { enqueueNotification } from '../../notifications.ts';
 import { sendTelegramNotification } from '../../extensions/telegram-notify.ts';
 import { type ToolCall, type ToolResult } from './registry.ts';
+import { isSandboxToolAllowed } from './sandbox-allowlist';
+import { getLinkedKBChunks } from '../../knowledge-base/search.ts';
 
 export interface ToolContext {
   leadId: string;
@@ -26,7 +28,7 @@ export async function executeTool(call: ToolCall, context: ToolContext): Promise
 }
 
 async function dispatch(call: ToolCall, ctx: ToolContext): Promise<unknown> {
-  if (ctx.isSandbox && call.name !== 'searchKnowledgeBase' && call.name !== 'getCurrentDate') {
+  if (ctx.isSandbox && !isSandboxToolAllowed(call.name)) {
     return {
       sandbox_blocked: true,
       message: `Инструмент ${call.name} недоступен в режиме тестирования`,
@@ -38,6 +40,8 @@ async function dispatch(call: ToolCall, ctx: ToolContext): Promise<unknown> {
       return searchKnowledgeBase(call.args as { query: string; top_k?: number }, ctx);
     case 'redirectToOperator':
       return redirectToOperator(call.args as { reason: string; priority?: string }, ctx);
+    case 'advanceFunnelStep':
+      return advanceFunnelStep(call.args as { stepId: string; reason: string }, ctx);
     case 'getCurrentDate':
       return getCurrentDate(ctx);
     case 'getMediaFiles':
@@ -60,13 +64,13 @@ async function dispatch(call: ToolCall, ctx: ToolContext): Promise<unknown> {
 async function searchKnowledgeBase(args: { query: string; top_k?: number }, ctx: ToolContext) {
   const supabase = createServiceClient();
   const topK = Math.min(args.top_k ?? 5, 10);
-  const queryEmbedding = await generateEmbedding(args.query);
+  const queryEmbedding = await generateQueryEmbedding(args.query);
 
-  const { data, error } = await supabase.rpc('match_kb_chunks', {
-    query_embedding: queryEmbedding,
-    match_threshold: 0.65,
-    match_count: topK,
+  const { data, error } = await supabase.rpc('search_knowledge_base', {
     p_agent_id: ctx.agentId,
+    query_embedding: queryEmbedding,
+    match_count: topK,
+    similarity_threshold: 0.3,
   });
 
   if (error) throw new Error(`Ошибка поиска в базе знаний: ${error.message}`);
@@ -78,13 +82,36 @@ async function searchKnowledgeBase(args: { query: string; top_k?: number }, ctx:
     };
   }
 
+  const primaryChunks = data as Array<{ chunk_id: string; content: string; metadata: unknown; similarity: number; priority: string }>;
+  const linkedChunks = await getLinkedKBChunks(primaryChunks.map((chunk) => chunk.chunk_id));
+  // Log raw search results for debugging of multi-call flows.
+  try {
+    console.log('[KB] search result', {
+      query: args.query,
+      found: primaryChunks.length > 0,
+      count: primaryChunks.length,
+      top_preview: primaryChunks.slice(0, 3).map((c) => ({ id: c.chunk_id, preview: c.content.slice(0, 200), similarity: c.similarity })),
+      linked_preview: linkedChunks.slice(0, 3).map((c) => ({ id: c.id, preview: c.content.slice(0, 200), similarity: c.similarity })),
+    });
+  } catch (e) {
+    console.warn('[KB] failed to log search result', e);
+  }
+
   return {
     found: true,
-    count: data.length,
-    results: data.map((chunk: { content: string; metadata: unknown; similarity: number }) => ({
+    count: primaryChunks.length,
+    results: primaryChunks.map((chunk) => ({
       content: chunk.content,
       metadata: chunk.metadata,
       relevance: Math.round(chunk.similarity * 100),
+      priority: chunk.priority,
+    })),
+    linked_chunks: linkedChunks.map((chunk) => ({
+      id: chunk.id,
+      content: chunk.content,
+      relevance: Math.round(chunk.similarity * 100),
+      link_type: chunk.link_type,
+      priority: chunk.priority,
     })),
   };
 }
@@ -117,6 +144,40 @@ async function redirectToOperator(args: { reason: string; priority?: string }, c
     ai_disabled: true,
     priority: args.priority ?? 'normal',
     message: 'Диалог передан оператору. AI отключён для этого клиента.',
+  };
+}
+
+async function advanceFunnelStep(args: { stepId: string; reason: string }, ctx: ToolContext) {
+  const supabase = createServiceClient();
+  const { data: conversation } = await supabase
+    .from('conversations')
+    .select('funnel_step_history')
+    .eq('id', ctx.conversationId)
+    .single();
+
+  const history = [
+    ...(Array.isArray(conversation?.funnel_step_history) ? conversation.funnel_step_history : []),
+    {
+      step_id: args.stepId,
+      entered_at: new Date().toISOString(),
+      reason: args.reason,
+    },
+  ];
+
+  const { error } = await supabase
+    .from('conversations')
+    .update({
+      current_funnel_step: args.stepId,
+      funnel_step_history: history,
+    })
+    .eq('id', ctx.conversationId);
+
+  if (error) throw new Error(`Ошибка обновления шага воронки: ${error.message}`);
+
+  return {
+    success: true,
+    step_id: args.stepId,
+    reason: args.reason,
   };
 }
 
@@ -445,6 +506,7 @@ async function scheduleMessage(args: { lead_id: string; message: string; send_at
     conversation_id: ctx.conversationId,
     sender: 'system',
     content: `⏰ Запланированное сообщение для ${args.lead_id}: ${args.message}`,
+    origin: 'followup',
   });
 
   return {

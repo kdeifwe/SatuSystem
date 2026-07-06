@@ -11,7 +11,7 @@ function getAdmin() {
 }
 
 async function callGemini(apiKey: string, prompt: string, temperature = 0.4): Promise<string> {
-  const models = ['gemini-2.0-flash', 'gemini-2.5-pro'];
+  const models = ['gemini-2.5-flash', 'gemini-2.5-pro'];
   for (const model of models) {
     try {
       const res = await fetch(

@@ -214,7 +214,7 @@ async function handleUpdate(update: any, agentId: string) {
     const systemPrompt = agent.system_prompt_compiled ?? 
       `Ты ${agent.name}. Отвечай кратко и по-человечески.`;
 
-    const { answer } = await runAgentTurn(agentId, systemPrompt, text, historyFormatted, lead.id);
+    const { answer } = await runAgentTurn(agentId, systemPrompt, text, [], lead.id);
 
     console.log('[TG webhook] AI answer:', answer.slice(0, 100));
 
