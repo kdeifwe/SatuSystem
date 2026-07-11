@@ -1,3 +1,5 @@
+import { normalizeFunnelFlow } from '../../funnel/normalize.ts';
+
 export interface GeminiFunctionDeclaration {
   name: string;
   description: string;
@@ -10,6 +12,85 @@ export interface GeminiFunctionDeclaration {
 
 export interface GeminiTool {
   functionDeclarations: GeminiFunctionDeclaration[];
+}
+
+function normalizeToolNameList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean);
+  }
+
+  if (typeof value === 'string') {
+    return value
+      .split(/\r?\n/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  return [];
+}
+
+export function mergeAllowedToolNames(
+  configuredTools: unknown,
+  defaultTools: unknown,
+  _options?: { includeAdvanceFunnelStep?: boolean },
+): string[] {
+  const merged = new Set<string>();
+
+  for (const tool of normalizeToolNameList(configuredTools)) {
+    if (tool) merged.add(tool);
+  }
+
+  for (const tool of normalizeToolNameList(defaultTools)) {
+    if (tool) merged.add(tool);
+  }
+
+  return Array.from(merged);
+}
+
+function buildAdvanceFunnelStepDeclaration(flow: unknown): GeminiFunctionDeclaration {
+  const stepIds = (normalizeFunnelFlow(flow)?.nodes ?? [])
+    .map((node) => typeof node?.id === 'string' ? node.id.trim() : '')
+    .filter(Boolean);
+
+  const stepIdProperty: Record<string, unknown> = {
+    type: 'STRING',
+    description: stepIds.length > 0
+      ? `ID шага, на который переходишь. Доступные значения: ${stepIds.join(', ')}`
+      : 'ID шага, на который переходишь.',
+  };
+
+  if (stepIds.length > 0) {
+    stepIdProperty.enum = stepIds;
+  }
+
+  return {
+    name: 'advanceFunnelStep',
+    description: 'Вызывай, когда переходишь на следующий шаг воронки продаж согласно условиям перехода.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        stepId: stepIdProperty,
+        reason: {
+          type: 'STRING',
+          description: 'Краткая причина перехода.',
+        },
+      },
+      required: ['stepId', 'reason'],
+    },
+  };
+}
+
+export function buildToolDeclarationsForAgent(allowedToolNames: string[], _flow: unknown): GeminiFunctionDeclaration[] {
+  const allowedNames = new Set(allowedToolNames);
+
+  return ALL_TOOL_DECLARATIONS.filter((declaration) => allowedNames.has(declaration.name))
+    .map((declaration) => ({
+      ...declaration,
+      parameters: {
+        ...declaration.parameters,
+        properties: { ...declaration.parameters.properties },
+      },
+    }));
 }
 
 export const PRODUCTION_TOOL_DECLARATIONS: GeminiFunctionDeclaration[] = [

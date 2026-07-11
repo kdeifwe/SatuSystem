@@ -4,7 +4,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { splitAgentMessage, calculateTypingDelay } from '@/lib/server/ai/message-splitter';
 import { injectHandoffSection, normalizeHandoffConfig, type HandoffConfig } from '@/lib/server/ai/handoff';
 import { sendTelegramNotification } from '@/lib/extensions/telegram-notify';
-import { PRODUCTION_TOOL_DECLARATIONS, buildToolDeclarationsForAgent, type ToolCall } from '@/lib/ai/tools/registry';
+import { PRODUCTION_TOOL_DECLARATIONS, buildToolDeclarationsForAgent, mergeAllowedToolNames, type ToolCall } from '@/lib/ai/tools/registry';
 import { executeTool, type ToolContext } from '@/lib/ai/tools/executor';
 import { normalizeFunnelFlow } from '@/lib/funnel/normalize';
 import { compileFlowToPrompt } from '@/lib/funnel/compile';
@@ -895,9 +895,12 @@ export async function runAgentTurn(
     .single();
 
   const generalCapabilities = (agentData?.general_capabilities as Record<string, unknown> | null) ?? {};
-  const allowedToolNames = Array.isArray(generalCapabilities.allowed_tools)
+  const configuredToolNames = Array.isArray(generalCapabilities.allowed_tools)
     ? (generalCapabilities.allowed_tools as string[]).filter((name) => typeof name === 'string')
-    : PRODUCTION_TOOL_DECLARATIONS.map((d) => d.name); // Fallback to baseline if not set
+    : [];
+  const allowedToolNames = configuredToolNames.length > 0
+    ? mergeAllowedToolNames(configuredToolNames, [])
+    : [];
 
   // Формируем toolDeclarations только для разрешённых тулов
   const toolDeclarations = buildToolDeclarationsForAgent(allowedToolNames, agentData?.dialogue_flow);

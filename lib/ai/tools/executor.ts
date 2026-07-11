@@ -5,6 +5,8 @@ import { sendTelegramNotification } from '../../extensions/telegram-notify.ts';
 import { type ToolCall, type ToolResult } from './registry.ts';
 import { isSandboxToolAllowed } from './sandbox-allowlist';
 import { getLinkedKBChunks } from '../../knowledge-base/search.ts';
+import { normalizeFunnelFlow } from '../../funnel/normalize.ts';
+import type { FunnelFlow } from '../../funnel/types.ts';
 
 export interface ToolContext {
   leadId: string;
@@ -35,6 +37,19 @@ async function dispatch(call: ToolCall, ctx: ToolContext): Promise<unknown> {
     };
   }
 
+  if (!ctx.isSandbox) {
+    const { allowedToolNames, hasExplicitAllowList } = await getAllowedToolNamesForAgent(ctx.agentId);
+    if (!hasExplicitAllowList || !allowedToolNames.includes(call.name)) {
+      await logRejectedToolCall(ctx, call.name, allowedToolNames);
+      return {
+        rejected: true,
+        reason: 'tool_not_allowed',
+        tool_name: call.name,
+        allowed_tools: allowedToolNames,
+      };
+    }
+  }
+
   switch (call.name) {
     case 'searchKnowledgeBase':
       return searchKnowledgeBase(call.args as { query: string; top_k?: number }, ctx);
@@ -58,6 +73,50 @@ async function dispatch(call: ToolCall, ctx: ToolContext): Promise<unknown> {
       return scheduleMessage(call.args as { lead_id: string; message: string; send_at: string }, ctx);
     default:
       throw new Error(`Неизвестный инструмент: ${call.name}`);
+  }
+}
+
+async function getAllowedToolNamesForAgent(agentId: string): Promise<{ allowedToolNames: string[]; hasExplicitAllowList: boolean }> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from('agents')
+    .select('general_capabilities')
+    .eq('id', agentId)
+    .maybeSingle();
+
+  if (error) {
+    console.warn(`[TOOL] Failed to load allowed_tools for agent ${agentId}`, error.message);
+    return { allowedToolNames: [], hasExplicitAllowList: false };
+  }
+
+  const generalCapabilities = (data?.general_capabilities as Record<string, unknown> | null) ?? {};
+  const hasExplicitAllowList = Object.prototype.hasOwnProperty.call(generalCapabilities, 'allowed_tools');
+  const configuredTools = Array.isArray(generalCapabilities.allowed_tools)
+    ? (generalCapabilities.allowed_tools as string[]).filter((name): name is string => typeof name === 'string')
+    : [];
+
+  return { allowedToolNames: configuredTools, hasExplicitAllowList };
+}
+
+async function logRejectedToolCall(ctx: ToolContext, toolName: string, allowedToolNames: string[]) {
+  const supabase = createServiceClient();
+  try {
+    await supabase.from('ai_call_logs').insert({
+      conversation_id: ctx.conversationId,
+      request: {
+        type: 'tool_call_rejected',
+        tool_name: toolName,
+        agent_id: ctx.agentId,
+        reason: 'tool_not_allowed',
+      },
+      response: {
+        rejected: true,
+        tool_name: toolName,
+        allowed_tools: allowedToolNames,
+      },
+    });
+  } catch (error) {
+    console.warn(`[TOOL] Failed to log rejected tool call for ${toolName}`, error);
   }
 }
 
@@ -147,8 +206,47 @@ async function redirectToOperator(args: { reason: string; priority?: string }, c
   };
 }
 
+export function validateFunnelStepId(flow: FunnelFlow | null | undefined, stepId: string): { isValid: boolean; availableStepIds: string[] } {
+  const availableStepIds = (flow?.nodes ?? [])
+    .map((node) => typeof node?.id === 'string' ? node.id.trim() : '')
+    .filter(Boolean);
+
+  return {
+    isValid: availableStepIds.includes(stepId),
+    availableStepIds,
+  };
+}
+
 async function advanceFunnelStep(args: { stepId: string; reason: string }, ctx: ToolContext) {
   const supabase = createServiceClient();
+
+  // 1. Получаем dialogue_flow агента и проверяем, что stepId существует
+  const { data: agent, error: agentError } = await supabase
+    .from('agents')
+    .select('dialogue_flow')
+    .eq('id', ctx.agentId)
+    .single();
+
+  if (agentError || !agent) {
+    throw new Error(`Агент не найден: ${ctx.agentId}`);
+  }
+
+  const flow = normalizeFunnelFlow(agent.dialogue_flow);
+  if (!flow || !Array.isArray(flow.nodes)) {
+    throw new Error('Воронка продаж не настроена для этого агента');
+  }
+
+  const validation = validateFunnelStepId(flow, args.stepId);
+  if (!validation.isValid) {
+    const availableSteps = flow.nodes.map((node) => `${node.id} (${node.title})`).join(', ');
+    return {
+      success: false,
+      error: `Шаг "${args.stepId}" не найден в текущей воронке. Доступные шаги: ${availableSteps}`,
+      available_steps: flow.nodes.map((node) => ({ id: node.id, title: node.title })),
+    };
+  }
+
+  // 2. Если валидация прошла, обновляем conversation
   const { data: conversation } = await supabase
     .from('conversations')
     .select('funnel_step_history')
@@ -173,6 +271,23 @@ async function advanceFunnelStep(args: { stepId: string; reason: string }, ctx: 
     .eq('id', ctx.conversationId);
 
   if (error) throw new Error(`Ошибка обновления шага воронки: ${error.message}`);
+
+  const { data: leadData } = await supabase.from('leads').select('attributes').eq('id', ctx.leadId).single();
+  const currentAttributes = (leadData?.attributes && typeof leadData.attributes === 'object'
+    ? leadData.attributes
+    : {}) as Record<string, unknown>;
+
+  const { error: leadError } = await supabase
+    .from('leads')
+    .update({
+      attributes: {
+        ...currentAttributes,
+        current_node_id: args.stepId,
+      },
+    })
+    .eq('id', ctx.leadId);
+
+  if (leadError) throw new Error(`Ошибка обновления state лида: ${leadError.message}`);
 
   return {
     success: true,
