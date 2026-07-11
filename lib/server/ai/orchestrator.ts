@@ -4,9 +4,12 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { splitAgentMessage, calculateTypingDelay } from '@/lib/server/ai/message-splitter';
 import { injectHandoffSection, normalizeHandoffConfig, type HandoffConfig } from '@/lib/server/ai/handoff';
 import { sendTelegramNotification } from '@/lib/extensions/telegram-notify';
-import { PRODUCTION_TOOL_DECLARATIONS, ALL_TOOL_DECLARATIONS, type ToolCall } from '@/lib/ai/tools/registry';
+import { PRODUCTION_TOOL_DECLARATIONS, buildToolDeclarationsForAgent, type ToolCall } from '@/lib/ai/tools/registry';
 import { executeTool, type ToolContext } from '@/lib/ai/tools/executor';
 import { normalizeFunnelFlow } from '@/lib/funnel/normalize';
+import { compileFlowToPrompt } from '@/lib/funnel/compile';
+import { applyFunnelRouting, resolvePostRoutingReply } from '@/lib/funnel/routing';
+import { buildSandboxLeadAttributes, isSandboxLeadAttributes } from '@/lib/ai/sandbox-context';
 
 export interface ChatMessage {
   role: 'user' | 'model';
@@ -25,6 +28,10 @@ export interface AgentTurnResult {
   splitMessages: boolean;
   typingSimulation: boolean;
   handoffMessage?: string;
+  toolsUsed?: string[];
+  tokensInput?: number;
+  tokensOutput?: number;
+  latencyMs?: number;
   retrievalDebug?: {
     primaryChunks: Array<{ id: string; content: string; similarity: number; priority?: string; sourceTitle?: string; sourceType?: string; postType?: string }>;
     linkedChunks: Array<{ id: string; content: string; similarity: number; linkType?: string; priority?: string; sourceTitle?: string; sourceType?: string; postType?: string }>;
@@ -41,6 +48,59 @@ interface GeminiClientResponse {
     };
   };
 }
+
+function trimToLastCompleteSentence(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return trimmed;
+
+  const match = trimmed.match(/^[\s\S]*[.!?…]["')\]]?\s*/);
+  return match ? match[0].trim() : trimmed;
+}
+
+function normalizeResponseParts(parts: Array<Record<string, unknown>> | undefined, finishReason?: string) {
+  if (!Array.isArray(parts) || finishReason !== 'MAX_TOKENS') return parts ?? [];
+
+  const text = parts
+    .filter((part) => typeof part?.text === 'string')
+    .map((part) => part.text)
+    .join('\n')
+    .trim();
+
+  if (!text) return parts ?? [];
+
+  const trimmedText = trimToLastCompleteSentence(text);
+  return trimmedText === text ? (parts ?? []) : [{ text: trimmedText }];
+}
+
+// === PHASE B SECTION 2.4: Script vs Dynamic split (Call A) ===
+// Helper: Find dialogue node by ID in funnel flow
+function getDialogueNode(flow: ReturnType<typeof normalizeFunnelFlow>, nodeId: string | null) {
+  if (!flow || !nodeId) return null;
+  return flow.nodes?.find((node) => node.id === nodeId) ?? null;
+}
+
+// Helper: Convert script_parts array to AgentMessagePart[] with typing delays
+function handleScriptMessageParts(
+  scriptParts: string[] | undefined,
+  typingSimulationEnabled: boolean,
+): AgentMessagePart[] {
+  if (!Array.isArray(scriptParts) || scriptParts.length === 0) {
+    return [];
+  }
+
+  const parts: AgentMessagePart[] = scriptParts
+    .filter((part) => typeof part === 'string' && part.trim())
+    .map((text) => {
+      const delay = typingSimulationEnabled ? calculateTypingDelay(text) : 0;
+      return {
+        text,
+        delayMs: delay,
+      };
+    });
+
+  return parts;
+}
+// === End Script Path helpers ===
 
 interface ToolCallRequest {
   name: string;
@@ -169,7 +229,7 @@ async function ensureLeadContext(admin: ReturnType<typeof createAdminClient>, ag
   const externalId = `sandbox:${agentId}`;
   let { data: lead } = await admin
     .from('leads')
-    .select('id')
+    .select('id, attributes')
     .eq('org_id', agentData.org_id)
     .eq('external_id', externalId)
     .maybeSingle();
@@ -182,10 +242,15 @@ async function ensureLeadContext(admin: ReturnType<typeof createAdminClient>, ag
         external_id: externalId,
         name: 'Sandbox lead',
         ai_enabled: true,
+        attributes: buildSandboxLeadAttributes(),
       })
-      .select('id')
+      .select('id, attributes')
       .single();
     lead = createdLead;
+  }
+
+  if (lead?.id && !isSandboxLeadAttributes((lead.attributes as Record<string, unknown> | null) ?? null)) {
+    await admin.from('leads').update({ attributes: buildSandboxLeadAttributes(lead.attributes as Record<string, unknown> | null) }).eq('id', lead.id);
   }
 
   if (!lead?.id) {
@@ -250,6 +315,61 @@ async function appendMessage(admin: ReturnType<typeof createAdminClient>, conver
     sender,
     content,
   });
+}
+
+export function buildFunnelStepInstruction(currentFunnelStep: string | null | undefined): string {
+  if (!currentFunnelStep) return '';
+
+  return `\n\nТы сейчас на шаге "${currentFunnelStep}". После ответа система автоматически определит следующий шаг воронки по текущему контексту. Не пытайся вручную переключать шаги через инструменты — просто продолжай диалог в рамках текущего шага.`;
+}
+
+export async function applyRoutingAndFinalizeReply({
+  admin,
+  agentId,
+  leadId,
+  conversationId,
+  flow,
+  currentFunnelStep,
+  userMessage,
+  finalAnswer,
+  handoffConfig,
+  executeToolImpl,
+}: {
+  admin: ReturnType<typeof createAdminClient>;
+  agentId: string;
+  leadId: string | null;
+  conversationId: string | null;
+  flow: ReturnType<typeof normalizeFunnelFlow> | null;
+  currentFunnelStep: string | null;
+  userMessage: string;
+  finalAnswer: string;
+  handoffConfig: HandoffConfig;
+  executeToolImpl?: (call: { name: string; args: Record<string, unknown> }, context: ToolContext) => Promise<unknown>;
+}): Promise<{ finalAnswer: string; shouldAppendMessage: boolean; handoffTriggered: boolean; routingOutcome: Awaited<ReturnType<typeof applyFunnelRouting>> }> {
+  const routingOutcome = await applyFunnelRouting({
+    admin,
+    agentId,
+    leadId,
+    conversationId,
+    flow,
+    currentNodeId: currentFunnelStep,
+    userMessage,
+    assistantReply: finalAnswer,
+    executeToolImpl,
+  });
+
+  const postRoutingReply = resolvePostRoutingReply({
+    routingOutcome,
+    finalAnswer,
+    handoffClientMessage: handoffConfig.client_message,
+  });
+
+  return {
+    finalAnswer: postRoutingReply.finalAnswer,
+    shouldAppendMessage: postRoutingReply.shouldAppendMessage,
+    handoffTriggered: routingOutcome.shouldHandoff,
+    routingOutcome,
+  };
 }
 
 async function executeRedirectToOperator(
@@ -405,42 +525,106 @@ async function callGemini(
   contents: Array<Record<string, unknown>>,
   tools: Array<Record<string, unknown>>,
   previousToolCalls?: Array<Record<string, unknown>>,
-  generationConfig: Record<string, unknown> = { temperature: 0.7, topP: 0.9, maxOutputTokens: 1024 },
+  generationConfig: Record<string, unknown> = { temperature: 0.7, topP: 0.9, maxOutputTokens: 512 },
   retryCount = 0,
 ): Promise<GeminiClientResponse> {
-  const body: Record<string, unknown> = {
-    system_instruction: { parts: [{ text: systemPrompt }] },
-    contents,
-    tools,
-    toolConfig: { functionCallingConfig: { mode: 'AUTO' } },
-    generationConfig,
-  };
+  const fallbackModel = 'gemini-2.5-flash';
 
-  const res = await geminiFetch(modelName, 'generateContent', body);
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Gemini API error ${res.status}: ${errText}`);
-  }
+  async function execute(activeModel: string): Promise<GeminiClientResponse> {
+    const body: Record<string, unknown> = {
+      system_instruction: { parts: [{ text: systemPrompt }] },
+      contents,
+      tools,
+      toolConfig: { functionCallingConfig: { mode: 'AUTO' } },
+      generationConfig,
+    };
 
-  const data = await res.json();
-  const candidate = data.candidates?.[0] ?? null;
-  const parts = (candidate?.content?.parts as Array<Record<string, unknown>> | undefined) ?? [];
-  const usageMetadata = candidate?.usageMetadata ?? data.usageMetadata ?? {};
+    let res: Response;
+    try {
+      res = await geminiFetch(activeModel, 'generateContent', body);
+    } catch (err: any) {
+      const errorContext = {
+        model: activeModel,
+        endpoint: 'generateContent',
+        retryCount,
+        code: err?.code,
+        message: err?.message,
+        stack: err?.stack,
+      };
+      console.error('[GEMINI:SERVER] fetch call failed', errorContext);
+      throw err;
+    }
 
-  if ((candidate?.finishReason === 'MAX_TOKENS' || candidate?.finish_reason === 'MAX_TOKENS') && retryCount === 0) {
-    return callGemini(modelName, systemPrompt, contents, tools, previousToolCalls, generationConfig, 1);
-  }
+    if (!res.ok) {
+      const errText = await res.text();
+      const errorMessage = `Gemini API error ${res.status}: ${errText}`;
+      const combinedText = `${errText} ${res.status}`.toLowerCase();
+      const isModelIssue = res.status === 404 || /model not found|deprecated|not supported|does not support/i.test(combinedText);
+      if (isModelIssue) {
+        const modelIssueError = new Error(errorMessage) as Error & { status?: number };
+        modelIssueError.status = res.status;
+        throw modelIssueError;
+      }
+      console.error('[GEMINI:SERVER] non-ok response', { status: res.status, error: errText, model: activeModel });
+      throw new Error(errorMessage);
+    }
 
-  return {
-    payload: {
-      parts,
-      finishReason: candidate?.finishReason ?? candidate?.finish_reason,
-      usageMetadata: {
-        promptTokenCount: usageMetadata?.promptTokenCount ?? usageMetadata?.prompt_tokens ?? 0,
-        candidatesTokenCount: usageMetadata?.candidatesTokenCount ?? usageMetadata?.candidates_tokens ?? 0,
+    const data = await res.json();
+    const candidate = data.candidates?.[0] ?? null;
+    const parts = (candidate?.content?.parts as Array<Record<string, unknown>> | undefined) ?? [];
+    const usageMetadata = candidate?.usageMetadata ?? data.usageMetadata ?? {};
+    const finishReason = candidate?.finishReason ?? candidate?.finish_reason;
+    const normalizedParts = normalizeResponseParts(parts, finishReason);
+
+    if (finishReason === 'MAX_TOKENS' && retryCount === 0) {
+      const currentMax = (generationConfig as any)?.maxOutputTokens ?? 512;
+      const cap = 32768;
+      if (currentMax < cap) {
+        const nextMax = Math.min(cap, Math.max(currentMax * 2, currentMax + 1024));
+        const newGen = { ...(generationConfig as any), maxOutputTokens: nextMax };
+        return callGemini(modelName, systemPrompt, contents, tools, previousToolCalls, newGen, 1);
+      }
+      return {
+        payload: {
+          parts: normalizedParts,
+          finishReason,
+          usageMetadata: {
+            promptTokenCount: usageMetadata?.promptTokenCount ?? usageMetadata?.prompt_tokens ?? 0,
+            candidatesTokenCount: usageMetadata?.candidatesTokenCount ?? usageMetadata?.candidates_tokens ?? 0,
+          },
+        },
+      };
+    }
+
+    return {
+      payload: {
+        parts: normalizedParts,
+        finishReason,
+        usageMetadata: {
+          promptTokenCount: usageMetadata?.promptTokenCount ?? usageMetadata?.prompt_tokens ?? 0,
+          candidatesTokenCount: usageMetadata?.candidatesTokenCount ?? usageMetadata?.candidates_tokens ?? 0,
+        },
       },
-    },
-  };
+    };
+  }
+
+  try {
+    return await execute(modelName);
+  } catch (err: any) {
+    const errorText = `${err?.message ?? ''} ${err?.status ?? ''}`.toLowerCase();
+    const shouldFallback = modelName !== fallbackModel && (err?.status === 404 || /model not found|deprecated|not supported|does not support/i.test(errorText));
+    if (!shouldFallback) {
+      throw err;
+    }
+
+    console.warn('[GEMINI] Model deprecated/not found:', modelName, '— falling back to gemini-2.5-flash');
+    try {
+      return await execute(fallbackModel);
+    } catch (fallbackErr: any) {
+      const fallbackMessage = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+      throw new Error(fallbackMessage);
+    }
+  }
 }
 
 async function summarizeConversationSegment(
@@ -600,7 +784,7 @@ export async function runAgentTurn(
     : PRODUCTION_TOOL_DECLARATIONS.map((d) => d.name); // Fallback to baseline if not set
 
   // Формируем toolDeclarations только для разрешённых тулов
-  const toolDeclarations = ALL_TOOL_DECLARATIONS.filter((d) => allowedToolNames.includes(d.name));
+  const toolDeclarations = buildToolDeclarationsForAgent(allowedToolNames, agentData?.dialogue_flow);
   console.log(`[AGENT_TOOLS] Agent ${agentId}: allowed tools: [${allowedToolNames.join(', ')}], declarations: [${toolDeclarations.map((d) => d.name).join(', ')}]`);
 
   // 1. RAG — ищем релевантные чанки ДО вызова Gemini
@@ -663,8 +847,8 @@ export async function runAgentTurn(
     ? `<previous_conversation_context>\n${conversationContext.conversationSummary}\n</previous_conversation_context>\n\n`
     : '';
 
-  const stepContext = currentFunnelStep
-    ? `\n\nТы сейчас на шаге "${currentFunnelStep}". Если пора переходить дальше согласно условиям воронки — вызови advanceFunnelStep. Не пропускай шаги и не придумывай переходы, которых нет в описании воронки выше. ВАЖНО: если ты решил, что пора перейти на следующий шаг, сначала вызови advanceFunnelStep с stepId следующего шага и коротким reason, а уже потом продолжай диалог.`
+  const stepContext = flow && currentFunnelStep
+    ? `\n\n<funnel_context>\n${compileFlowToPrompt(flow, currentFunnelStep)}\n</funnel_context>`
     : '';
 
   const fullSystemPrompt = `${basePrompt}\n\n${leadContextBlock}${previousConversationBlock}${stepContext}\n\n<knowledge_base>\n${kbContext}\n</knowledge_base>\n\nПравило: отвечай ТОЛЬКО на основе информации выше. Если данных нет — честно скажи об этом.`;
@@ -673,6 +857,74 @@ export async function runAgentTurn(
     role: message.role === 'user' ? 'user' : 'model',
     parts: [{ text: message.text }],
   }));
+
+  // === PHASE B SECTION 2.4: Script vs Dynamic split (Call A) ===
+  const currentDialogueNode = getDialogueNode(flow, currentFunnelStep);
+  const isScriptMessage = currentDialogueNode?.message_type === 'script';
+
+  if (isScriptMessage && Array.isArray(currentDialogueNode?.script_parts) && currentDialogueNode.script_parts.length > 0) {
+    // Call A (Script path): Send script_parts directly without Gemini
+    console.log(`[SCRIPT_PATH] Agent ${agentId}: sending pre-written script parts from node ${currentFunnelStep}`);
+
+    const typingSimulation = Boolean((generalCapabilities?.typing_simulation) ?? true);
+    const messageParts = handleScriptMessageParts(currentDialogueNode.script_parts, typingSimulation);
+    const finalAnswer = messageParts.map((part) => part.text).join('\n\n');
+
+    // Save script message
+    const assistantMessageId = await appendMessage(admin, conversationId, 'ai', finalAnswer);
+
+    // Log the script call (non-blocking)
+    try {
+      await admin.from('ai_call_logs').insert({
+        conversation_id: conversationId,
+        request: {
+          type: 'script_message',
+          agent_id: agentId,
+          node_id: currentFunnelStep,
+          script_parts_count: currentDialogueNode.script_parts.length,
+        },
+        response: {
+          raw: finalAnswer,
+          final: finalAnswer,
+          finish_reason: 'script_message',
+        },
+      });
+    } catch (e) {
+      console.warn('[AGENT] failed to log script call', e);
+    }
+
+    // Return script result immediately, no Gemini call
+    return {
+      answer: finalAnswer,
+      usedChunks: chunks.map((chunk) => ({ id: chunk.chunk_id, similarity: chunk.similarity })),
+      messageParts,
+      splitMessages: false,
+      typingSimulation,
+      handoffMessage: undefined,
+      retrievalDebug: {
+        primaryChunks: chunks.map((chunk) => ({
+          id: chunk.chunk_id,
+          content: chunk.content,
+          similarity: chunk.similarity,
+          priority: chunk.priority,
+          sourceTitle: (chunk.metadata?.source_title as string | undefined) ?? undefined,
+          sourceType: (chunk.metadata?.source_type as string | undefined) ?? undefined,
+          postType: (chunk.metadata?.post_type as string | undefined) ?? undefined,
+        })),
+        linkedChunks: linkedChunks.map((chunk) => ({
+          id: chunk.id,
+          content: chunk.content,
+          similarity: chunk.similarity,
+          linkType: chunk.link_type,
+          priority: chunk.priority,
+          sourceTitle: (chunk.metadata?.source_title as string | undefined) ?? undefined,
+          sourceType: (chunk.metadata?.source_type as string | undefined) ?? undefined,
+          postType: (chunk.metadata?.post_type as string | undefined) ?? undefined,
+        })),
+      },
+    };
+  }
+  // === End Script Path ===
 
   let response: GeminiClientResponse;
   let tokensInput = 0;
@@ -801,11 +1053,55 @@ export async function runAgentTurn(
     finalAnswer = finalAnswer || 'Сейчас подключу коллегу, пожалуйста, подождите.';
   }
 
+  if (!finalAnswer.trim() && !handoffTriggered) {
+    console.warn('[PROD] empty reply returned by Gemini, retrying once', { agentId, conversationId, userMessage });
+    try {
+      const retryResponse = await callGemini(
+        GEMINI_CHAT_MODEL,
+        fullSystemPrompt,
+        [
+          ...conversationContents,
+          { role: 'user', parts: [{ text: userMessage }] },
+        ],
+        [{ functionDeclarations: toolDeclarations }],
+      );
+      const retryParts = retryResponse.payload.parts;
+      const retryText = extractTextFromParts(retryParts);
+      if (retryText.trim()) {
+        response = retryResponse;
+        currentParts = retryParts;
+        finalAnswer = retryText;
+        tokensInput += retryResponse.payload.usageMetadata?.promptTokenCount ?? 0;
+        tokensOutput += retryResponse.payload.usageMetadata?.candidatesTokenCount ?? 0;
+      }
+    } catch (retryErr) {
+      console.warn('[PROD] empty-reply retry failed', { agentId, conversationId, userMessage, error: retryErr instanceof Error ? retryErr.message : String(retryErr) });
+    }
+  }
+
   if (!finalAnswer.trim()) {
     finalAnswer = handoffConfig.client_message?.trim() || 'Подключаю сотрудника, он уже видит наш диалог';
   }
 
-  if (conversationId) {
+  // === PHASE B SECTION 2.4: Call B - Funnel Routing ===
+  const routingResult = await applyRoutingAndFinalizeReply({
+    admin,
+    agentId,
+    leadId,
+    conversationId,
+    flow,
+    currentFunnelStep,
+    userMessage,
+    finalAnswer,
+    handoffConfig,
+    executeToolImpl: async (call, context) => executeTool(call as any, context),
+  });
+
+  handoffTriggered = handoffTriggered || routingResult.handoffTriggered;
+  finalAnswer = routingResult.finalAnswer;
+  // === End Routing ===
+
+  if (conversationId && routingResult.shouldAppendMessage) {
     await appendMessage(admin, conversationId, 'ai', finalAnswer);
   }
 
@@ -830,10 +1126,13 @@ export async function runAgentTurn(
           linked_chunk_ids: linkedChunks.map((chunk) => chunk.id),
           linked_chunk_types: linkedChunks.map((chunk) => ({ id: chunk.id, link_type: chunk.link_type, similarity: chunk.similarity })),
         },
+        routing: routingResult.routingOutcome,
       },
       response: {
         raw: rawReply,
         final: finalAnswer,
+        finish_reason: response.payload.finishReason ?? null,
+        usage_metadata: response.payload.usageMetadata ?? null,
       },
       tokens_input: tokensInput,
       tokens_output: tokensOutput,
@@ -858,6 +1157,10 @@ export async function runAgentTurn(
     splitMessages,
     typingSimulation,
     handoffMessage,
+    toolsUsed,
+    tokensInput,
+    tokensOutput,
+    latencyMs: Date.now() - startTime,
     retrievalDebug: {
       primaryChunks: chunks.map((chunk) => ({
         id: chunk.chunk_id,
