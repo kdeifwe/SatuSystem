@@ -265,6 +265,31 @@ export function resolveRoutingDecision(args: ResolveRoutingDecisionArgs): Routin
   };
 }
 
+export function resolvePostRoutingReply(params: {
+  routingOutcome: Pick<ApplyRoutingResult, 'shouldHandoff' | 'duplicateHandoffSkipped'>;
+  finalAnswer: string;
+  handoffClientMessage?: string | null;
+}): { finalAnswer: string; shouldAppendMessage: boolean } {
+  if (params.routingOutcome.shouldHandoff) {
+    return {
+      finalAnswer: params.handoffClientMessage?.trim() || 'Подключаю сотрудника, он уже видит наш диалог',
+      shouldAppendMessage: true,
+    };
+  }
+
+  if (params.routingOutcome.duplicateHandoffSkipped) {
+    return {
+      finalAnswer: '',
+      shouldAppendMessage: false,
+    };
+  }
+
+  return {
+    finalAnswer: params.finalAnswer,
+    shouldAppendMessage: true,
+  };
+}
+
 function extractUsageMetadata(payload: Record<string, unknown> | null | undefined) {
   const usageMetadata = (payload as Record<string, unknown> | null | undefined)?.usageMetadata ?? (payload as Record<string, unknown> | null | undefined)?.usage_metadata;
   if (!usageMetadata || typeof usageMetadata !== 'object') {
