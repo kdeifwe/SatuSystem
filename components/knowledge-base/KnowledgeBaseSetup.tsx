@@ -1,1 +1,3 @@
-cat .gitignore
+export default function KnowledgeBaseSetup() {
+  return null;
+}

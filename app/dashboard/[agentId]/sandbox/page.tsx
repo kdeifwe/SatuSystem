@@ -86,10 +86,23 @@ export default function SandboxPage({ params }: { params: { agentId: string } })
       try {
         data = raw ? JSON.parse(raw) : {};
       } catch {
-        data = { error: raw || 'Ошибка' };
+        data = { error: raw || 'Ошибка обработки ответа' };
       }
 
-      const answer = data.answer ?? data.error ?? 'Ошибка';
+      // Determine error message
+      let answer = data.answer ?? null;
+      if (!answer && data.error) {
+        // If error field is present, it means the backend returned an error
+        answer = data.error;
+        console.error('[Sandbox] API returned error:', data.error);
+        if (data.debugInfo && process.env.NODE_ENV === 'development') {
+          console.debug('[Sandbox] Error debug info:', data.debugInfo);
+        }
+      } else if (!answer) {
+        answer = 'Не удалось получить ответ от агента';
+        console.error('[Sandbox] No answer or error in response:', data);
+      }
+
       const retrievalDebug = data.retrievalDebug ?? null;
       const parts = Array.isArray(data.messageParts) && data.messageParts.length
         ? data.messageParts
@@ -97,7 +110,6 @@ export default function SandboxPage({ params }: { params: { agentId: string } })
 
       console.log('[Sandbox] splitMessages:', data.splitMessages);
       console.log('[Sandbox] messageParts count:', data.messageParts?.length);
-      console.log('[Sandbox] messageParts:', data.messageParts);
 
       if (parts.length > 1 && data.splitMessages) {
         setMessages((current) => current.slice(0, assistantIndex));
@@ -126,10 +138,12 @@ export default function SandboxPage({ params }: { params: { agentId: string } })
           { role: 'system', content: data.handoffMessage, timestamp: new Date() },
         ]);
       }
-    } catch {
+    } catch (err: any) {
+      const errorMessage = `Ошибка соединения: ${err?.message || 'неизвестная ошибка'}`;
+      console.error('[Sandbox] Fetch error:', err);
       setMessages((current) =>
         current.map((message, messageIndex) =>
-          messageIndex === assistantIndex ? { ...message, content: 'Ошибка соединения', pending: false } : message,
+          messageIndex === assistantIndex ? { ...message, content: errorMessage, pending: false } : message,
         ),
       );
     } finally {

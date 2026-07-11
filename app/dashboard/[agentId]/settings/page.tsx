@@ -3,7 +3,16 @@
 import { useEffect, useState } from 'react';
 import { Save, ToggleLeft, ToggleRight } from 'lucide-react';
 
-const DEFAULT_AGENT_MODEL = 'gemini-3.5-flash';
+const DEFAULT_AGENT_MODEL = 'gemini-2.5-flash';
+const ALLOWED_AGENT_MODELS = new Set(['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-pro', 'gemini-2.0-flash']);
+
+function isAllowedAgentModel(model: unknown): model is string {
+  return typeof model === 'string' && ALLOWED_AGENT_MODELS.has(model);
+}
+
+function normalizeAgentModel(model: unknown): string {
+  return isAllowedAgentModel(model) ? model : DEFAULT_AGENT_MODEL;
+}
 
 const modelGroups: Array<{
   key: string;
@@ -16,11 +25,10 @@ const modelGroups: Array<{
     label: 'Текст / диалог',
     description: 'Текстовые модели — для диалогов с клиентами в чате',
     options: [
-      { value: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash — быстрый, дешёвый, для большинства диалогов' },
-      { value: 'gemini-3.1-pro', label: 'Gemini 3.1 Pro — сложные случаи, глубокое рассуждение' },
-      { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash — стабильная классика, дешевле 3.5' },
-      { value: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite — максимально дешёвый, для простых FAQ' },
-      { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro — более мощный вариант для сложных задач' },
+      { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash — быстрый, доступный, для большинства диалогов' },
+      { value: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite — дешёвый вариант для FAQ' },
+      { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro — мощный вариант для сложных задач' },
+      { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash — совместимый fallback' },
     ],
   },
   {
@@ -29,14 +37,8 @@ const modelGroups: Array<{
     description: 'Изображения — агент сможет присылать сгенерированные визуалы',
     options: [
       {
-        value: 'gemini-3.1-flash-image',
-        label: 'Gemini 3.1 Flash Image — Nano Banana 2 — быстрая генерация/редактирование изображений (Скоро)',
-        disabled: true,
-      },
-      {
-        value: 'gemini-3-pro-image',
-        label: 'Gemini 3 Pro Image — Nano Banana Pro — студийное качество, точный текст на картинке (Скоро)',
-        disabled: true,
+        value: 'gemini-2.5-flash',
+        label: 'Gemini 2.5 Flash — доступна для текстовых сценариев',
       },
     ],
   },
@@ -45,8 +47,7 @@ const modelGroups: Array<{
     label: 'Генерация видео',
     description: 'Видео — для будущих модулей рекламных роликов',
     options: [
-      { value: 'veo-3.1', label: 'Veo 3.1 — кинематографичное видео со звуком (Скоро)', disabled: true },
-      { value: 'gemini-omni-flash', label: 'Gemini Omni Flash — быстрая генерация видео из текста (Скоро)', disabled: true },
+      { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash — текстовые сценарии без видео', disabled: true },
     ],
   },
   {
@@ -54,15 +55,19 @@ const modelGroups: Array<{
     label: 'Голос',
     description: 'Голос — для звонков через модуль Голосовой агент',
     options: [
-      { value: 'gemini-2.5-flash-live', label: 'Gemini Live — голосовые звонки в реальном времени (Скоро)', disabled: true },
-      { value: 'gemini-3.1-flash-tts', label: 'Flash TTS — озвучка текста, дешёвый вариант (Скоро)', disabled: true },
+      { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash — пока не используется для голосовых сценариев', disabled: true },
     ],
   },
   {
     key: 'legacy',
     label: 'Устаревшие / legacy',
     description: 'Устаревшие варианты — для уже существующих агентов, которые ещё используют их',
-    options: [{ value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash — больше не доступен у Google (Скоро)', disabled: true }],
+    options: [
+      { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash — legacy, для уже существующих агентов' },
+      { value: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite — legacy, для уже существующих агентов' },
+      { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro — legacy, для уже существующих агентов' },
+      { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash — совместимый fallback', disabled: false },
+    ],
   },
 ];
 
@@ -109,7 +114,7 @@ export default function SettingsPage({ params }: { params: { agentId: string } }
           human_communication_style: data.human_communication_style ?? '',
           knowledge_base_principles: data.knowledge_base_principles ?? '',
           temperature: data.temperature ?? 0.7,
-          model: data.model ?? DEFAULT_AGENT_MODEL,
+          model: normalizeAgentModel(data.model),
           split_messages: capabilities.split_messages ?? true,
           split_max_parts: capabilities.split_max_parts ?? 3,
           typing_simulation: capabilities.typing_simulation ?? true,
@@ -141,7 +146,7 @@ export default function SettingsPage({ params }: { params: { agentId: string } }
         human_communication_style: settings.human_communication_style,
         knowledge_base_principles: settings.knowledge_base_principles,
         temperature: settings.temperature,
-        model: settings.model,
+        model: normalizeAgentModel(settings.model),
         general_capabilities: {
           split_messages: settings.split_messages,
           split_max_parts: settings.split_max_parts,

@@ -4,13 +4,14 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import dagre from 'dagre';
 import { Background, Controls, MarkerType, MiniMap, ReactFlow, ReactFlowProvider, addEdge, useEdgesState, useNodesState, type Edge, type NodeProps, type OnConnect } from 'reactflow';
 import 'reactflow/dist/style.css';
-import { Loader2, MessageSquareText, Save, Sparkles } from 'lucide-react';
+import { Loader2, MessageSquareText, Save, Sparkles, X } from 'lucide-react';
 import type { FunnelFlow } from '@/lib/funnel/types';
 
 interface FunnelNodeData {
   title: string;
   content: string;
   onChange: (nodeId: string, field: 'title' | 'content', value: string) => void;
+  onDelete: (nodeId: string) => void;
 }
 
 function layoutFlow(nodes: Array<{ id: string; position?: { x: number; y: number } }>, edges: Array<{ id: string; from: string; to: string; label?: string }>) {
@@ -35,8 +36,57 @@ function layoutFlow(nodes: Array<{ id: string; position?: { x: number; y: number
 }
 
 function EditableNode({ id, data }: NodeProps<FunnelNodeData>) {
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
+  const handleDelete = () => {
+    if (showDeleteConfirm) {
+      data.onDelete(id);
+      setShowDeleteConfirm(false);
+    } else {
+      setShowDeleteConfirm(true);
+    }
+  };
+
   return (
-    <div className="min-w-[240px] rounded-2xl border border-slate-300 bg-white p-3 shadow-sm">
+    <div className="relative min-w-[240px] rounded-2xl border border-slate-300 bg-white p-3 shadow-sm">
+      {/* Delete button */}
+      <button
+        type="button"
+        onClick={() => setShowDeleteConfirm(!showDeleteConfirm)}
+        className="absolute right-2 top-2 rounded-full p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-all"
+        title="Удалить шаг"
+      >
+        <X className="h-4 w-4" />
+      </button>
+
+      {/* Delete confirmation */}
+      {showDeleteConfirm && (
+        <div className="absolute inset-0 flex items-center justify-center rounded-2xl bg-white/95 backdrop-blur-sm z-50">
+          <div className="text-center">
+            <div className="mb-3 text-xs font-semibold text-slate-600 uppercase">Подтверждение</div>
+            <div className="mb-4 text-sm text-slate-700 px-2">
+              Удалить шаг<br/>«{data.title || 'без названия'}»?
+            </div>
+            <div className="flex gap-2 justify-center">
+              <button
+                type="button"
+                onClick={() => setShowDeleteConfirm(false)}
+                className="px-3 py-1 text-xs font-medium rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200"
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                onClick={handleDelete}
+                className="px-3 py-1 text-xs font-medium rounded-lg bg-rose-500 text-white hover:bg-rose-600"
+              >
+                Удалить
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Шаг</div>
       <input
         value={data.title}
@@ -93,6 +143,38 @@ function FlowCanvas({ agentId }: { agentId: string }) {
     }));
   }, [setFlow, setNodes]);
 
+  const handleNodeDelete = useCallback((nodeId: string) => {
+    setFlow((current) => {
+      // Find the node to delete
+      const nodeToDelete = current.nodes.find((n) => n.id === nodeId);
+      if (!nodeToDelete) return current;
+
+      // Remove the node
+      const updatedNodes = current.nodes.filter((n) => n.id !== nodeId);
+
+      // Remove all edges connected to this node (both from and to)
+      const updatedEdges = current.edges.filter((edge) => edge.from !== nodeId && edge.to !== nodeId);
+
+      // If deleted node was entryNodeId, assign the first remaining node as entry
+      let entryNodeId = current.entryNodeId;
+      if (entryNodeId === nodeId) {
+        entryNodeId = updatedNodes.length > 0 ? updatedNodes[0].id : '';
+        if (entryNodeId) {
+          // Notify user about the change
+          setError(`Стартовый шаг был удалён. Новый стартовый шаг: "${updatedNodes[0].title || updatedNodes[0].id}"`);
+        }
+      }
+
+      const nextFlow: FunnelFlow = {
+        nodes: updatedNodes,
+        edges: updatedEdges,
+        entryNodeId,
+      };
+
+      return nextFlow;
+    });
+  }, [setError]);
+
   const applyFlowToCanvas = useCallback((nextFlow: FunnelFlow) => {
     const flowWithVisibleEdges = {
       ...nextFlow,
@@ -133,6 +215,7 @@ function FlowCanvas({ agentId }: { agentId: string }) {
           title: node.title,
           content: node.content,
           onChange: handleNodeValueChange,
+          onDelete: handleNodeDelete,
         },
       })) as any
     );
@@ -150,6 +233,51 @@ function FlowCanvas({ agentId }: { agentId: string }) {
       }))
     );
   }, [handleNodeValueChange, setEdges, setNodes]);
+
+  // Update canvas when flow is deleted/modified (by handleNodeDelete)
+  useEffect(() => {
+    if (flow.nodes.length === 0) {
+      setNodes([]);
+      setEdges([]);
+      return;
+    }
+
+    const layoutedNodes = layoutFlow(
+      flow.nodes.map((node) => ({
+        id: node.id,
+        position: node.position ?? { x: 0, y: 0 },
+      })),
+      flow.edges,
+    );
+
+    setNodes(
+      flow.nodes.map((node, index) => ({
+        id: node.id,
+        type: 'funnelNode',
+        position: layoutedNodes[index]?.position ?? node.position ?? { x: 0, y: 0 },
+        data: {
+          title: node.title,
+          content: node.content,
+          onChange: handleNodeValueChange,
+          onDelete: handleNodeDelete,
+        },
+      })) as any
+    );
+
+    setEdges(
+      flow.edges.map((edge) => ({
+        id: edge.id,
+        source: edge.from,
+        target: edge.to,
+        label: edge.label,
+        animated: true,
+        markerEnd: { type: MarkerType.ArrowClosed },
+        style: { stroke: '#94A3B8' },
+        labelStyle: { fill: '#475569', fontSize: 12 },
+        labelBgStyle: { fill: '#F1F5F9' },
+      }))
+    );
+  }, [flow, handleNodeValueChange, handleNodeDelete, setNodes, setEdges]);
 
   useEffect(() => {
     let cancelled = false;
