@@ -391,6 +391,8 @@ export async function upsertLeadFunnelState(
     status: string;
     isNoMatch: boolean;
     lastTransitionAt?: string | null;
+    pendingScriptNodeId?: string | null;
+    pendingScriptReply?: string | null;
   },
 ) {
   const { data, error } = await admin.rpc('upsert_lead_funnel_state', {
@@ -400,6 +402,8 @@ export async function upsertLeadFunnelState(
     p_status: params.status,
     p_is_no_match: params.isNoMatch,
     p_last_transition_at: params.lastTransitionAt ?? new Date().toISOString(),
+    p_pending_script_node_id: params.pendingScriptNodeId ?? null,
+    p_pending_script_reply: params.pendingScriptReply ?? null,
   });
 
   if (error) {

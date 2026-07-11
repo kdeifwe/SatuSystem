@@ -8,7 +8,7 @@ import { PRODUCTION_TOOL_DECLARATIONS, buildToolDeclarationsForAgent, type ToolC
 import { executeTool, type ToolContext } from '@/lib/ai/tools/executor';
 import { normalizeFunnelFlow } from '@/lib/funnel/normalize';
 import { compileFlowToPrompt } from '@/lib/funnel/compile';
-import { applyFunnelRouting, resolvePostRoutingReply } from '@/lib/funnel/routing';
+import { applyFunnelRouting, resolvePostRoutingReply, upsertLeadFunnelState } from '@/lib/funnel/routing';
 import { buildSandboxLeadAttributes, isSandboxLeadAttributes } from '@/lib/ai/sandbox-context';
 
 export interface ChatMessage {
@@ -36,6 +36,13 @@ export interface AgentTurnResult {
     primaryChunks: Array<{ id: string; content: string; similarity: number; priority?: string; sourceTitle?: string; sourceType?: string; postType?: string }>;
     linkedChunks: Array<{ id: string; content: string; similarity: number; linkType?: string; priority?: string; sourceTitle?: string; sourceType?: string; postType?: string }>;
   };
+}
+
+export interface DialogueNodeExecutionResult {
+  mode: 'script' | 'dynamic';
+  messageParts?: AgentMessagePart[];
+  finalAnswer?: string;
+  warning?: string;
 }
 
 interface GeminiClientResponse {
@@ -74,13 +81,13 @@ function normalizeResponseParts(parts: Array<Record<string, unknown>> | undefine
 
 // === PHASE B SECTION 2.4: Script vs Dynamic split (Call A) ===
 // Helper: Find dialogue node by ID in funnel flow
-function getDialogueNode(flow: ReturnType<typeof normalizeFunnelFlow>, nodeId: string | null) {
+function getDialogueNode(flow: ReturnType<typeof normalizeFunnelFlow> | null | undefined, nodeId: string | null) {
   if (!flow || !nodeId) return null;
   return flow.nodes?.find((node) => node.id === nodeId) ?? null;
 }
 
 // Helper: Convert script_parts array to AgentMessagePart[] with typing delays
-function handleScriptMessageParts(
+export function handleScriptMessageParts(
   scriptParts: string[] | undefined,
   typingSimulationEnabled: boolean,
 ): AgentMessagePart[] {
@@ -100,7 +107,116 @@ function handleScriptMessageParts(
 
   return parts;
 }
+export async function resolveDialogueNodeExecution(
+  flow: ReturnType<typeof normalizeFunnelFlow> | null | undefined,
+  nodeId: string | null,
+  typingSimulationEnabled: boolean,
+  options?: { callGemini?: () => Promise<unknown> },
+): Promise<DialogueNodeExecutionResult> {
+  const currentDialogueNode = getDialogueNode(flow, nodeId);
+
+  if (currentDialogueNode?.message_type === 'script') {
+    if (Array.isArray(currentDialogueNode?.script_parts) && currentDialogueNode.script_parts.length > 0) {
+      const messageParts = handleScriptMessageParts(currentDialogueNode.script_parts, typingSimulationEnabled);
+      const finalAnswer = messageParts.map((part) => part.text).join('\n\n');
+      return {
+        mode: 'script',
+        messageParts,
+        finalAnswer,
+      };
+    }
+
+    const warning = `[SCRIPT_PATH] Node ${nodeId} is marked as script but has empty script_parts; falling back to dynamic behavior`;
+    console.warn(warning);
+    if (typeof options?.callGemini === 'function') {
+      await options.callGemini();
+    }
+    return {
+      mode: 'dynamic',
+      warning,
+    };
+  }
+
+  if (typeof options?.callGemini === 'function') {
+    await options.callGemini();
+  }
+
+  return {
+    mode: 'dynamic',
+  };
+}
 // === End Script Path helpers ===
+
+export function shouldRenderScriptMessage({
+  shouldRoutePendingReply,
+  nodeExecutionMode,
+  finalAnswer,
+}: {
+  shouldRoutePendingReply: boolean;
+  nodeExecutionMode: DialogueNodeExecutionResult['mode'];
+  finalAnswer?: string | null;
+}) {
+  return !shouldRoutePendingReply && nodeExecutionMode === 'script' && Boolean(finalAnswer);
+}
+
+export async function handleScriptNodeTurn({
+  admin,
+  agentId,
+  leadId,
+  conversationId,
+  flow,
+  currentFunnelStep,
+  pendingScriptNodeId,
+  pendingScriptReply,
+  userMessage,
+  routeExecutor = applyFunnelRouting,
+  sendScriptImpl,
+}: {
+  admin: ReturnType<typeof createAdminClient>;
+  agentId: string;
+  leadId: string | null;
+  conversationId: string | null;
+  flow: ReturnType<typeof normalizeFunnelFlow> | null;
+  currentFunnelStep: string | null;
+  pendingScriptNodeId: string | null;
+  pendingScriptReply: string | null;
+  userMessage: string;
+  routeExecutor?: typeof applyFunnelRouting;
+  sendScriptImpl?: () => Promise<void> | void;
+}) {
+  const shouldRoutePendingScriptReply = Boolean(currentFunnelStep && pendingScriptNodeId && pendingScriptNodeId === currentFunnelStep);
+
+  if (shouldRoutePendingScriptReply) {
+    const routingOutcome = await routeExecutor({
+      admin,
+      agentId,
+      leadId,
+      conversationId,
+      flow,
+      currentNodeId: currentFunnelStep,
+      userMessage,
+      assistantReply: pendingScriptReply ?? '',
+      executeToolImpl: undefined,
+    } as Parameters<typeof applyFunnelRouting>[0]);
+
+    return {
+      shouldSendScript: false,
+      shouldRoutePendingReply: true,
+      currentFunnelStep: routingOutcome.targetNodeId ?? currentFunnelStep,
+      routingOutcome,
+    };
+  }
+
+  if (typeof sendScriptImpl === 'function') {
+    await sendScriptImpl();
+  }
+
+  return {
+    shouldSendScript: true,
+    shouldRoutePendingReply: false,
+    currentFunnelStep,
+  };
+}
 
 interface ToolCallRequest {
   name: string;
@@ -817,9 +933,45 @@ export async function runAgentTurn(
     ? await admin.from('conversations').select('current_funnel_step').eq('id', conversationId).single()
     : { data: null };
 
-  const currentFunnelStep = conversationState?.current_funnel_step ?? flow?.entryNodeId ?? null;
+  let currentFunnelStep = conversationState?.current_funnel_step ?? flow?.entryNodeId ?? null;
   if (conversationId && !conversationState?.current_funnel_step && flow?.entryNodeId) {
     await admin.from('conversations').update({ current_funnel_step: flow.entryNodeId }).eq('id', conversationId);
+  }
+
+  let leadFunnelState: { pending_script_node_id?: unknown; pending_script_reply?: unknown } | null = null;
+  if (leadId) {
+    const { data } = await admin
+      .from('lead_funnel_state')
+      .select('pending_script_node_id, pending_script_reply')
+      .eq('lead_id', leadId)
+      .eq('agent_id', agentId)
+      .maybeSingle();
+    leadFunnelState = data as { pending_script_node_id?: unknown; pending_script_reply?: unknown } | null;
+  }
+
+  const pendingScriptNodeId = typeof leadFunnelState?.pending_script_node_id === 'string'
+    ? leadFunnelState.pending_script_node_id
+    : null;
+  const pendingScriptReply = typeof leadFunnelState?.pending_script_reply === 'string'
+    ? leadFunnelState.pending_script_reply
+    : null;
+
+  const scriptTurnResolution = await handleScriptNodeTurn({
+    admin,
+    agentId,
+    leadId,
+    conversationId,
+    flow,
+    currentFunnelStep,
+    pendingScriptNodeId,
+    pendingScriptReply,
+    userMessage,
+    routeExecutor: applyFunnelRouting,
+    sendScriptImpl: async () => undefined,
+  });
+
+  if (scriptTurnResolution.shouldRoutePendingReply) {
+    currentFunnelStep = scriptTurnResolution.currentFunnelStep ?? currentFunnelStep;
   }
 
   const conversationContext = conversationId
@@ -859,16 +1011,30 @@ export async function runAgentTurn(
   }));
 
   // === PHASE B SECTION 2.4: Script vs Dynamic split (Call A) ===
-  const currentDialogueNode = getDialogueNode(flow, currentFunnelStep);
-  const isScriptMessage = currentDialogueNode?.message_type === 'script';
+  const scriptTypingSimulation = Boolean((generalCapabilities?.typing_simulation) ?? true);
+  const nodeExecution = await resolveDialogueNodeExecution(flow, currentFunnelStep, scriptTypingSimulation);
+  const shouldSkipScriptBranch = scriptTurnResolution.shouldRoutePendingReply;
+  const shouldRenderScriptBranch = shouldRenderScriptMessage({
+    shouldRoutePendingReply: shouldSkipScriptBranch,
+    nodeExecutionMode: nodeExecution.mode,
+    finalAnswer: nodeExecution.finalAnswer,
+  });
 
-  if (isScriptMessage && Array.isArray(currentDialogueNode?.script_parts) && currentDialogueNode.script_parts.length > 0) {
+  if (shouldRenderScriptBranch && nodeExecution.messageParts && nodeExecution.finalAnswer) {
     // Call A (Script path): Send script_parts directly without Gemini
     console.log(`[SCRIPT_PATH] Agent ${agentId}: sending pre-written script parts from node ${currentFunnelStep}`);
 
-    const typingSimulation = Boolean((generalCapabilities?.typing_simulation) ?? true);
-    const messageParts = handleScriptMessageParts(currentDialogueNode.script_parts, typingSimulation);
-    const finalAnswer = messageParts.map((part) => part.text).join('\n\n');
+    const messageParts = nodeExecution.messageParts;
+    const finalAnswer = nodeExecution.finalAnswer;
+
+    await upsertLeadFunnelState(admin, leadId, agentId, {
+      currentNodeId: currentFunnelStep,
+      status: 'active',
+      isNoMatch: false,
+      lastTransitionAt: new Date().toISOString(),
+      pendingScriptNodeId: currentFunnelStep,
+      pendingScriptReply: finalAnswer,
+    });
 
     // Save script message
     const assistantMessageId = await appendMessage(admin, conversationId, 'ai', finalAnswer);
@@ -881,7 +1047,7 @@ export async function runAgentTurn(
           type: 'script_message',
           agent_id: agentId,
           node_id: currentFunnelStep,
-          script_parts_count: currentDialogueNode.script_parts.length,
+          script_parts_count: (flow?.nodes?.find((node) => node.id === currentFunnelStep)?.script_parts?.length ?? 0),
         },
         response: {
           raw: finalAnswer,
@@ -899,7 +1065,7 @@ export async function runAgentTurn(
       usedChunks: chunks.map((chunk) => ({ id: chunk.chunk_id, similarity: chunk.similarity })),
       messageParts,
       splitMessages: false,
-      typingSimulation,
+      typingSimulation: scriptTypingSimulation,
       handoffMessage: undefined,
       retrievalDebug: {
         primaryChunks: chunks.map((chunk) => ({
