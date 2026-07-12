@@ -176,8 +176,11 @@ Return raw JSON only:
     });
 
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error('[improve] Error:', msg);
-    return NextResponse.json({ error: msg }, { status: 500 });
+    const fullError = err instanceof Error ? err.message : String(err);
+    console.error('[improve] Full error details:', fullError);
+    // Return generic error message to user to prevent leaking internal system content
+    return NextResponse.json({ 
+      error: 'Не удалось обработать ответ ассистента. Попробуйте переформулировать запрос.' 
+    }, { status: 500 });
   }
 }
