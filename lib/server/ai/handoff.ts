@@ -22,6 +22,10 @@ export const DEFAULT_HANDOFF_CONFIG: HandoffConfig = {
   operator_message: 'Новый диалог требует внимания',
 };
 
+export function getEmptyResponseFallbackMessage(): string {
+  return DEFAULT_HANDOFF_CONFIG.client_message;
+}
+
 export function normalizeHandoffConfig(value: unknown): HandoffConfig {
   const source = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>;
   const triggersSource = (source.triggers && typeof source.triggers === 'object' ? source.triggers : {}) as Record<string, unknown>;
