@@ -28,7 +28,13 @@ export function normalizeFunnelFlow(value: unknown): FunnelFlow | null {
   const candidate = value as Partial<FunnelFlow> & LegacyDialogueFlow;
   if (Array.isArray(candidate.nodes) && candidate.nodes.length > 0) {
     return {
-      nodes: candidate.nodes as FunnelFlow['nodes'],
+      nodes: candidate.nodes.map((node) => ({
+        ...node,
+        position: {
+          x: typeof node?.position?.x === 'number' ? node.position.x : 0,
+          y: typeof node?.position?.y === 'number' ? node.position.y : 0,
+        },
+      })) as FunnelFlow['nodes'],
       edges: Array.isArray(candidate.edges) ? (candidate.edges as FunnelFlow['edges']) : [],
       entryNodeId: typeof candidate.entryNodeId === 'string' ? candidate.entryNodeId : candidate.nodes[0]?.id ?? '',
     };

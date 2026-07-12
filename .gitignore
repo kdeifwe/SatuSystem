@@ -8,3 +8,31 @@ out
 tsconfig.tsbuildinfo
 supabase/.temp/
 backups/
+.tmp/
+temp-*.txt
+temp-*.json
+.tmp-test/
+dev.log
+.tmp-tsc/
+# Temporary diagnostic artifacts
+/tmp-*
+/dryrun-*
+/diagnostics_*
+*.log
+*.bin
+scripts/diagnose-*.js
+scripts/repro-*.js
+/scripts/ts-node-alias-loader.mjs
+
+# Temporary and local artifacts (added per request)
+temp-*.js
+temp-*.ts
+*-output.json
+sandbox-*.json
+sandbox-server-log.txt
+diff-output.txt
+*.patch
+run-test.js
+check_*.js
+parse_ts.js
+scan_braces_ts.js
