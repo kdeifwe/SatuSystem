@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { buildSandboxLeadAttributes } from '@/lib/ai/sandbox-context';
+import { buildSandboxConversationInsertData, buildSandboxLeadAttributes } from '@/lib/ai/sandbox-context';
 
 export async function POST(req: NextRequest, { params }: { params: { agentId: string } }) {
   const supabase = createClient();
@@ -75,10 +75,10 @@ export async function POST(req: NextRequest, { params }: { params: { agentId: st
 
   const { data: createdConversation } = await admin
     .from('conversations')
-    .insert({
+    .insert(buildSandboxConversationInsertData({
       lead_id: createdLead.id,
       agent_id: agentId,
-    })
+    }))
     .select('id')
     .single();
 

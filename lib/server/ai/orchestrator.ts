@@ -9,7 +9,7 @@ import { executeTool, type ToolContext } from '@/lib/ai/tools/executor';
 import { normalizeFunnelFlow } from '@/lib/funnel/normalize';
 import { compileFlowToPrompt } from '@/lib/funnel/compile';
 import { applyFunnelRouting, resolvePostRoutingReply, upsertLeadFunnelState } from '@/lib/funnel/routing';
-import { buildSandboxLeadAttributes, isSandboxLeadAttributes } from '@/lib/ai/sandbox-context';
+import { buildConversationInsertData, buildSandboxConversationInsertData, buildSandboxLeadAttributes, isSandboxLeadAttributes } from '@/lib/ai/sandbox-context';
 
 export interface ChatMessage {
   role: 'user' | 'model';
@@ -313,11 +313,11 @@ async function ensureLeadContext(admin: ReturnType<typeof createAdminClient>, ag
       const entryNodeId = getEntryNodeId(normalizeFunnelFlow(agentData?.dialogue_flow));
       const { data: createdConversation } = await admin
         .from('conversations')
-        .insert({
+        .insert(buildConversationInsertData({
           lead_id: externalLeadId,
           agent_id: agentId,
           ...(entryNodeId ? { current_funnel_step: entryNodeId } : {}),
-        })
+        }))
         .select('id')
         .single();
       conversation = createdConversation;
@@ -394,11 +394,11 @@ async function ensureLeadContext(admin: ReturnType<typeof createAdminClient>, ag
     const entryNodeId = getEntryNodeId(normalizeFunnelFlow(agentData?.dialogue_flow));
     const { data: createdConversation } = await admin
       .from('conversations')
-      .insert({
+      .insert(buildSandboxConversationInsertData({
         lead_id: lead.id,
         agent_id: agentId,
         ...(entryNodeId ? { current_funnel_step: entryNodeId } : {}),
-      })
+      }))
       .select('id')
       .single();
     conversation = createdConversation;

@@ -34,6 +34,8 @@ export default function SandboxPage({ params }: { params: { agentId: string } })
   const [agentName, setAgentName] = useState('Агент');
   const [dislikedMessage, setDislikedMessage] = useState<string | null>(null);
   const [showDislikeModal, setShowDislikeModal] = useState(false);
+  const [isStartingSession, setIsStartingSession] = useState(false);
+  const [sessionError, setSessionError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -151,8 +153,40 @@ export default function SandboxPage({ params }: { params: { agentId: string } })
     }
   }
 
+  async function startNewSandboxSession() {
+    if (isStartingSession || isLoading) return;
+
+    setIsStartingSession(true);
+    setSessionError(null);
+    setMessages([]);
+    setInput('');
+    setDislikedMessage(null);
+    setShowDislikeModal(false);
+
+    try {
+      const response = await fetch(`/api/agents/${params.agentId}/sandbox/reset`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(data?.error || 'Не удалось создать новый sandbox-диалог');
+      }
+    } catch (error) {
+      console.error('[Sandbox] Failed to start new session:', error);
+      setMessages([]);
+      setSessionError(error instanceof Error ? error.message : 'Не удалось создать новый sandbox-диалог');
+    } finally {
+      setIsStartingSession(false);
+    }
+  }
+
   function clearChat() {
     setMessages([]);
+    setInput('');
+    setDislikedMessage(null);
+    setShowDislikeModal(false);
   }
 
   function formatMessageTime(date: Date) {
@@ -179,14 +213,21 @@ export default function SandboxPage({ params }: { params: { agentId: string } })
         </div>
         <div className="flex items-center gap-2">
           <button
+            type="button"
             onClick={clearChat}
             className="flex h-9 w-9 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
             title="Очистить чат"
           >
             <RotateCcw size={16} />
           </button>
-          <button className="flex h-9 w-9 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700" title="История">
-            <Plus size={16} />
+          <button
+            type="button"
+            onClick={startNewSandboxSession}
+            disabled={isStartingSession || isLoading}
+            className="inline-flex items-center gap-2 rounded-lg border border-[#1557FF]/20 bg-[#EEF2FF] px-3 py-2 text-sm font-medium text-[#1557FF] transition-colors hover:bg-[#DEE7FF] disabled:cursor-not-allowed disabled:opacity-70"
+          >
+            <Plus size={14} />
+            <span>Новый диалог</span>
           </button>
         </div>
       </div>
