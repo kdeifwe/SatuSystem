@@ -8,6 +8,14 @@ export type SupportedMimeType =
   | 'text/plain'
   | 'text/markdown';
 
+export async function extractTextFromBuffer(
+  buffer: ArrayBuffer,
+  mimeType: string,
+  fileName: string,
+): Promise<string> {
+  return extractTextFromFile(buffer, mimeType, fileName);
+}
+
 export async function extractTextFromFile(
   buffer: ArrayBuffer,
   mimeType: string,
@@ -31,7 +39,7 @@ export async function extractTextFromFile(
 async function extractFromPDF(buffer: ArrayBuffer): Promise<string> {
   // Uses pdf-parse (npm install pdf-parse @types/pdf-parse)
   // Dynamic import to keep server-side only
-  const pdfParse = (await import('pdf-parse')).default;
+  const pdfParse = (await import('pdf-parse')).default as unknown as (input: Buffer) => Promise<{ text: string }>;
   const data = await pdfParse(Buffer.from(buffer));
   return data.text;
 }
