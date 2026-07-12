@@ -3,6 +3,8 @@ export interface FunnelNode {
   title: string;
   content: string;
   position: { x: number; y: number };
+  message_type?: string;
+  script_parts?: string[];
 }
 
 export interface FunnelEdge {
