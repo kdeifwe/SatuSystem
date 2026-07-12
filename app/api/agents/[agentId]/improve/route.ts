@@ -10,30 +10,50 @@ function getAdmin() {
   );
 }
 
-async function callGemini(apiKey: string, prompt: string, temperature = 0.4): Promise<string> {
+async function callGemini(apiKey: string, prompt: string, temperature = 0.4): Promise<{ text: string; metadata: any }> {
   const models = ['gemini-2.5-flash', 'gemini-2.5-pro'];
   for (const model of models) {
     try {
+      const requestBody = {
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: { temperature, maxOutputTokens: 8192 },
+      };
+      
+      const bodyJSON = JSON.stringify(requestBody);
+      // ДИАГНОСТИКА: логируем размер тела запроса
+      if (prompt.length > 2000) {
+        console.error('[improve-DIAGNOSTIC] Request body size:', bodyJSON.length, 'chars');
+        console.error('[improve-DIAGNOSTIC] Prompt size:', prompt.length, 'chars');
+      }
+      
       const res = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ role: 'user', parts: [{ text: prompt }] }],
-            generationConfig: { temperature, maxOutputTokens: 8192 },
-          }),
+          body: bodyJSON,
         }
       );
       if (!res.ok) {
-        console.warn(`[improve] ${model} returned ${res.status}`);
+        const errorText = await res.text();
+        console.error(`[improve] ${model} returned ${res.status}:`, errorText.slice(0, 500));
         continue;
       }
       const data = await res.json();
       const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-      if (text.length > 10) return text;
+      if (text.length > 10) {
+        return {
+          text,
+          metadata: {
+            model,
+            finishReason: data.candidates?.[0]?.finishReason,
+            promptTokenCount: data.usageMetadata?.promptTokenCount,
+            candidatesTokenCount: data.usageMetadata?.candidatesTokenCount,
+          },
+        };
+      }
     } catch (e) {
-      console.warn(`[improve] ${model} error:`, e);
+      console.error(`[improve] ${model} error:`, e instanceof Error ? e.message : String(e));
       continue;
     }
   }
@@ -41,10 +61,36 @@ async function callGemini(apiKey: string, prompt: string, temperature = 0.4): Pr
 }
 
 function extractJSON(text: string): Record<string, unknown> {
-  const start = text.indexOf('{');
-  const end = text.lastIndexOf('}');
-  if (start === -1 || end === -1) throw new Error(`JSON не найден в: ${text.slice(0, 200)}`);
-  return JSON.parse(text.slice(start, end + 1));
+  let extractedText = text;
+  
+  // Удаляем markdown блоки (```json ... ``` или ``` ... ```)
+  const markdownMatch = extractedText.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+  if (markdownMatch) {
+    extractedText = markdownMatch[1];
+  }
+  
+  const start = extractedText.indexOf('{');
+  const end = extractedText.lastIndexOf('}');
+  
+  if (start === -1 || end === -1) {
+    // ДИАГНОСТИКА: логируем полный текст при ошибке
+    console.error('[improve-DIAGNOSTIC] extractJSON failed - no JSON found');
+    console.error('[improve-DIAGNOSTIC] Original response text:', text);
+    console.error('[improve-DIAGNOSTIC] After markdown removal:', extractedText);
+    throw new Error(`JSON не найден в: ${text.slice(0, 200)}`);
+  }
+  
+  const jsonStr = extractedText.slice(start, end + 1);
+  try {
+    return JSON.parse(jsonStr);
+  } catch (parseError) {
+    // ДИАГНОСТИКА: при ошибке парсинга логируем кусок JSON
+    console.error('[improve-DIAGNOSTIC] JSON.parse failed');
+    console.error('[improve-DIAGNOSTIC] Error:', parseError instanceof Error ? parseError.message : String(parseError));
+    console.error('[improve-DIAGNOSTIC] Attempted JSON (first 800 chars):', jsonStr.slice(0, 800));
+    console.error('[improve-DIAGNOSTIC] Attempted JSON (last 500 chars):', jsonStr.slice(-500));
+    throw parseError;
+  }
 }
 
 export async function POST(
@@ -101,7 +147,7 @@ Return raw JSON only (no markdown):
 }`;
 
     const criticResponse = await callGemini(apiKey, criticPrompt, 0.3);
-    const criticism = extractJSON(criticResponse);
+    const criticism = extractJSON(criticResponse.text);
     console.log('[improve] Critic found:', criticism.root_cause);
 
     // ШАГ 2: Генератор — создаёт улучшенный промпт на основе критики
@@ -134,7 +180,7 @@ Return raw JSON only (no markdown, start with {):
 }`;
 
     const generatorResponse = await callGemini(apiKey, generatorPrompt, 0.5);
-    const generated = extractJSON(generatorResponse);
+    const generated = extractJSON(generatorResponse.text);
 
     // ШАГ 3: Валидатор — проверяет что улучшение реально решает проблему
     console.log('[improve] Step 3: Validating improvement...');
@@ -156,7 +202,7 @@ Return raw JSON only:
     let isValid = true;
     try {
       const validatorResponse = await callGemini(apiKey, validatorPrompt, 0.1);
-      const validation = extractJSON(validatorResponse);
+      const validation = extractJSON(validatorResponse.text);
       isValid = validation.is_valid !== false;
       console.log('[improve] Validation:', validation.confidence, validation.validation_note);
     } catch {

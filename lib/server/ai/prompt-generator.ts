@@ -31,11 +31,29 @@ async function callGemini(apiKey: string, prompt: string, temp = 0.7): Promise<s
 }
 
 function extractJSON(text: string): Record<string, any> {
-  let clean = text.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim();
-  const start = clean.indexOf('{');
-  const end = clean.lastIndexOf('}');
-  if (start === -1 || end === -1) throw new Error(`JSON не найден: ${text.slice(0, 200)}`);
-  return JSON.parse(clean.slice(start, end + 1));
+  let extractedText = text;
+  
+  // Удаляем markdown блоки (```json ... ``` или ``` ... ```)
+  const markdownMatch = extractedText.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+  if (markdownMatch) {
+    extractedText = markdownMatch[1];
+  }
+  
+  const start = extractedText.indexOf('{');
+  const end = extractedText.lastIndexOf('}');
+  
+  if (start === -1 || end === -1) {
+    console.error('[prompt-generator] extractJSON failed - no JSON found');
+    console.error('[prompt-generator] Response text (first 300 chars):', text.slice(0, 300));
+    throw new Error(`JSON не найден: ${text.slice(0, 200)}`);
+  }
+  
+  try {
+    return JSON.parse(extractedText.slice(start, end + 1));
+  } catch (parseError) {
+    console.error('[prompt-generator] JSON.parse failed:', parseError instanceof Error ? parseError.message : String(parseError));
+    throw parseError;
+  }
 }
 
 export type { BusinessInfo, GeneratedPrompt } from './types';
