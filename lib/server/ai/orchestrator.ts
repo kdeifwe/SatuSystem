@@ -2,7 +2,7 @@
 import { geminiFetch, geminiCountTokens, GEMINI_CHAT_MODEL, GEMINI_PROMPT_MODEL } from '@/lib/server/ai/gemini-client';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { splitAgentMessage, calculateTypingDelay } from '@/lib/server/ai/message-splitter';
-import { injectHandoffSection, normalizeHandoffConfig, type HandoffConfig } from '@/lib/server/ai/handoff';
+import { getEmptyResponseFallbackMessage, injectHandoffSection, normalizeHandoffConfig, type HandoffConfig } from '@/lib/server/ai/handoff';
 import { sendTelegramNotification } from '@/lib/extensions/telegram-notify';
 import { PRODUCTION_TOOL_DECLARATIONS, buildToolDeclarationsForAgent, mergeAllowedToolNames, type ToolCall } from '@/lib/ai/tools/registry';
 import { executeTool, type ToolContext } from '@/lib/ai/tools/executor';
@@ -1003,7 +1003,7 @@ export async function runAgentTurn(
     : '';
 
   const stepContext = flow && currentFunnelStep
-    ? `\n\n<funnel_context>\n${compileFlowToPrompt(flow, currentFunnelStep)}\n</funnel_context>`
+    ? `\n\n<funnel_context>\n${compileFlowToPrompt(flow)}\n</funnel_context>`
     : '';
 
   const fullSystemPrompt = `${basePrompt}\n\n${leadContextBlock}${previousConversationBlock}${stepContext}\n\n<knowledge_base>\n${kbContext}\n</knowledge_base>\n\nПравило: отвечай ТОЛЬКО на основе информации выше. Если данных нет — честно скажи об этом.`;
@@ -1222,7 +1222,10 @@ export async function runAgentTurn(
     finalAnswer = finalAnswer || 'Сейчас подключу коллегу, пожалуйста, подождите.';
   }
 
+  let emptyReplyRetryAttempted = false;
+
   if (!finalAnswer.trim() && !handoffTriggered) {
+    emptyReplyRetryAttempted = true;
     console.warn('[PROD] empty reply returned by Gemini, retrying once', { agentId, conversationId, userMessage });
     try {
       const retryResponse = await callGemini(
@@ -1249,7 +1252,36 @@ export async function runAgentTurn(
   }
 
   if (!finalAnswer.trim()) {
-    finalAnswer = handoffConfig.client_message?.trim() || 'Подключаю сотрудника, он уже видит наш диалог';
+    const fallbackPayload = {
+      conversationId,
+      agentId,
+      messages_in_context: conversationContext.messagesAfterSummary.length,
+      context_token_count: conversationContext.contextTokenCount ?? null,
+      promptTokenCount: response?.payload?.usageMetadata?.promptTokenCount ?? null,
+      model: GEMINI_CHAT_MODEL,
+      retry_attempted: emptyReplyRetryAttempted,
+      user_message: userMessage,
+      handoff_triggered: handoffTriggered,
+      tools_used: toolsUsed,
+    };
+
+    console.warn('[PROD] empty reply fallback activated', fallbackPayload);
+
+    if (conversationId) {
+      await admin.from('ai_call_logs').insert({
+        conversation_id: conversationId,
+        request: {
+          type: 'empty_reply_fallback',
+          ...fallbackPayload,
+        },
+        response: {
+          final: getEmptyResponseFallbackMessage(),
+          fallback_reason: 'empty_reply',
+        },
+      });
+    }
+
+    finalAnswer = getEmptyResponseFallbackMessage();
   }
 
   // === PHASE B SECTION 2.4: Call B - Funnel Routing ===
