@@ -45,7 +45,7 @@ export async function POST(request: Request, { params }: { params: { agentId: st
           error_hint: 'Проверьте ссылку, профиль должен быть публичным и доступным для сканирования.',
         },
       })
-      .select('id')
+      .select('id, metadata')
       .single();
 
     if (sourceError || !source) {
@@ -62,7 +62,11 @@ export async function POST(request: Request, { params }: { params: { agentId: st
           await admin.from('kb_sources').update({
             status: 'error',
             metadata: {
-              ...(source.metadata || {}),
+              handle: parsed.handle,
+              requested_posts: 120,
+              provider: 'apify',
+              source_type: 'instagram',
+              error_hint: 'Проверьте ссылку, профиль должен быть публичным и доступным для сканирования.',
               error: error?.message || String(error),
               failed_at: new Date().toISOString(),
             },
