@@ -20,7 +20,9 @@ create or replace function upsert_lead_funnel_state(
   p_current_node_id text,
   p_status text,
   p_is_no_match boolean,
-  p_last_transition_at timestamptz
+  p_last_transition_at timestamptz,
+  p_pending_script_node_id text default null::text,
+  p_pending_script_reply text default null::text
 )
 returns table (
   id uuid,
@@ -30,6 +32,8 @@ returns table (
   status text,
   retry_count integer,
   was_already_paused boolean,
+  pending_script_node_id text,
+  pending_script_reply text,
   last_transition_at timestamptz,
   created_at timestamptz,
   updated_at timestamptz
@@ -44,6 +48,8 @@ declare
   v_current_node_id text;
   v_status text;
   v_retry_count integer;
+  v_pending_script_node_id text;
+  v_pending_script_reply text;
   v_last_transition_at timestamptz;
   v_created_at timestamptz;
   v_updated_at timestamptz;
@@ -66,6 +72,8 @@ begin
     current_node_id,
     status,
     retry_count,
+    pending_script_node_id,
+    pending_script_reply,
     last_transition_at,
     updated_at
   ) values (
@@ -77,6 +85,8 @@ begin
       when p_is_no_match then 1
       else 0
     end,
+    p_pending_script_node_id,
+    p_pending_script_reply,
     p_last_transition_at,
     now()
   )
@@ -88,6 +98,8 @@ begin
       when p_is_no_match then lead_funnel_state.retry_count + 1
       else 0
     end,
+    pending_script_node_id = excluded.pending_script_node_id,
+    pending_script_reply = excluded.pending_script_reply,
     last_transition_at = excluded.last_transition_at,
     updated_at = now()
   returning
@@ -97,6 +109,8 @@ begin
     lead_funnel_state.current_node_id,
     lead_funnel_state.status,
     lead_funnel_state.retry_count,
+    lead_funnel_state.pending_script_node_id,
+    lead_funnel_state.pending_script_reply,
     lead_funnel_state.last_transition_at,
     lead_funnel_state.created_at,
     lead_funnel_state.updated_at
@@ -107,6 +121,8 @@ begin
     v_current_node_id,
     v_status,
     v_retry_count,
+    v_pending_script_node_id,
+    v_pending_script_reply,
     v_last_transition_at,
     v_created_at,
     v_updated_at;
