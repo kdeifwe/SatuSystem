@@ -427,6 +427,7 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
     temperature: typeof agent.temperature === 'number' ? agent.temperature : 0.7,
     topP: typeof agent.top_p === 'number' ? agent.top_p : 0.9,
     maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
+    thinkingConfig: { thinkingBudget: 256 },
   } as Record<string, unknown>;
 
   // === PHASE B SECTION 2.4: Script vs Dynamic split (Call A) ===
@@ -490,6 +491,7 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
   let retryContents = baseContents;
   let searchLookupCount = 0;
   let handoffTriggered = false;
+  let finalReply = '';
   let fallbackReason: string | null = null;
   let forcedFinalization = false;
   let accumulatedToolResults: Array<Record<string, unknown>> = [];
@@ -529,6 +531,10 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
 
       if (call.name === 'redirectToOperator' && toolResult.result && !toolResult.error) {
         handoffTriggered = true;
+        const redirectMessage = typeof toolResult.result === 'object' && toolResult.result && 'message' in toolResult.result
+          ? String((toolResult.result as Record<string, unknown>).message ?? '')
+          : '';
+        finalReply = redirectMessage || finalReply || 'Сейчас подключу коллегу, пожалуйста, подождите.';
         break;
       }
     }
@@ -554,7 +560,7 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
     parts = response.payload.parts;
   }
 
-  let finalReply = (parts as Array<Record<string, unknown>>).filter((part) => typeof part?.text === 'string').map((part) => part.text).join('\n').trim();
+  finalReply = (parts as Array<Record<string, unknown>>).filter((part) => typeof part?.text === 'string').map((part) => part.text).join('\n').trim();
   let rawReply = finalReply;
   let attempt = 1;
   let tokens_input = response.payload.usageMetadata?.promptTokenCount ?? 0;

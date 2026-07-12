@@ -641,7 +641,12 @@ async function callGemini(
   contents: Array<Record<string, unknown>>,
   tools: Array<Record<string, unknown>>,
   previousToolCalls?: Array<Record<string, unknown>>,
-  generationConfig: Record<string, unknown> = { temperature: 0.7, topP: 0.9, maxOutputTokens: 512 },
+  generationConfig: Record<string, unknown> = {
+    temperature: 0.7,
+    topP: 0.9,
+    maxOutputTokens: 2048,
+    thinkingConfig: { thinkingBudget: 256 },
+  },
   retryCount = 0,
 ): Promise<GeminiClientResponse> {
   const fallbackModel = 'gemini-2.5-flash';
@@ -1180,6 +1185,16 @@ export async function runAgentTurn(
       console.log('[PROD_TOOL_RESULT]', { agentId, name: toolCall.name, result: toolResult.result, error: toolResult.error });
 
       if (toolCall.name === 'redirectToOperator' && toolResult.result && !toolResult.error) {
+        const redirectOutcome = await executeRedirectToOperator(
+          admin,
+          agentId,
+          leadId,
+          conversationId,
+          typeof toolCall.args?.reason === 'string' ? toolCall.args.reason : 'Передача оператору',
+          handoffConfig,
+        );
+        finalAnswer = redirectOutcome.answer || finalAnswer;
+        handoffMessage = redirectOutcome.handoffMessage;
         handoffTriggered = true;
         break;
       }
