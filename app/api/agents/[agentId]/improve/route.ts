@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient as createUserClient } from '@/lib/supabase/server';
 import { createClient } from '@supabase/supabase-js';
+import {
+  buildCriticSchema,
+  buildGeneratorSchema,
+  buildValidatorSchema,
+  callGeminiForImprove,
+  extractJsonPayload,
+  logFailedJsonParse,
+} from '@/lib/server/ai/improve-agent';
 
 function getAdmin() {
   return createClient(
@@ -8,89 +16,6 @@ function getAdmin() {
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
     { auth: { autoRefreshToken: false, persistSession: false } }
   );
-}
-
-async function callGemini(apiKey: string, prompt: string, temperature = 0.4): Promise<{ text: string; metadata: any }> {
-  const models = ['gemini-2.5-flash', 'gemini-2.5-pro'];
-  for (const model of models) {
-    try {
-      const requestBody = {
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: { temperature, maxOutputTokens: 8192 },
-      };
-      
-      const bodyJSON = JSON.stringify(requestBody);
-      // ДИАГНОСТИКА: логируем размер тела запроса
-      if (prompt.length > 2000) {
-        console.error('[improve-DIAGNOSTIC] Request body size:', bodyJSON.length, 'chars');
-        console.error('[improve-DIAGNOSTIC] Prompt size:', prompt.length, 'chars');
-      }
-      
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: bodyJSON,
-        }
-      );
-      if (!res.ok) {
-        const errorText = await res.text();
-        console.error(`[improve] ${model} returned ${res.status}:`, errorText.slice(0, 500));
-        continue;
-      }
-      const data = await res.json();
-      const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-      if (text.length > 10) {
-        return {
-          text,
-          metadata: {
-            model,
-            finishReason: data.candidates?.[0]?.finishReason,
-            promptTokenCount: data.usageMetadata?.promptTokenCount,
-            candidatesTokenCount: data.usageMetadata?.candidatesTokenCount,
-          },
-        };
-      }
-    } catch (e) {
-      console.error(`[improve] ${model} error:`, e instanceof Error ? e.message : String(e));
-      continue;
-    }
-  }
-  throw new Error('Все модели Gemini недоступны');
-}
-
-function extractJSON(text: string): Record<string, unknown> {
-  let extractedText = text;
-  
-  // Удаляем markdown блоки (```json ... ``` или ``` ... ```)
-  const markdownMatch = extractedText.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
-  if (markdownMatch) {
-    extractedText = markdownMatch[1];
-  }
-  
-  const start = extractedText.indexOf('{');
-  const end = extractedText.lastIndexOf('}');
-  
-  if (start === -1 || end === -1) {
-    // ДИАГНОСТИКА: логируем полный текст при ошибке
-    console.error('[improve-DIAGNOSTIC] extractJSON failed - no JSON found');
-    console.error('[improve-DIAGNOSTIC] Original response text:', text);
-    console.error('[improve-DIAGNOSTIC] After markdown removal:', extractedText);
-    throw new Error(`JSON не найден в: ${text.slice(0, 200)}`);
-  }
-  
-  const jsonStr = extractedText.slice(start, end + 1);
-  try {
-    return JSON.parse(jsonStr);
-  } catch (parseError) {
-    // ДИАГНОСТИКА: при ошибке парсинга логируем кусок JSON
-    console.error('[improve-DIAGNOSTIC] JSON.parse failed');
-    console.error('[improve-DIAGNOSTIC] Error:', parseError instanceof Error ? parseError.message : String(parseError));
-    console.error('[improve-DIAGNOSTIC] Attempted JSON (first 800 chars):', jsonStr.slice(0, 800));
-    console.error('[improve-DIAGNOSTIC] Attempted JSON (last 500 chars):', jsonStr.slice(-500));
-    throw parseError;
-  }
 }
 
 export async function POST(
@@ -102,8 +27,8 @@ export async function POST(
   if (!user) return NextResponse.json({ error: 'Не авторизован' }, { status: 401 });
 
   const body = await req.json();
-  const { feedback } = body;
-  if (!feedback?.trim()) {
+  const feedback = typeof body?.feedback === 'string' ? body.feedback.trim() : '';
+  if (!feedback) {
     return NextResponse.json({ error: 'Опишите что нужно изменить' }, { status: 400 });
   }
 
@@ -125,7 +50,6 @@ export async function POST(
     `Ты ${agent.name}. Роль: ${agent.role}. Цель: ${agent.goal}.`;
 
   try {
-    // ШАГ 1: Критик — анализирует проблему и находит конкретные слабые места
     console.log('[improve] Step 1: Critic analysis...');
     const criticPrompt = `You are an expert AI sales agent prompt critic.
 
@@ -135,22 +59,58 @@ ${currentPrompt}
 USER COMPLAINT:
 "${feedback}"
 
-Your task: Deeply analyze WHY this problem occurs in the prompt.
-Find the EXACT lines or sections causing this issue.
+Your task: deeply analyze why this problem occurs in the prompt and find the exact sections causing it.
 
-Return raw JSON only (no markdown):
+Return ONLY a single valid JSON object matching this schema exactly:
 {
   "root_cause": "exact reason why this problem exists in the prompt",
   "weak_sections": ["section1 that causes this", "section2 that causes this"],
   "specific_fixes_needed": ["fix1", "fix2", "fix3"],
   "severity": "critical|major|minor"
-}`;
+}
 
-    const criticResponse = await callGemini(apiKey, criticPrompt, 0.3);
-    const criticism = extractJSON(criticResponse.text);
+Rules:
+- Return no markdown, no code fences, no extra commentary.
+- Output must be parseable by JSON.parse.
+- Do not wrap the response in quotes or explanation.`;
+
+    const criticSystemInstruction = 'You are an expert AI sales agent prompt critic. Return ONLY a single valid JSON object matching the requested schema. No markdown, no code fences, no commentary.';
+    const criticResponse = await callGeminiForImprove(
+      apiKey,
+      criticSystemInstruction,
+      criticPrompt,
+      0.3,
+      buildCriticSchema(),
+      {
+        admin,
+        agentId: params.agentId,
+        feedback,
+        phase: 'critic',
+      }
+    );
+
+    let criticism: Record<string, unknown>;
+    try {
+      criticism = extractJsonPayload(criticResponse.text);
+    } catch (parseError) {
+      const message = parseError instanceof Error ? parseError.message : String(parseError);
+      console.error('[improve] Critic JSON parse failed:', message);
+      await logFailedJsonParse(admin, {
+        agentId: params.agentId,
+        feedback,
+        phase: 'critic',
+        prompt: criticPrompt,
+        model: 'gemini',
+        latencyMs: 0,
+        rawText: criticResponse.text,
+        rawResponse: criticResponse.rawResponse ?? null,
+        parseError: message,
+      });
+      throw parseError;
+    }
+
     console.log('[improve] Critic found:', criticism.root_cause);
 
-    // ШАГ 2: Генератор — создаёт улучшенный промпт на основе критики
     console.log('[improve] Step 2: Generating improved prompt...');
     const generatorPrompt = `You are an expert AI sales agent prompt engineer for CIS market (Kazakhstan/Russia).
 
@@ -158,75 +118,140 @@ CURRENT PROMPT TO IMPROVE:
 ${currentPrompt}
 
 IDENTIFIED PROBLEMS:
-- Root cause: ${criticism.root_cause}
-- Weak sections: ${JSON.stringify(criticism.weak_sections)}
-- Required fixes: ${JSON.stringify(criticism.specific_fixes_needed)}
+- Root cause: ${String(criticism.root_cause ?? '')}
+- Weak sections: ${JSON.stringify(criticism.weak_sections ?? [])}
+- Required fixes: ${JSON.stringify(criticism.specific_fixes_needed ?? [])}
 
 USER FEEDBACK: "${feedback}"
 
 IMPROVEMENT RULES:
-1. Keep all existing good parts — only fix the identified problems
-2. Make responses MORE HUMAN: short (1-2 sentences), casual, like texting a friend
-3. Add specific examples of good vs bad responses for the problematic section
-4. Use concrete behavioral instructions, not vague guidelines
-5. Add "ЗАПРЕЩЕНО:" section with 5 specific things the agent must NEVER do
-6. Add "ОБЯЗАТЕЛЬНО:" section with 5 things the agent MUST always do
+1. Keep all existing good parts — only fix the identified problems.
+2. Make responses MORE HUMAN: short (1-2 sentences), casual, like texting a friend.
+3. Add concrete examples of good vs bad responses for the problematic section.
+4. Use behavioral instructions, not vague guidelines.
+5. Add "ЗАПРЕЩЕНО:" section with 5 specific things the agent must NEVER do.
+6. Add "ОБЯЗАТЕЛЬНО:" section with 5 things the agent MUST always do.
 
-Return raw JSON only (no markdown, start with {):
+Return ONLY a single valid JSON object matching this schema exactly:
 {
   "improved_prompt": "the complete improved system prompt in Russian",
   "changes_summary": "2-3 sentences in Russian describing what changed",
   "key_improvements": ["improvement1 in Russian", "improvement2", "improvement3"]
-}`;
+}
 
-    const generatorResponse = await callGemini(apiKey, generatorPrompt, 0.5);
-    const generated = extractJSON(generatorResponse.text);
+Rules:
+- Return no markdown, no code fences, no extra commentary.
+- Output must be parseable by JSON.parse.
+- Do not wrap the response in quotes or explanation.`;
 
-    // ШАГ 3: Валидатор — проверяет что улучшение реально решает проблему
+    const generatorSystemInstruction = 'You are an expert AI sales agent prompt engineer. Return ONLY a single valid JSON object matching the requested schema. No markdown, no code fences, no commentary.';
+    const generatorResponse = await callGeminiForImprove(
+      apiKey,
+      generatorSystemInstruction,
+      generatorPrompt,
+      0.5,
+      buildGeneratorSchema(),
+      {
+        admin,
+        agentId: params.agentId,
+        feedback,
+        phase: 'generator',
+      }
+    );
+
+    let generated: Record<string, unknown>;
+    try {
+      generated = extractJsonPayload(generatorResponse.text);
+    } catch (parseError) {
+      const message = parseError instanceof Error ? parseError.message : String(parseError);
+      console.error('[improve] Generator JSON parse failed:', message);
+      await logFailedJsonParse(admin, {
+        agentId: params.agentId,
+        feedback,
+        phase: 'generator',
+        prompt: generatorPrompt,
+        model: 'gemini',
+        latencyMs: 0,
+        rawText: generatorResponse.text,
+        rawResponse: generatorResponse.rawResponse ?? null,
+        parseError: message,
+      });
+      throw parseError;
+    }
+
     console.log('[improve] Step 3: Validating improvement...');
     const validatorPrompt = `You are a strict QA validator for AI agent prompts.
 
 ORIGINAL PROBLEM: "${feedback}"
-PROPOSED IMPROVEMENT SUMMARY: "${generated.changes_summary}"
+PROPOSED IMPROVEMENT SUMMARY: "${String(generated.changes_summary ?? '')}"
 
 Does the improvement actually solve the stated problem?
 Will the agent now behave differently in a better way?
 
-Return raw JSON only:
+Return ONLY a single valid JSON object matching this schema exactly:
 {
   "is_valid": true,
   "confidence": 0.95,
   "validation_note": "brief note in Russian"
-}`;
+}
+
+Rules:
+- Return no markdown, no code fences, no extra commentary.
+- Output must be parseable by JSON.parse.`;
 
     let isValid = true;
     try {
-      const validatorResponse = await callGemini(apiKey, validatorPrompt, 0.1);
-      const validation = extractJSON(validatorResponse.text);
+      const validatorSystemInstruction = 'You are a strict QA validator. Return ONLY a single valid JSON object matching the requested schema. No markdown, no code fences, no commentary.';
+      const validatorResponse = await callGeminiForImprove(
+        apiKey,
+        validatorSystemInstruction,
+        validatorPrompt,
+        0.1,
+        buildValidatorSchema(),
+        {
+          admin,
+          agentId: params.agentId,
+          feedback,
+          phase: 'validator',
+        }
+      );
+      const validation = extractJsonPayload(validatorResponse.text);
       isValid = validation.is_valid !== false;
       console.log('[improve] Validation:', validation.confidence, validation.validation_note);
-    } catch {
-      console.warn('[improve] Validation step failed, proceeding anyway');
+    } catch (parseError) {
+      const message = parseError instanceof Error ? parseError.message : String(parseError);
+      console.warn('[improve] Validation step failed, proceeding anyway:', message);
+      await logFailedJsonParse(admin, {
+        agentId: params.agentId,
+        feedback,
+        phase: 'validator',
+        prompt: validatorPrompt,
+        model: 'gemini',
+        latencyMs: 0,
+        rawText: '',
+        rawResponse: null,
+        parseError: message,
+      });
     }
 
     return NextResponse.json({
-      improved_prompt: generated.improved_prompt,
-      changes_summary: generated.changes_summary,
-      key_improvements: generated.key_improvements ?? [],
+      improved_prompt: typeof generated.improved_prompt === 'string' ? generated.improved_prompt : currentPrompt,
+      changes_summary: typeof generated.changes_summary === 'string' ? generated.changes_summary : 'Изменения применены.',
+      key_improvements: Array.isArray(generated.key_improvements)
+        ? generated.key_improvements.filter((value): value is string => typeof value === 'string')
+        : [],
       criticism: {
-        root_cause: criticism.root_cause,
-        severity: criticism.severity,
+        root_cause: typeof criticism.root_cause === 'string' ? criticism.root_cause : '',
+        severity: typeof criticism.severity === 'string' ? criticism.severity : 'major',
       },
       is_valid: isValid,
       current_prompt: currentPrompt,
     });
-
   } catch (err) {
     const fullError = err instanceof Error ? err.message : String(err);
     console.error('[improve] Full error details:', fullError);
-    // Return generic error message to user to prevent leaking internal system content
-    return NextResponse.json({ 
-      error: 'Не удалось обработать ответ ассистента. Попробуйте переформулировать запрос.' 
+    return NextResponse.json({
+      error: 'Не удалось обработать ответ ассистента. Попробуйте переформулировать запрос.',
     }, { status: 500 });
   }
 }
