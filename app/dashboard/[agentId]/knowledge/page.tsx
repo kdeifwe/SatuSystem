@@ -25,7 +25,12 @@ type Source = {
   status: string;
   file_size?: number;
   chunks_count: number;
-  metadata?: any;
+  metadata?: {
+    tag?: string;
+    error?: string;
+    error_hint?: string;
+    [key: string]: unknown;
+  };
 };
 
 type Chunk = {
@@ -36,6 +41,8 @@ type Chunk = {
     type?: string;
     title: string;
     source_name?: string;
+    tag?: string;
+    [key: string]: unknown;
   };
   kb_sources?: { title?: string };
   source_id?: string;
