@@ -4,7 +4,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
-import { searchKnowledgeBase, formatChunksForPrompt } from '@/lib/knowledge-base/search';
+import { searchKnowledgeBaseBilingual, formatChunksForPrompt } from '@/lib/knowledge-base/search';
 
 export async function POST(req: NextRequest) {
   const cookieStore = cookies();
@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const chunks = await searchKnowledgeBase(agentId, query, topK ?? 5);
+    const chunks = await searchKnowledgeBaseBilingual(agentId, query, topK ?? 5);
     return NextResponse.json({
       chunks,
       formatted: formatChunksForPrompt(chunks),

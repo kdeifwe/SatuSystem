@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
-import { searchKnowledgeBase, formatChunksForPrompt } from '@/lib/knowledge-base/search';
+import { searchKnowledgeBaseBilingual, formatChunksForPrompt } from '@/lib/knowledge-base/search';
 
 export async function POST(req: NextRequest) {
   const supabase = createClient();
@@ -11,7 +11,7 @@ export async function POST(req: NextRequest) {
   if (!agentId || !query) return NextResponse.json({ error: 'agentId и query обязательны' }, { status: 400 });
 
   try {
-    const chunks = await searchKnowledgeBase(agentId, query, topK ?? 10);
+    const chunks = await searchKnowledgeBaseBilingual(agentId, query, topK ?? 10);
     const formatted = formatChunksForPrompt(chunks);
     return NextResponse.json({ chunks, formatted, count: chunks.length });
   } catch (err) {

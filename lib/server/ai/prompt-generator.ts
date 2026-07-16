@@ -30,30 +30,138 @@ async function callGemini(apiKey: string, prompt: string, temp = 0.7): Promise<s
   throw new Error('Все модели Gemini недоступны');
 }
 
+function repairJsonText(candidate: string): string {
+  let repaired = '';
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < candidate.length; index += 1) {
+    const char = candidate[index];
+
+    if (escaped) {
+      repaired += char;
+      escaped = false;
+      continue;
+    }
+
+    if (char === '\\') {
+      repaired += '\\';
+      escaped = true;
+      continue;
+    }
+
+    if (char === '"') {
+      if (inString) {
+        repaired += '\\"';
+      } else {
+        repaired += '"';
+        inString = true;
+      }
+      continue;
+    }
+
+    if (inString) {
+      if (char === '\n') {
+        repaired += '\\n';
+      } else if (char === '\r') {
+        repaired += '\\r';
+      } else if (char === '\t') {
+        repaired += '\\t';
+      } else {
+        repaired += char;
+      }
+      continue;
+    }
+
+    repaired += char;
+  }
+
+  return repaired;
+}
+
 function extractJSON(text: string): Record<string, any> {
   let extractedText = text;
-  
+
   // Удаляем markdown блоки (```json ... ``` или ``` ... ```)
   const markdownMatch = extractedText.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
   if (markdownMatch) {
     extractedText = markdownMatch[1];
   }
-  
-  const start = extractedText.indexOf('{');
-  const end = extractedText.lastIndexOf('}');
-  
-  if (start === -1 || end === -1) {
-    console.error('[prompt-generator] extractJSON failed - no JSON found');
-    console.error('[prompt-generator] Response text (first 300 chars):', text.slice(0, 300));
-    throw new Error(`JSON не найден: ${text.slice(0, 200)}`);
+
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < extractedText.length; index += 1) {
+    const char = extractedText[index];
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+
+    if (char === '\\') {
+      escaped = true;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) {
+      continue;
+    }
+
+    if (char !== '{') {
+      continue;
+    }
+
+    let depth = 0;
+    let candidateInString = false;
+    let candidateEscaped = false;
+
+    for (let cursor = index; cursor < extractedText.length; cursor += 1) {
+      const candidateChar = extractedText[cursor];
+
+      if (candidateEscaped) {
+        candidateEscaped = false;
+        continue;
+      }
+
+      if (candidateChar === '\\') {
+        candidateEscaped = true;
+        continue;
+      }
+
+      if (candidateChar === '"') {
+        candidateInString = !candidateInString;
+        continue;
+      }
+
+      if (candidateInString) {
+        continue;
+      }
+
+      if (candidateChar === '{') {
+        depth += 1;
+      } else if (candidateChar === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          const jsonText = extractedText.slice(index, cursor + 1);
+          try {
+            return JSON.parse(repairJsonText(jsonText));
+          } catch (parseError) {
+            console.error('[prompt-generator] JSON.parse failed:', parseError instanceof Error ? parseError.message : String(parseError));
+            break;
+          }
+        }
+      }
+    }
   }
-  
-  try {
-    return JSON.parse(extractedText.slice(start, end + 1));
-  } catch (parseError) {
-    console.error('[prompt-generator] JSON.parse failed:', parseError instanceof Error ? parseError.message : String(parseError));
-    throw parseError;
-  }
+
+  console.error('[prompt-generator] extractJSON failed - no JSON object balanced');
+  throw new Error(`JSON не найден: ${text.slice(0, 200)}`);
 }
 
 export type { BusinessInfo, GeneratedPrompt } from './types';
@@ -165,6 +273,7 @@ ${generated.human_communication_style}
 
 <communication_rules>
 ${generated.communication_rules}
+Если клиент назвал класс обучения (например "он бір", "9 сыныпта", "11 класс"), немедленно вызови update_lead_info и сохрани число класса в attributes.grade, прежде чем отвечать дальше.
 </communication_rules>
 
 <target_audience>
@@ -175,6 +284,9 @@ ${analysis.target_audience}
 
 <knowledge_base_principles>
 ${generated.knowledge_base_principles}
+Если searchKnowledgeBase вернул чанк, который относится к другому классу/программе, чем указано в attributes.grade клиента, не используй его.
+Если найден чанк без явной привязки к классу (общий) или точно совпадающий с классом клиента, используй его напрямую, с фактическими цифрами.
+Никогда не отвечай "уточню у коллег", если запрошенный факт реально есть в найденном контексте — используй его.
 </knowledge_base_principles>
 
 <dialogue_flow>
@@ -195,7 +307,7 @@ ${generated.example_conversations}
 <tools_calling_instructions>
 searchKnowledgeBase — перед любым фактическим утверждением о цене/наличии/условиях.
 redirectToOperator — при жалобе, явной просьбе о человеке, или если не можешь помочь.
-update_lead_info — когда клиент назвал имя, телефон, email.
+update_lead_info — когда клиент назвал имя, телефон, email или класс. Сохраняй все данные в lead.attributes, например grade. Если клиент назвал класс обучения, немедленно сохрани его в attributes.grade, прежде чем отвечать дальше.
 add_lead_note — важная деталь для команды.
 Не вызывай инструменты без явного повода в диалоге.
 </tools_calling_instructions>`;
