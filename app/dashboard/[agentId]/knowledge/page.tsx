@@ -38,6 +38,7 @@ type Chunk = {
     source_name?: string;
   };
   kb_sources?: { title?: string };
+  source_id?: string;
 };
 
 const tabItems = [
@@ -152,6 +153,7 @@ export default function KnowledgePage() {
   const [isLoading, setIsLoading] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isRefreshingLinks, setIsRefreshingLinks] = useState(false);
+  const [tagsDraft, setTagsDraft] = useState<Record<string, string>>({});
 
   const fetchSources = async () => {
     if (!agentId) return;
@@ -159,6 +161,11 @@ export default function KnowledgePage() {
       const response = await fetch(`/api/agents/${agentId}/knowledge/sources`);
       const data = await response.json();
       setSources(data.sources || []);
+      const initialTags: Record<string, string> = {};
+      (data.sources || []).forEach((s: any) => {
+        initialTags[s.id] = s.metadata?.tag || '';
+      });
+      setTagsDraft(initialTags);
     } catch (error) {
       console.error(error);
     }
@@ -241,6 +248,113 @@ export default function KnowledgePage() {
       setSources(previousSources);
       console.error('[KB] Retry source failed:', error);
       alert(error instanceof Error ? error.message : 'Не удалось повторить обработку');
+    }
+  };
+
+  const saveSourceTag = async (sourceId: string) => {
+    const tag = tagsDraft[sourceId] ?? '';
+    try {
+      const response = await fetch(`/api/agents/${agentId}/knowledge/sources/${sourceId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tag }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Ошибка сохранения метки');
+      fetchSources();
+    } catch (err) {
+      console.error('[KB] Save tag failed', err);
+      alert((err as Error).message || 'Не удалось сохранить метку');
+    }
+  };
+
+  const [tagModalOpen, setTagModalOpen] = useState(false);
+  const [modalSourceId, setModalSourceId] = useState<string | null>(null);
+  const [modalTagDraft, setModalTagDraft] = useState('');
+  const [tagSuggestions, setTagSuggestions] = useState<string[]>([]);
+
+  // For chunk tag modal
+  const [chunkTagModalOpen, setChunkTagModalOpen] = useState(false);
+  const [modalChunkId, setModalChunkId] = useState<string | null>(null);
+  const [modalChunkTagDraft, setModalChunkTagDraft] = useState('');
+
+  const fetchTagSuggestions = async () => {
+    if (!agentId) return;
+    try {
+      const res = await fetch(`/api/agents/${agentId}/knowledge/tags`);
+      const data = await res.json();
+      if (res.ok) setTagSuggestions(data.tags || []);
+    } catch (err) {
+      console.error('[KB] failed to fetch tag suggestions', err);
+    }
+  };
+
+  const openTagModalForSource = async (sourceId: string) => {
+    if (!sourceId) return;
+    const existing = tagsDraft[sourceId] ?? (sources.find((s) => s.id === sourceId)?.metadata?.tag) ?? '';
+    setModalSourceId(sourceId);
+    setModalTagDraft(existing);
+    setTagModalOpen(true);
+    await fetchTagSuggestions();
+  };
+
+  const closeTagModal = () => {
+    setTagModalOpen(false);
+    setModalSourceId(null);
+    setModalTagDraft('');
+  };
+
+  const saveModalTag = async () => {
+    if (!modalSourceId) return;
+    try {
+      const response = await fetch(`/api/agents/${agentId}/knowledge/sources/${modalSourceId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tag: modalTagDraft }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Ошибка сохранения метки');
+      setTagsDraft((prev) => ({ ...prev, [modalSourceId]: modalTagDraft }));
+      fetchSources();
+      fetchChunks();
+      closeTagModal();
+    } catch (err) {
+      console.error('[KB] Save modal tag failed', err);
+      alert((err as Error).message || 'Не удалось сохранить метку');
+    }
+  };
+
+  const openChunkTagModal = async (chunkId: string) => {
+    if (!chunkId) return;
+    const chunk = chunks.find((c) => c.id === chunkId);
+    const existing = chunk?.metadata?.tag ?? '';
+    setModalChunkId(chunkId);
+    setModalChunkTagDraft(existing);
+    setChunkTagModalOpen(true);
+    await fetchTagSuggestions();
+  };
+
+  const closeChunkTagModal = () => {
+    setChunkTagModalOpen(false);
+    setModalChunkId(null);
+    setModalChunkTagDraft('');
+  };
+
+  const saveChunkTagModal = async () => {
+    if (!modalChunkId) return;
+    try {
+      const response = await fetch(`/api/agents/${agentId}/knowledge/chunks/${modalChunkId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tag: modalChunkTagDraft }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Ошибка сохранения метки');
+      fetchChunks();
+      closeChunkTagModal();
+    } catch (err) {
+      console.error('[KB] Save chunk tag failed', err);
+      alert((err as Error).message || 'Не удалось сохранить метку');
     }
   };
 
@@ -466,6 +580,17 @@ export default function KnowledgePage() {
                         {(source.status === 'done' || source.status === 'ready') && <span className="text-xs text-green-600">готово</span>}
                         {source.status === 'error' && <span className="text-xs text-red-600">ошибка</span>}
                       </div>
+                      <div className="mt-2 flex items-center gap-2">
+                        <button
+                          onClick={() => openTagModalForSource(source.id)}
+                          title="Метка"
+                          className="inline-flex items-center gap-2 px-3 py-1 border border-gray-200 rounded-xl text-sm text-gray-700 hover:bg-gray-50"
+                        >
+                          {/* simple tag icon using text */}
+                          <span>🏷️</span>
+                          {source.metadata?.tag ? <span className="text-xs text-gray-600">{source.metadata.tag}</span> : <span className="text-xs text-gray-400">Добавить метку</span>}
+                        </button>
+                      </div>
                       {source.status === 'error' && (
                         <div className="mt-2 text-xs text-red-600">
                           <div>{source.metadata?.error || 'Ошибка обработки'}</div>
@@ -580,6 +705,9 @@ export default function KnowledgePage() {
                       </button>
                       <button onClick={() => handleDeleteChunk(chunk.id)} className="p-1 hover:text-red-500" aria-label="Удалить">
                         <Trash2 size={15} />
+                      </button>
+                      <button onClick={() => openChunkTagModal(chunk.id)} className="p-1 hover:text-gray-700" aria-label="Метка">
+                        <span className="text-sm">🏷️</span>
                       </button>
                     </div>
                   </div>
@@ -927,6 +1055,88 @@ export default function KnowledgePage() {
                 >
                   {isUploading ? 'Сохранение...' : 'Сохранить'}
                 </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tagModalOpen && modalSourceId && (
+        <div className="fixed inset-0 z-60 bg-black/40 flex items-center justify-center p-4">
+          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-xl">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">Метка источника</h3>
+                <p className="text-sm text-gray-500">Изменить или очистить метку для источника</p>
+              </div>
+              <button onClick={closeTagModal} className="p-2 rounded-xl text-gray-500 hover:bg-gray-100">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="space-y-3">
+              <input
+                value={modalTagDraft}
+                onChange={(e) => setModalTagDraft(e.target.value)}
+                placeholder="Введите метку"
+                className="w-full border border-gray-200 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              {tagSuggestions.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {tagSuggestions.map((t) => (
+                    <button
+                      key={t}
+                      onClick={() => setModalTagDraft(t)}
+                      className="text-sm px-3 py-1 border border-gray-200 rounded-full text-gray-700 hover:bg-gray-50"
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className="flex justify-end gap-3 pt-3 border-t border-gray-100">
+                <button onClick={() => { setModalTagDraft(''); }} className="px-4 py-2 rounded-2xl border border-gray-200 text-sm text-gray-600 hover:bg-gray-50">Очистить</button>
+                <button onClick={saveModalTag} className="px-4 py-2 rounded-2xl bg-gray-900 text-sm text-white">Сохранить</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {chunkTagModalOpen && modalChunkId && (
+        <div className="fixed inset-0 z-60 bg-black/40 flex items-center justify-center p-4">
+          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-xl">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">Метка элемента</h3>
+                <p className="text-sm text-gray-500">Изменить или очистить метку для этого элемента</p>
+              </div>
+              <button onClick={closeChunkTagModal} className="p-2 rounded-xl text-gray-500 hover:bg-gray-100">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="space-y-3">
+              <input
+                value={modalChunkTagDraft}
+                onChange={(e) => setModalChunkTagDraft(e.target.value)}
+                placeholder="Введите метку"
+                className="w-full border border-gray-200 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              {tagSuggestions.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {tagSuggestions.map((t) => (
+                    <button
+                      key={t}
+                      onClick={() => setModalChunkTagDraft(t)}
+                      className="text-sm px-3 py-1 border border-gray-200 rounded-full text-gray-700 hover:bg-gray-50"
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className="flex justify-end gap-3 pt-3 border-t border-gray-100">
+                <button onClick={() => { setModalChunkTagDraft(''); }} className="px-4 py-2 rounded-2xl border border-gray-200 text-sm text-gray-600 hover:bg-gray-50">Очистить</button>
+                <button onClick={saveChunkTagModal} className="px-4 py-2 rounded-2xl bg-gray-900 text-sm text-white">Сохранить</button>
               </div>
             </div>
           </div>

@@ -227,6 +227,7 @@ export async function processSource(sourceId: string, agentId: string, useAI: bo
           type: category,
           title: item.title,
           source_name: source.title,
+          tag: source.metadata?.tag,
         },
       });
     }

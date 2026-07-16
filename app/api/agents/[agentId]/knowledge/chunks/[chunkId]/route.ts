@@ -39,6 +39,15 @@ export async function PUT(
       ...(body.title ? { title: String(body.title).trim() } : {}),
     };
 
+    // Handle tag field
+    const rawTag = body?.tag ?? null;
+    const tag = typeof rawTag === 'string' ? rawTag.trim() : null;
+    if (tag === null || tag === '') {
+      delete updatedMetadata.tag;
+    } else {
+      updatedMetadata.tag = tag;
+    }
+
     const updates: Record<string, unknown> = { metadata: updatedMetadata };
 
     if (typeof body.content === 'string' && body.content.trim()) {
