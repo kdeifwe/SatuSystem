@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { NextRequest } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { runAgentTurn } from '@/lib/server/ai/orchestrator';
+import { runAgentTurnWithLead } from '@/lib/server/ai/orchestrator';
 import { splitAgentMessage, calculateTypingDelay } from '@/lib/server/ai/message-splitter';
 import { sendWhatsAppMessage } from '@/lib/channels/whatsapp';
 
@@ -25,6 +25,8 @@ export async function verifyWhatsAppWebhook(req: NextRequest) {
     .select('credentials')
     .eq('type', 'whatsapp')
     .eq('is_active', true)
+    .order('created_at', { ascending: true })
+    .limit(1)
     .maybeSingle();
 
   const verifyToken = (channel?.credentials as Record<string, unknown> | null)?.webhook_verify_token;
@@ -38,7 +40,18 @@ export async function verifyWhatsAppWebhook(req: NextRequest) {
 
 export async function handleWhatsAppWebhook(req: NextRequest) {
   const rawBody = await req.text();
-  const channel = await getActiveWhatsAppChannel();
+
+  let body: any;
+  try {
+    body = JSON.parse(rawBody);
+  } catch (error) {
+    console.error('[whatsapp webhook] invalid JSON body', error);
+    return new Response('Bad Request', { status: 400 });
+  }
+
+  const phoneNumberId = body?.entry?.[0]?.changes?.[0]?.value?.metadata?.phone_number_id;
+  const channel = await resolveWhatsAppChannelByPhoneNumberId(phoneNumberId);
+
   const rawAppSecret = (channel?.credentials as Record<string, unknown> | null)?.app_secret;
   const appSecret: string | undefined =
     typeof rawAppSecret === 'string' ? rawAppSecret : (process.env.WHATSAPP_APP_SECRET ?? undefined);
@@ -49,30 +62,35 @@ export async function handleWhatsAppWebhook(req: NextRequest) {
     return new Response('Unauthorized', { status: 401 });
   }
 
-  try {
-    const body = JSON.parse(rawBody);
-    setImmediate(() => {
-      void processIncomingWhatsAppMessage(body);
-    });
-  } catch (error) {
-    console.error('[whatsapp webhook] invalid JSON body', error);
-    return new Response('Bad Request', { status: 400 });
-  }
+  setImmediate(() => {
+    void processIncomingWhatsAppMessage(body);
+  });
 
   return new Response('OK', { status: 200 });
 }
 
-async function getActiveWhatsAppChannel() {
+async function resolveWhatsAppChannelByPhoneNumberId(phoneNumberId: string | undefined | null) {
+  if (!phoneNumberId) {
+    console.error('[whatsapp webhook] phone_number_id missing in webhook payload, cannot resolve channel');
+    return null;
+  }
+
   const admin = getAdmin();
   const { data: channel, error } = await admin
     .from('channels')
     .select('id, org_id, credentials')
     .eq('type', 'whatsapp')
     .eq('is_active', true)
+    .eq('credentials->>phone_number_id', phoneNumberId)
     .maybeSingle();
 
   if (error) {
-    console.error('[whatsapp webhook] failed to load active WhatsApp channel', error);
+    console.error('[whatsapp webhook] failed to resolve channel by phone_number_id', phoneNumberId, error);
+    return null;
+  }
+
+  if (!channel) {
+    console.error('[whatsapp webhook] no active whatsapp channel found for phone_number_id', phoneNumberId);
     return null;
   }
 
@@ -111,7 +129,7 @@ async function verifyMetaSignature(req: NextRequest, rawBody: string, appSecret?
   }
 }
 
-async function processIncomingWhatsAppMessage(body: any) {
+export async function processIncomingWhatsAppMessage(body: any) {
   try {
     const entry = body.entry?.[0];
     const changes = entry?.changes?.[0];
@@ -143,15 +161,11 @@ async function processIncomingWhatsAppMessage(body: any) {
       return;
     }
 
-    const { data: channel } = await admin
-      .from('channels')
-      .select('id, org_id, credentials')
-      .eq('type', 'whatsapp')
-      .eq('is_active', true)
-      .maybeSingle();
+    const webhookPhoneNumberId = value?.metadata?.phone_number_id;
+    const channel = await resolveWhatsAppChannelByPhoneNumberId(webhookPhoneNumberId);
 
     if (!channel) {
-      console.error('[whatsapp webhook] channel not found');
+      console.error('[whatsapp webhook] channel not found for phone_number_id', webhookPhoneNumberId);
       return;
     }
 
@@ -251,12 +265,13 @@ async function processIncomingWhatsAppMessage(body: any) {
       return;
     }
 
-    await admin.from('messages').insert({
+    const { data: insertedUserMessage } = await admin.from('messages').insert({
       conversation_id: conversation.id,
       sender: 'user',
       content: text,
       external_message_id: externalMessageId,
-    });
+    }).select('id').single();
+    const currentUserMessageId = insertedUserMessage?.id ?? null;
 
     if (!lead.ai_enabled) {
       return;
@@ -279,7 +294,7 @@ async function processIncomingWhatsAppMessage(body: any) {
       .filter((message) => message.text.length > 0);
 
     const systemPrompt = agent.system_prompt_compiled ?? `Ты ${agent.name}`;
-    const { answer } = await runAgentTurn(agent.id, systemPrompt, text, historyFormatted);
+    const { answer } = await runAgentTurnWithLead(agent.id, systemPrompt, text, historyFormatted, lead.id, currentUserMessageId);
 
     const capabilities = agent.general_capabilities ?? {};
     const parts = splitAgentMessage(answer, capabilities.split_messages ?? true).slice(0, capabilities.split_max_parts ?? 2);

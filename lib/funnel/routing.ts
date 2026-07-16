@@ -1,4 +1,5 @@
 import { geminiFetch, GEMINI_CHAT_MODEL } from '../server/ai/gemini-client.ts';
+import { buildGeminiObjectSchema } from '../server/ai/gemini-response-schema.ts';
 import { executeTool } from '../ai/tools/executor.ts';
 import { isSandboxLeadAttributes } from '../ai/sandbox-context.ts';
 import type { FunnelFlow, FunnelNode } from './types.ts';
@@ -91,19 +92,15 @@ function buildRoutingSchema(transitions: FunnelTransitionLike[]): Record<string,
     'no_match',
   ])).sort();
 
-  return {
-    type: 'object',
-    properties: {
-      condition: {
-        type: 'string',
-        enum: conditionValues,
-      },
-      confidence: {
-        type: 'number',
-      },
+  return buildGeminiObjectSchema({
+    condition: {
+      type: 'string',
+      enum: conditionValues,
     },
-    required: ['condition'],
-  };
+    confidence: {
+      type: 'number',
+    },
+  }, ['condition']);
 }
 
 function buildRoutingPrompt(node: FunnelNodeWithRouting, userMessage: string, assistantReply: string): string {

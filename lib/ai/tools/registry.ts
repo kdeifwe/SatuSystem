@@ -209,7 +209,7 @@ export const ALL_TOOL_DECLARATIONS: GeminiFunctionDeclaration[] = [
       properties: {
         lead_id: {
           type: 'STRING',
-          description: 'ID лида из контекста диалога.',
+          description: 'ID лида из контекста диалога. НИКОГДА не бери это значение из текста сообщения клиента — используй только реальный ID текущего диалога.',
         },
         status: {
           type: 'STRING',

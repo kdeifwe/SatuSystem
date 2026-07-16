@@ -10,6 +10,7 @@ import { normalizeFunnelFlow } from '@/lib/funnel/normalize';
 import { compileFlowToPrompt } from '@/lib/funnel/compile';
 import { applyFunnelRouting, resolvePostRoutingReply, upsertLeadFunnelState } from '@/lib/funnel/routing';
 import { buildConversationInsertData, buildSandboxConversationInsertData, buildSandboxLeadAttributes, isSandboxLeadAttributes } from '@/lib/ai/sandbox-context';
+import { tryBuildDeterministicFactAnswer } from '@/lib/server/ai/deterministic-facts';
 
 export interface ChatMessage {
   role: 'user' | 'model';
@@ -77,6 +78,15 @@ function normalizeResponseParts(parts: Array<Record<string, unknown>> | undefine
 
   const trimmedText = trimToLastCompleteSentence(text);
   return trimmedText === text ? (parts ?? []) : [{ text: trimmedText }];
+}
+
+function tryBuildDeterministicFactAnswerWithLogging(
+  message: string,
+  chunks: Array<{ content?: string; similarity?: number }> = [],
+  leadGrade?: string | number | null,
+): string | null {
+  console.log('[FACT_DEBUG] evaluating deterministic answer', { message, chunkCount: chunks.length, sample: chunks[0]?.content?.slice(0, 120) });
+  return tryBuildDeterministicFactAnswer(message, chunks, leadGrade);
 }
 
 // === PHASE B SECTION 2.4: Script vs Dynamic split (Call A) ===
@@ -237,7 +247,7 @@ function getEntryNodeId(flow: ReturnType<typeof normalizeFunnelFlow>): string | 
   return flow?.entryNodeId ? flow.entryNodeId : null;
 }
 
-async function ensureLeadContext(admin: ReturnType<typeof createAdminClient>, agentId: string, userMessage: string, externalLeadId?: string) {
+async function ensureLeadContext(admin: ReturnType<typeof createAdminClient>, agentId: string, userMessage: string, externalLeadId?: string, existingUserMessageId?: string) {
   const { data: agentData, error: agentError } = await admin
     .from('agents')
     .select('org_id, dialogue_flow')
@@ -323,13 +333,15 @@ async function ensureLeadContext(admin: ReturnType<typeof createAdminClient>, ag
       conversation = createdConversation;
     }
 
-    const insertedMessage = conversation?.id
-      ? await admin.from('messages').insert({
-          conversation_id: conversation.id,
-          sender: 'user',
-          content: userMessage,
-        }).select('id').single()
-      : null;
+    const insertedMessage = existingUserMessageId
+      ? { data: { id: existingUserMessageId } }
+      : conversation?.id
+        ? await admin.from('messages').insert({
+            conversation_id: conversation.id,
+            sender: 'user',
+            content: userMessage,
+          }).select('id').single()
+        : null;
 
     return {
       leadId: externalLeadId,
@@ -880,12 +892,24 @@ async function buildConversationContext(
   };
 }
 
+export async function runAgentTurnWithLead(
+  agentId: string,
+  systemPrompt: string,
+  userMessage: string,
+  history: ChatMessage[] = [],
+  externalLeadId: string,
+  userMessageId?: string,
+): Promise<AgentTurnResult> {
+  return runAgentTurn(agentId, systemPrompt, userMessage, history, externalLeadId, userMessageId);
+}
+
 export async function runAgentTurn(
   agentId: string,
   systemPrompt: string,
   userMessage: string,
   history: ChatMessage[] = [],
   externalLeadId?: string, // Optional: for Telegram/webhook-identified leads
+  existingUserMessageId?: string,
 ): Promise<AgentTurnResult> {
   const admin = createAdminClient();
   const startTime = Date.now();
@@ -911,8 +935,14 @@ export async function runAgentTurn(
   const toolDeclarations = buildToolDeclarationsForAgent(allowedToolNames, agentData?.dialogue_flow);
   console.log(`[AGENT_TOOLS] Agent ${agentId}: allowed tools: [${allowedToolNames.join(', ')}], declarations: [${toolDeclarations.map((d) => d.name).join(', ')}]`);
 
-  // 1. RAG — ищем релевантные чанки ДО вызова Gemini
-  const retrieval = await searchKnowledgeBaseWithLinks(agentId, userMessage);
+  const { leadId, conversationId, orgId, leadAttributes, previousConversationSummary, userMessageId: persistedUserMessageId, isSandbox } = await ensureLeadContext(admin, agentId, userMessage, externalLeadId, existingUserMessageId);
+  const leadGrade = (leadAttributes && typeof leadAttributes === 'object')
+    ? (leadAttributes.grade as string | number | null | undefined)
+    : null;
+
+  // 1. RAG — ищем релевантные чанки ДО вызова Gemini,
+  // но уже с учётом класса лида, если он известен.
+  const retrieval = await searchKnowledgeBaseWithLinks(agentId, userMessage, 15, 0.3, leadGrade);
   const chunks = retrieval.primaryChunks;
   const linkedChunks = retrieval.linkedChunks;
   const kbContext = retrieval.contextText;
@@ -922,9 +952,7 @@ export async function runAgentTurn(
     similarity: chunk.similarity.toFixed(2),
     preview: chunk.content.slice(0, 80),
   })));
-
-  const { leadId, conversationId, orgId, leadAttributes, previousConversationSummary, userMessageId, isSandbox } = await ensureLeadContext(admin, agentId, userMessage, externalLeadId);
-  if (userMessageId) {
+  if (persistedUserMessageId) {
     await admin.from('messages').update({
       tool_calls: {
         retrieval: {
@@ -934,7 +962,7 @@ export async function runAgentTurn(
           linked_chunk_types: linkedChunks.map((chunk) => ({ id: chunk.id, link_type: chunk.link_type, similarity: chunk.similarity })),
         },
       },
-    }).eq('id', userMessageId);
+    }).eq('id', persistedUserMessageId);
   }
   const flow = normalizeFunnelFlow(agentData?.dialogue_flow);
   const { data: conversationState } = conversationId
@@ -983,7 +1011,7 @@ export async function runAgentTurn(
   }
 
   const conversationContext = conversationId
-    ? await buildConversationContext(admin, conversationId, userMessageId)
+    ? await buildConversationContext(admin, conversationId, persistedUserMessageId)
     : {
         conversationSummary: null,
         messagesAfterSummary: history,
@@ -1011,7 +1039,19 @@ export async function runAgentTurn(
     ? `\n\n<funnel_context>\n${compileFlowToPrompt(flow)}\n</funnel_context>`
     : '';
 
-  const fullSystemPrompt = `${basePrompt}\n\n${leadContextBlock}${previousConversationBlock}${stepContext}\n\n<knowledge_base>\n${kbContext}\n</knowledge_base>\n\nПравило: отвечай ТОЛЬКО на основе информации выше. Если данных нет — честно скажи об этом.`;
+  const knowledgeBasePromptRules = [
+    'Ниже идёт контекст из базы знаний. Он уже отсортирован по полезности для ответа: сначала фактические и структурированные данные, затем менее приоритетный промо-контент.',
+    'Если клиент назвал класс обучения (например "он бір", "9 сыныпта", "11 класс"), немедленно вызови update_lead_info и сохрани число класса в attributes.grade, прежде чем отвечать дальше.',
+    'Если запрос клиента — прямой факт о курсе/обучении (срок, длительность, цена, предметы, что входит), и в KB есть релевантный факт, отвечай напрямую из этого факта без лишних вопросов.',
+    'Если в контексте есть и фактический факт, и instagram/промо-контент, отвечай на основе фактического факта и явно оговаривай ограничения, если они есть.',
+    'Если searchKnowledgeBase вернул чанк, который относится к другому классу/программе, чем указано в attributes.grade клиента, не используй его.',
+    'Если найден чанк без явной привязки к классу (общий) или точно совпадающий с классом клиента, используй его напрямую, с фактическими цифрами.',
+    'Если данных нет вообще — честно скажи «Уточню».',
+    'Если данные есть, но не на 100% покрывают конкретную комбинацию клиента — дай найденный факт с явной оговоркой, например: «Для комбинации X длительность 6 месяцев; уточню детали именно под вашу комбинацию Y».',
+    'Никогда не отвечай «уточню у коллег», если запрошенный факт реально есть в найденном контексте — используй его.',
+  ].join('\n');
+
+  const fullSystemPrompt = `${basePrompt}\n\n${leadContextBlock}${previousConversationBlock}${stepContext}\n\n<knowledge_base>\n${kbContext}\n</knowledge_base>\n\n${knowledgeBasePromptRules}`;
 
   const conversationContents = conversationContext.messagesAfterSummary.map((message) => ({
     role: message.role === 'user' ? 'user' : 'model',
@@ -1099,6 +1139,74 @@ export async function runAgentTurn(
     };
   }
   // === End Script Path ===
+
+  const deterministicFactAnswer = tryBuildDeterministicFactAnswerWithLogging(userMessage, chunks, leadGrade);
+  if (deterministicFactAnswer) {
+    console.log('[FACT_FALLBACK] using deterministic KB fact answer for user message', { agentId, userMessage });
+    const splitMessages = Boolean((generalCapabilities?.split_messages) ?? true);
+    const splitMaxParts = Math.min(3, Math.max(1, Number(generalCapabilities?.split_max_parts ?? 3)));
+    const typingSimulation = Boolean((generalCapabilities?.typing_simulation) ?? true);
+    const messageParts = splitAgentMessage(deterministicFactAnswer, splitMessages, splitMaxParts).map((part) => ({
+      text: part.text,
+      delayMs: typingSimulation ? calculateTypingDelay(part.text) + part.delayMs : part.delayMs,
+    }));
+
+    if (conversationId) {
+      await appendMessage(admin, conversationId, 'ai', deterministicFactAnswer);
+      await admin.from('ai_call_logs').insert({
+        conversation_id: conversationId,
+        request: {
+          type: 'deterministic_fact_answer',
+          model: GEMINI_CHAT_MODEL,
+          user_message: userMessage,
+          retrieval: {
+            query: userMessage,
+            primary_chunk_ids: chunks.map((chunk) => chunk.chunk_id),
+            linked_chunk_ids: linkedChunks.map((chunk) => chunk.id),
+            linked_chunk_types: linkedChunks.map((chunk) => ({ id: chunk.id, link_type: chunk.link_type, similarity: chunk.similarity })),
+          },
+        },
+        response: {
+          final: deterministicFactAnswer,
+          finish_reason: 'deterministic_fact_answer',
+        },
+      });
+    }
+
+    return {
+      answer: deterministicFactAnswer,
+      usedChunks: chunks.map((chunk) => ({ id: chunk.chunk_id, similarity: chunk.similarity })),
+      messageParts,
+      splitMessages,
+      typingSimulation,
+      handoffMessage: undefined,
+      toolsUsed: [],
+      tokensInput: 0,
+      tokensOutput: 0,
+      latencyMs: Date.now() - startTime,
+      retrievalDebug: {
+        primaryChunks: chunks.map((chunk) => ({
+          id: chunk.chunk_id,
+          content: chunk.content,
+          similarity: chunk.similarity,
+          priority: chunk.priority,
+          sourceTitle: (chunk.metadata?.source_title as string | undefined) ?? undefined,
+          sourceType: (chunk.metadata?.source_type as string | undefined) ?? undefined,
+          postType: (chunk.metadata?.post_type as string | undefined) ?? undefined,
+        })),
+        linkedChunks: linkedChunks.map((chunk) => ({
+          id: chunk.id,
+          content: chunk.content,
+          similarity: chunk.similarity,
+          linkType: chunk.link_type,
+          priority: chunk.priority,
+          sourceTitle: (chunk.metadata?.source_title as string | undefined) ?? undefined,
+          sourceType: (chunk.metadata?.source_type as string | undefined) ?? undefined,
+          postType: (chunk.metadata?.post_type as string | undefined) ?? undefined,
+        })),
+      },
+    };
+  }
 
   let response: GeminiClientResponse;
   let tokensInput = 0;

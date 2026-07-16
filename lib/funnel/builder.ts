@@ -1,46 +1,31 @@
 import { geminiFetch, GEMINI_CHAT_MODEL } from '@/lib/server/ai/gemini-client';
+import { buildGeminiObjectSchema } from '@/lib/server/ai/gemini-response-schema';
 import type { FunnelFlow } from './types';
 
-const FLOW_SCHEMA = {
-  type: 'object',
-  properties: {
-    nodes: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          id: { type: 'string' },
-          title: { type: 'string' },
-          content: { type: 'string' },
-          position: {
-            type: 'object',
-            properties: {
-              x: { type: 'number' },
-              y: { type: 'number' },
-            },
-            required: ['x', 'y'],
-          },
-        },
-        required: ['id', 'title', 'content'],
-      },
-    },
-    edges: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          id: { type: 'string' },
-          from: { type: 'string' },
-          to: { type: 'string' },
-          label: { type: 'string' },
-        },
-        required: ['id', 'from', 'to', 'label'],
-      },
-    },
-    entryNodeId: { type: 'string' },
+const FLOW_SCHEMA = buildGeminiObjectSchema({
+  nodes: {
+    type: 'array',
+    items: buildGeminiObjectSchema({
+      id: { type: 'string' },
+      title: { type: 'string' },
+      content: { type: 'string' },
+      position: buildGeminiObjectSchema({
+        x: { type: 'number' },
+        y: { type: 'number' },
+      }, ['x', 'y']),
+    }, ['id', 'title', 'content']),
   },
-  required: ['nodes', 'edges', 'entryNodeId'],
-};
+  edges: {
+    type: 'array',
+    items: buildGeminiObjectSchema({
+      id: { type: 'string' },
+      from: { type: 'string' },
+      to: { type: 'string' },
+      label: { type: 'string' },
+    }, ['id', 'from', 'to', 'label']),
+  },
+  entryNodeId: { type: 'string' },
+}, ['nodes', 'edges', 'entryNodeId']);
 
 const SYSTEM_PROMPT = `Ты — конструктор воронок продаж. Пользователь на естественном языке описывает свой процесс продаж и твоя задача — превратить это описание в структурированный граф шагов.
 

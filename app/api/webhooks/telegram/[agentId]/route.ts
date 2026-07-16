@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { runAgentTurn } from '@/lib/server/ai/orchestrator';
+import { runAgentTurnWithLead } from '@/lib/server/ai/orchestrator';
 import { splitAgentMessage, calculateTypingDelay } from '@/lib/server/ai/message-splitter';
 
 function getAdmin() {
@@ -69,12 +69,17 @@ async function handleUpdate(update: any, agentId: string) {
 
     console.log('[TG webhook] Agent found:', agent.name, 'org:', agent.org_id);
 
-    // 2. Получаем channel с токеном
+    // 2. Получаем channel с токеном — строго в рамках org_id этого агента.
+    // Без фильтра по org_id при нескольких активных telegram-каналах уйдём
+    // в чужую организацию, а maybeSingle() бросит ошибку при >1 совпадении.
     const { data: channel, error: chErr } = await admin
       .from('channels')
       .select('id, credentials')
       .eq('type', 'telegram')
+      .eq('org_id', agent.org_id)
       .eq('is_active', true)
+      .order('created_at', { ascending: true })
+      .limit(1)
       .maybeSingle();
 
     if (chErr || !channel) {
@@ -178,12 +183,13 @@ async function handleUpdate(update: any, agentId: string) {
     }
 
     // 6. Сохраняем входящее сообщение
-    await admin.from('messages').insert({
+    const { data: insertedUserMessage } = await admin.from('messages').insert({
       conversation_id: conversation.id,
       sender: 'user',
       content: text,
       external_message_id: externalMessageId,
-    });
+    }).select('id').single();
+    const currentUserMessageId = insertedUserMessage?.id ?? null;
 
     // 7. Если AI выключен для этого лида — не отвечаем
     if (!lead.ai_enabled) {
@@ -214,7 +220,7 @@ async function handleUpdate(update: any, agentId: string) {
     const systemPrompt = agent.system_prompt_compiled ?? 
       `Ты ${agent.name}. Отвечай кратко и по-человечески.`;
 
-    const { answer } = await runAgentTurn(agentId, systemPrompt, text, [], lead.id);
+    const { answer } = await runAgentTurnWithLead(agentId, systemPrompt, text, [], lead.id, currentUserMessageId);
 
     console.log('[TG webhook] AI answer:', answer.slice(0, 100));
 

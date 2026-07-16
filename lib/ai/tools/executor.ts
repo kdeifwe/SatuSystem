@@ -354,15 +354,25 @@ async function getMediaFiles(args: { category: string; search_query?: string }, 
 }
 
 async function updateLeadStatus(args: { lead_id: string; status: string }, ctx: ToolContext) {
+  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!uuidPattern.test(args.lead_id)) {
+    throw new Error('Некорректный lead_id — используй ID лида из контекста диалога, а не из текста сообщения клиента');
+  }
+
+  // Игнорируем lead_id из аргументов модели и всегда используем реальный ID
+  // текущего лида из контекста диалога — модель не должна сама выбирать,
+  // чей статус менять.
+  const targetLeadId = ctx.leadId;
+
   const supabase = createServiceClient();
-  const { data: lead, error: leadError } = await supabase.from('leads').select('id, status, org_id').eq('id', args.lead_id).eq('org_id', ctx.orgId).single();
+  const { data: lead, error: leadError } = await supabase.from('leads').select('id, status, org_id').eq('id', targetLeadId).eq('org_id', ctx.orgId).single();
   if (leadError || !lead) throw new Error('Лид не найден или нет доступа');
 
   if (lead.status === args.status) {
     return { success: true, changed: false, current_status: args.status };
   }
 
-  const { error } = await supabase.from('leads').update({ status: args.status, updated_at: new Date().toISOString() }).eq('id', args.lead_id);
+  const { error } = await supabase.from('leads').update({ status: args.status, updated_at: new Date().toISOString() }).eq('id', targetLeadId);
   if (error) throw new Error(`Ошибка обновления статуса: ${error.message}`);
 
   return {

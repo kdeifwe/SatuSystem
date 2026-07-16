@@ -350,9 +350,13 @@ async function resolveFallbackReply(
   _reason: string,
 ): Promise<{ reply: string; handoffTriggered: boolean }> {
   const { data: agent } = await admin.from('agents').select('knowledge_base_principles').eq('id', agentId).maybeSingle();
-  const principlesText = typeof agent?.knowledge_base_principles === 'string' ? agent.knowledge_base_principles.trim() : '';
-  const configuredReply = principlesText
-    .split(/\n+/)
+  const rawPrinciples = agent?.knowledge_base_principles;
+  const principlesLines: string[] = Array.isArray(rawPrinciples)
+    ? rawPrinciples.filter((line): line is string => typeof line === 'string')
+    : typeof rawPrinciples === 'string'
+      ? rawPrinciples.split(/\n+/)
+      : [];
+  const configuredReply = principlesLines
     .map((line) => line.trim())
     .find((line) => line.length > 0 && line.length < 220 && /(вернусь|уточнить|сейчас|скоро|подтвержу)/i.test(line));
 
@@ -496,6 +500,7 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
   let forcedFinalization = false;
   let accumulatedToolResults: Array<Record<string, unknown>> = [];
   let validationAttempted = false;
+  let toolResults: Array<Record<string, unknown>> = [];
 
   while (iterations < 5) {
     const functionCalls = extractToolCalls(parts as Array<Record<string, unknown>> | undefined);
@@ -503,7 +508,7 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
 
     iterations += 1;
 
-    const toolResults = [] as Array<Record<string, unknown>>;
+    toolResults = [] as Array<Record<string, unknown>>;
     for (const call of functionCalls) {
       if (!allowedToolNames.includes(call.name)) {
         const message = `Инструмент ${call.name} не разрешён для этого агента.`;
@@ -525,7 +530,7 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
       toolsUsed.push(call.name);
       console.log('[TOOL] calling', { agentId, conversationId, name: call.name, args: call.args, trigger: 'model function call' });
       const toolResult = await executeTool(call, toolContext);
-      toolResults.push({ name: call.name, result: toolResult.result, error: toolResult.error });
+      toolResults.push({ name: call.name, args: call.args, result: toolResult.result, error: toolResult.error });
       // accumulate across iterations for possible forced finalization
       accumulatedToolResults.push({ name: call.name, result: toolResult.result, error: toolResult.error });
 
@@ -625,6 +630,32 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
     finalReply = finalReply || 'Сейчас подключу коллегу, пожалуйста, подождите.';
   }
 
+  const READONLY_TOOLS = ['searchKnowledgeBase', 'getCurrentDate', 'getMediaFiles'];
+  const usedMutatingTool = toolsUsed.some((name) => !READONLY_TOOLS.includes(name));
+
+  if (!finalReply.trim() && !handoffTriggered && usedMutatingTool) {
+    console.warn('[AGENT] empty reply after mutating tool call, retrying WITHOUT tools', { agentId, conversationId, userMessage, toolsUsed });
+    try {
+      const noToolsContents = [
+        ...baseContents,
+        { role: 'user', parts: [{ text: `Ответь клиенту на его вопрос обычным текстом: "${userMessage}". Не вызывай никакие инструменты, просто ответь по существу на основе того, что тебе уже известно.` }] },
+      ];
+      const noToolsResponse = await callGemini(agent.model ?? GEMINI_CHAT_MODEL, compiledPrompt, noToolsContents, [], undefined, generationConfig);
+      const noToolsParts = noToolsResponse.payload.parts;
+      const noToolsReply = (noToolsParts as Array<Record<string, unknown>>).filter((part) => typeof part?.text === 'string').map((part) => part.text).join('\n').trim();
+      if (noToolsReply) {
+        finalReply = noToolsReply;
+        rawReply = noToolsReply;
+        response = noToolsResponse;
+        tokens_input += noToolsResponse.payload.usageMetadata?.promptTokenCount ?? 0;
+        tokens_output += noToolsResponse.payload.usageMetadata?.candidatesTokenCount ?? 0;
+        lastFinishReason = noToolsResponse.payload.finishReason as string | undefined;
+      }
+    } catch (noToolsErr) {
+      console.warn('[AGENT] no-tools retry failed', { agentId, conversationId, error: noToolsErr instanceof Error ? noToolsErr.message : String(noToolsErr) });
+    }
+  }
+
   if (!finalReply.trim() && !handoffTriggered) {
     console.warn('[AGENT] empty reply returned by Gemini, retrying once', { agentId, conversationId, userMessage });
     try {
@@ -716,6 +747,7 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
       agent_id: agentId,
       message: userMessage,
       tools_used: toolsUsed,
+      tool_calls_detail: toolResults,
       iterations,
       validation_errors: validationErrors,
       attempt,
