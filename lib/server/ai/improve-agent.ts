@@ -3,6 +3,12 @@ import { buildGeminiObjectSchema } from '@/lib/server/ai/gemini-response-schema'
 
 type ImprovePhase = 'critic' | 'generator' | 'validator';
 
+export type PromptPatch = {
+  search: string;
+  replace: string;
+  reason: string;
+};
+
 type GeminiResponse = {
   text: string;
   metadata: Record<string, unknown>;
@@ -40,11 +46,22 @@ export function buildCriticSchema() {
 export function buildGeneratorSchema() {
   return buildGeminiObjectSchema(
     {
-      improved_prompt: { type: 'string' },
+      patches: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            search: { type: 'string' },
+            replace: { type: 'string' },
+            reason: { type: 'string' },
+          },
+          required: ['search', 'replace', 'reason'],
+        },
+      },
       changes_summary: { type: 'string' },
       key_improvements: { type: 'array', items: { type: 'string' } },
     },
-    ['improved_prompt', 'changes_summary', 'key_improvements']
+    ['patches', 'changes_summary', 'key_improvements']
   );
 }
 
@@ -59,6 +76,59 @@ export function buildValidatorSchema() {
   );
 }
 
+function countOccurrences(text: string, search: string): number {
+  if (!search) {
+    return 0;
+  }
+
+  let count = 0;
+  let index = 0;
+  while (index <= text.length) {
+    const nextIndex = text.indexOf(search, index);
+    if (nextIndex === -1) {
+      break;
+    }
+    count += 1;
+    index = nextIndex + search.length;
+  }
+
+  return count;
+}
+
+export function applyPromptPatches(currentPrompt: string, patches: PromptPatch[]): string {
+  if (typeof currentPrompt !== 'string') {
+    throw new Error('Current prompt must be a string');
+  }
+
+  if (!Array.isArray(patches)) {
+    throw new Error('Patch list must be an array');
+  }
+
+  let workingPrompt = currentPrompt;
+
+  patches.forEach((patch, index) => {
+    if (!patch || typeof patch !== 'object') {
+      throw new Error(`Patch #${index + 1} failed: patch entry is not an object`);
+    }
+
+    const search = typeof patch.search === 'string' ? patch.search : '';
+    const replace = typeof patch.replace === 'string' ? patch.replace : '';
+
+    if (!search.trim()) {
+      throw new Error(`Patch #${index + 1} failed: search fragment must not be empty`);
+    }
+
+    const count = countOccurrences(workingPrompt, search);
+    if (count !== 1) {
+      throw new Error(`Patch #${index + 1} failed: search fragment must appear exactly once in current prompt (found ${count})`);
+    }
+
+    workingPrompt = workingPrompt.replace(search, replace);
+  });
+
+  return workingPrompt;
+}
+
 function sanitizeJsonText(rawText: string): string {
   return rawText
     .replace(/```(?:json)?\s*/gi, '')
@@ -68,20 +138,132 @@ function sanitizeJsonText(rawText: string): string {
 
 function extractJsonCandidate(rawText: string): string {
   const cleaned = sanitizeJsonText(rawText);
-  const firstBrace = cleaned.indexOf('{');
-  const lastBrace = cleaned.lastIndexOf('}');
 
-  if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) {
-    throw new Error('JSON object not found in model response');
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < cleaned.length; index += 1) {
+    const char = cleaned[index];
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+
+    if (char === '\\') {
+      escaped = true;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) {
+      continue;
+    }
+
+    if (char !== '{') {
+      continue;
+    }
+
+    let depth = 0;
+    let candidateInString = false;
+    let candidateEscaped = false;
+
+    for (let cursor = index; cursor < cleaned.length; cursor += 1) {
+      const candidateChar = cleaned[cursor];
+
+      if (candidateEscaped) {
+        candidateEscaped = false;
+        continue;
+      }
+
+      if (candidateChar === '\\') {
+        candidateEscaped = true;
+        continue;
+      }
+
+      if (candidateChar === '"') {
+        candidateInString = !candidateInString;
+        continue;
+      }
+
+      if (candidateInString) {
+        continue;
+      }
+
+      if (candidateChar === '{') {
+        depth += 1;
+      } else if (candidateChar === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          const candidate = cleaned.slice(index, cursor + 1).trim();
+          try {
+            JSON.parse(candidate);
+            return candidate;
+          } catch {
+            break;
+          }
+        }
+      }
+    }
   }
 
-  return cleaned.slice(firstBrace, lastBrace + 1).trim();
+  throw new Error('JSON object not found in model response');
+}
+
+export function repairJsonText(candidate: string): string {
+  let repaired = '';
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < candidate.length; index += 1) {
+    const char = candidate[index];
+
+    if (escaped) {
+      repaired += char;
+      escaped = false;
+      continue;
+    }
+
+    if (char === '\\') {
+      repaired += '\\';
+      escaped = true;
+      continue;
+    }
+
+    if (char === '"') {
+      repaired += '"';
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) {
+      if (char === '\n') {
+        repaired += '\\n';
+      } else if (char === '\r') {
+        repaired += '\\r';
+      } else if (char === '\t') {
+        repaired += '\\t';
+      } else {
+        repaired += char;
+      }
+      continue;
+    }
+
+    repaired += char;
+  }
+
+  return repaired;
 }
 
 export function extractJsonPayload(rawText: string): Record<string, unknown> {
   try {
     const candidate = extractJsonCandidate(rawText);
-    const parsed = JSON.parse(candidate);
+    const repairedCandidate = repairJsonText(candidate);
+    const parsed = JSON.parse(repairedCandidate);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       throw new Error('Parsed JSON is not an object');
     }
@@ -92,6 +274,12 @@ export function extractJsonPayload(rawText: string): Record<string, unknown> {
   }
 }
 
+/**
+ * Log improve-agent Gemini call with FULL raw_response including usageMetadata
+ * CRITICAL: This logging includes complete usageMetadata (thoughtsTokenCount, promptTokenCount,
+ * candidatesTokenCount, totalTokenCount) for diagnostics. Never truncate usageMetadata.
+ * Historical note: This was essential for diagnosing the original MAX_TOKENS issue.
+ */
 async function logImproveCall(
   admin: SupabaseClient | null,
   context: ImproveLogContext
@@ -110,6 +298,24 @@ async function logImproveCall(
         ? (context.rawResponse as any)?.candidates?.[0]?.finishReason ?? null
         : null;
 
+    // CRITICAL: Extract full usageMetadata from rawResponse (Gemini API response)
+    // This must include: promptTokenCount, candidatesTokenCount, totalTokenCount, thoughtsTokenCount
+    const fullUsageMetadata = context.rawResponse && typeof context.rawResponse === 'object'
+      ? (context.rawResponse as any)?.usageMetadata ?? null
+      : null;
+
+    const usageMetadata = fullUsageMetadata
+      ? {
+          // Spread all fields from Gemini response
+          ...fullUsageMetadata,
+          // Explicit defaults for safety
+          promptTokenCount: fullUsageMetadata?.promptTokenCount ?? 0,
+          candidatesTokenCount: fullUsageMetadata?.candidatesTokenCount ?? 0,
+          totalTokenCount: fullUsageMetadata?.totalTokenCount ?? 0,
+          thoughtsTokenCount: fullUsageMetadata?.thoughtsTokenCount ?? 0,
+        }
+      : null;
+
     await admin.from('ai_call_logs').insert({
       conversation_id: null,
       request: {
@@ -122,15 +328,22 @@ async function logImproveCall(
         response_schema: context.responseSchema ?? false,
       },
       response: {
+        // Store FULL raw_response from Gemini (includes candidates, usageMetadata, etc)
+        raw: context.rawResponse ?? null,
+        raw_response: context.rawResponse ?? null,
         response_preview: responsePreview,
         response_tail: responseTail,
         response_length: context.rawText?.length ?? 0,
         finish_reason: finishReason,
         error: context.error ?? null,
         parse_error: context.parseError ?? null,
+        // CRITICAL: Store full usageMetadata (not truncated)
+        usage_metadata: usageMetadata,
         metadata: {
           response_length: context.rawText?.length ?? 0,
           finish_reason: finishReason,
+          // CRITICAL: Duplicate usageMetadata here for redundancy/safety
+          usage_metadata: usageMetadata,
         },
       },
       tokens_input: context.tokensInput ?? null,
@@ -164,12 +377,14 @@ export async function callGeminiForImprove(
       topP: 0.2,
       maxOutputTokens: 8192,
       responseMimeType: 'application/json',
+      thinkingConfig: { thinkingBudget: 0 },
       ...(responseSchema ? { responseSchema } : {}),
     },
   };
 
   for (const model of models) {
     const startedAt = Date.now();
+    let fullRawResponse: any = null;  // Capture raw response for logging even on error
     try {
       const res = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
@@ -190,8 +405,23 @@ export async function callGeminiForImprove(
 
       const text = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
       const latencyMs = Date.now() - startedAt;
-      const tokensInput = data?.usageMetadata?.promptTokenCount ?? 0;
-      const tokensOutput = data?.usageMetadata?.candidatesTokenCount ?? 0;
+      const rawUsageMetadata = data?.usageMetadata && typeof data.usageMetadata === 'object' ? data.usageMetadata : {};
+      const tokensInput = rawUsageMetadata?.promptTokenCount ?? 0;
+      const tokensOutput = rawUsageMetadata?.candidatesTokenCount ?? 0;
+      const thoughtsTokenCount = rawUsageMetadata?.thoughtsTokenCount ?? 0;
+      const normalizedUsageMetadata = {
+        ...(rawUsageMetadata ?? {}),
+        promptTokenCount: rawUsageMetadata?.promptTokenCount ?? 0,
+        candidatesTokenCount: rawUsageMetadata?.candidatesTokenCount ?? 0,
+        totalTokenCount: rawUsageMetadata?.totalTokenCount ?? 0,
+        thoughtsTokenCount,
+      };
+      const responsePayload = data && typeof data === 'object'
+        ? { ...data, usageMetadata: normalizedUsageMetadata }
+        : data;
+
+      // Save for error logging
+      fullRawResponse = responsePayload;
 
       const logContext: ImproveLogContext = {
         agentId: options.agentId ?? 'unknown',
@@ -203,19 +433,21 @@ export async function callGeminiForImprove(
         tokensInput,
         tokensOutput,
         rawText: text,
-        rawResponse: data,
+        rawResponse: responsePayload,
         responseSchema: Boolean(responseSchema),
       };
 
       if (!res.ok) {
         const errorText = rawText.slice(0, 1000);
         logContext.error = `Gemini returned ${res.status}: ${errorText}`;
+        // CRITICAL: Log full response with usageMetadata even on HTTP error
         await logImproveCall(options.admin ?? null, logContext);
         console.error(`[improve] ${model} returned ${res.status}:`, errorText);
         continue;
       }
 
       if (text.trim().length > 0) {
+        // CRITICAL: Log full response with usageMetadata on success
         await logImproveCall(options.admin ?? null, logContext);
         return {
           text,
@@ -224,16 +456,19 @@ export async function callGeminiForImprove(
             finishReason: data?.candidates?.[0]?.finishReason,
             promptTokenCount: tokensInput,
             candidatesTokenCount: tokensOutput,
+            thoughtsTokenCount,
           },
-          rawResponse: data,
+          rawResponse: responsePayload,
         };
       }
 
       logContext.error = 'Gemini returned empty text';
+      // CRITICAL: Log full response with usageMetadata even on empty text
       await logImproveCall(options.admin ?? null, logContext);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`[improve] ${model} error:`, message);
+      // CRITICAL: Log exception but include rawResponse if we have it
       await logImproveCall(options.admin ?? null, {
         agentId: options.agentId ?? 'unknown',
         feedback: options.feedback ?? '',
@@ -242,7 +477,8 @@ export async function callGeminiForImprove(
         model,
         latencyMs: Date.now() - startedAt,
         rawText: '',
-        rawResponse: null,
+        // Pass rawResponse even on exception if available (for usageMetadata logging)
+        rawResponse: fullRawResponse,
         error: message,
         responseSchema: Boolean(responseSchema),
       });

@@ -12,6 +12,7 @@ type CriticismData = {
 
 interface ImprovementResult {
   improved_prompt: string;
+  patches: Array<{ search: string; replace: string; reason: string }>;
   changes_summary: string;
   key_improvements: string[];
   criticism: CriticismData;
@@ -76,8 +77,9 @@ export default function ImprovePage({ params }: { params: { agentId: string } })
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          improved_prompt: result.improved_prompt,
+          patches: result.patches,
           change_note: result.changes_summary,
+          current_prompt: result.current_prompt,
         }),
       });
 
@@ -189,6 +191,12 @@ export default function ImprovePage({ params }: { params: { agentId: string } })
                   <div className="flex-1">
                     <h2 className="text-lg font-semibold text-emerald-900">Что изменилось</h2>
                     <p className="mt-2 text-sm leading-relaxed text-emerald-800">{result.changes_summary}</p>
+
+                    {result.patches && result.patches.length > 0 ? (
+                      <div className="mt-4 rounded-2xl border border-emerald-200 bg-white/70 px-4 py-3 text-sm text-emerald-800">
+                        <span className="font-semibold">Точечные патчи:</span> {result.patches.length} правок для текущего промпта.
+                      </div>
+                    ) : null}
 
                     {result.key_improvements && result.key_improvements.length > 0 ? (
                       <ul className="mt-4 space-y-2">

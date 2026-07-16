@@ -2,12 +2,14 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient as createUserClient } from '@/lib/supabase/server';
 import { createClient } from '@supabase/supabase-js';
 import {
+  applyPromptPatches,
   buildCriticSchema,
   buildGeneratorSchema,
   buildValidatorSchema,
   callGeminiForImprove,
   extractJsonPayload,
   logFailedJsonParse,
+  type PromptPatch,
 } from '@/lib/server/ai/improve-agent';
 
 function getAdmin() {
@@ -111,7 +113,7 @@ Rules:
 
     console.log('[improve] Critic found:', criticism.root_cause);
 
-    console.log('[improve] Step 2: Generating improved prompt...');
+    console.log('[improve] Step 2: Generating minimal prompt patches...');
     const generatorPrompt = `You are an expert AI sales agent prompt engineer for CIS market (Kazakhstan/Russia).
 
 CURRENT PROMPT TO IMPROVE:
@@ -126,15 +128,17 @@ USER FEEDBACK: "${feedback}"
 
 IMPROVEMENT RULES:
 1. Keep all existing good parts — only fix the identified problems.
-2. Make responses MORE HUMAN: short (1-2 sentences), casual, like texting a friend.
-3. Add concrete examples of good vs bad responses for the problematic section.
-4. Use behavioral instructions, not vague guidelines.
-5. Add "ЗАПРЕЩЕНО:" section with 5 specific things the agent must NEVER do.
-6. Add "ОБЯЗАТЕЛЬНО:" section with 5 things the agent MUST always do.
+2. Return a MINIMAL set of targeted search/replace patches on the existing prompt.
+3. Do NOT rewrite the whole prompt from scratch.
+4. Each patch should edit one specific section or add one specific instruction.
+5. The search fragment must be a sufficiently long and unique snippet from the current prompt so it matches exactly once.
+6. Use raw text search/replace blocks, not unified diff format.
+7. Add concrete examples of good vs bad responses for the problematic section.
+8. Keep the tone human, short, and practical.
 
 Return ONLY a single valid JSON object matching this schema exactly:
 {
-  "improved_prompt": "the complete improved system prompt in Russian",
+  "patches": [{"search": "short unique snippet from the existing prompt", "replace": "new inserted or replacement text", "reason": "why this patch is needed"}],
   "changes_summary": "2-3 sentences in Russian describing what changed",
   "key_improvements": ["improvement1 in Russian", "improvement2", "improvement3"]
 }
@@ -179,11 +183,30 @@ Rules:
       throw parseError;
     }
 
+    const patches = Array.isArray(generated.patches)
+      ? generated.patches.filter((value): value is PromptPatch => Boolean(value) && typeof value === 'object' && typeof (value as PromptPatch).search === 'string' && typeof (value as PromptPatch).replace === 'string' && typeof (value as PromptPatch).reason === 'string')
+      : [];
+
+    if (patches.length === 0) {
+      throw new Error('Generator did not return any prompt patches');
+    }
+
+    let proposedPrompt: string;
+    try {
+      proposedPrompt = applyPromptPatches(currentPrompt, patches);
+    } catch (patchError) {
+      const message = patchError instanceof Error ? patchError.message : String(patchError);
+      throw new Error(`Patch application failed: ${message}`);
+    }
+
     console.log('[improve] Step 3: Validating improvement...');
     const validatorPrompt = `You are a strict QA validator for AI agent prompts.
 
 ORIGINAL PROBLEM: "${feedback}"
 PROPOSED IMPROVEMENT SUMMARY: "${String(generated.changes_summary ?? '')}"
+
+PROPOSED PROMPT AFTER PATCHES:
+${proposedPrompt}
 
 Does the improvement actually solve the stated problem?
 Will the agent now behave differently in a better way?
@@ -235,7 +258,8 @@ Rules:
     }
 
     return NextResponse.json({
-      improved_prompt: typeof generated.improved_prompt === 'string' ? generated.improved_prompt : currentPrompt,
+      improved_prompt: proposedPrompt,
+      patches,
       changes_summary: typeof generated.changes_summary === 'string' ? generated.changes_summary : 'Изменения применены.',
       key_improvements: Array.isArray(generated.key_improvements)
         ? generated.key_improvements.filter((value): value is string => typeof value === 'string')
