@@ -10,14 +10,19 @@ function getAdminClient() {
   );
 }
 
+export type KBMetadata = {
+  tag?: string;
+  [key: string]: unknown;
+};
+
 export interface KBSearchResult {
   chunk_id: string;
   source_id: string;
   content: string;
   similarity: number;
   priority: string;
-  metadata: Record<string, unknown>;
-  source_metadata?: Record<string, unknown> | null;
+  metadata: KBMetadata;
+  source_metadata?: KBMetadata | null;
 }
 
 function normalizeMetadataValue(value: unknown): string | null {
@@ -363,7 +368,7 @@ export interface LinkedKBChunkResult {
   content: string;
   similarity: number;
   priority: string;
-  metadata: Record<string, unknown>;
+  metadata: KBMetadata;
   link_type: string;
 }
 
