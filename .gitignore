@@ -36,3 +36,6 @@ run-test.js
 check_*.js
 parse_ts.js
 scan_braces_ts.js
+scripts/grade-filter-debug.ts
+scripts/sql-verify-usage-metadata.js
+scripts/verify-improve-logging.js
