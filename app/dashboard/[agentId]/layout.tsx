@@ -16,6 +16,7 @@ import {
   ChevronDown,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/server';
+import { Avatar } from '@/components/ui/avatar';
 
 const navSections = [
   {
@@ -68,27 +69,25 @@ export default async function AgentLayout({
     .single();
 
   return (
-    <div className="flex h-screen overflow-hidden bg-white">
-      <aside className="flex w-[220px] flex-shrink-0 flex-col border-r border-gray-100 bg-white">
-        <div className="border-b border-gray-100 px-4 py-4">
-          <Link href="/dashboard" className="mb-3 flex items-center gap-2">
-            <span className="text-sm font-bold text-gray-900">Satu.AI</span>
+    <div className="flex h-screen overflow-hidden bg-[color:var(--color-obsidian)] text-[color:var(--color-chalk)]">
+      <aside className="flex w-[220px] flex-shrink-0 flex-col border-r border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)]">
+        <div className="border-b border-[color:var(--color-graphite)] px-4 py-4">
+          <Link href="/dashboard" className="mb-3 flex items-center gap-2 text-sm font-normal uppercase tracking-[0.16em] text-[color:var(--color-chalk)]">
+            Satu.AI
           </Link>
-          <div className="flex cursor-pointer items-center gap-2 rounded-lg bg-gray-50 px-2 py-2 hover:bg-gray-100">
-            <div className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-blue-600 text-xs font-bold text-white">
-              {agent?.name?.[0] ?? 'A'}
-            </div>
-            <span className="flex-1 truncate text-sm font-medium text-gray-800">
+          <div className="flex cursor-pointer items-center gap-2 rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] px-2 py-2">
+            <Avatar name={agent?.name ?? 'A'} size="sm" className="border-0" />
+            <span className="flex-1 truncate text-sm font-medium text-[color:var(--color-chalk)]">
               {agent?.name ?? 'Агент'}
             </span>
-            <ChevronDown size={14} className="flex-shrink-0 text-gray-400" />
+            <ChevronDown size={14} className="flex-shrink-0 text-[color:var(--color-smoke)]" />
           </div>
         </div>
 
         <nav className="flex-1 space-y-4 overflow-y-auto px-2 py-3">
           {navSections.map((section) => (
             <div key={section.label}>
-              <p className="mb-1 px-2 text-[10px] font-semibold uppercase tracking-widest text-gray-400">
+              <p className="mb-1 px-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-[color:var(--color-smoke)]">
                 {section.label}
               </p>
               <ul className="space-y-0.5">
@@ -96,7 +95,7 @@ export default async function AgentLayout({
                   <li key={item.href}>
                     <Link
                       href={`/dashboard/${params.agentId}/${item.href}`}
-                      className="flex items-center gap-2.5 rounded-lg px-2 py-2 text-sm text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900"
+                      className="flex items-center gap-2.5 rounded-[var(--radius-cards)] px-2 py-2 text-sm text-[color:var(--color-smoke)] transition-colors hover:bg-[color:var(--color-obsidian)] hover:text-[color:var(--color-chalk)]"
                     >
                       <item.icon size={16} className="flex-shrink-0" />
                       {item.label}
@@ -108,18 +107,18 @@ export default async function AgentLayout({
           ))}
         </nav>
 
-        <div className="border-t border-gray-100 px-3 py-3">
+        <div className="border-t border-[color:var(--color-graphite)] px-3 py-3">
           <Link
             href="/dashboard"
-            className="flex items-center gap-2 rounded-lg px-2 py-2 text-xs text-gray-500 hover:bg-gray-100"
+            className="flex items-center gap-2 rounded-[var(--radius-cards)] px-2 py-2 text-xs text-[color:var(--color-smoke)] transition-colors hover:bg-[color:var(--color-obsidian)] hover:text-[color:var(--color-chalk)]"
           >
             ← Все агенты
           </Link>
         </div>
       </aside>
 
-      <main className="flex-1 min-h-0 overflow-y-auto">
-        <div className="min-h-full">{children}</div>
+      <main className="flex w-full flex-1 min-h-0 overflow-y-auto bg-[color:var(--color-obsidian)]">
+        <div className="min-h-full w-full">{children}</div>
       </main>
     </div>
   );

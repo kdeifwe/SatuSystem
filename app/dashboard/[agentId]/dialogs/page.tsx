@@ -216,19 +216,19 @@ export default function DialogsPage({ params }: { params: { agentId: string } })
   const selectedLead = leads.find((item) => item.id === selectedLeadId);
 
   return (
-    <div className="flex h-full overflow-hidden">
-      <div className="flex w-72 flex-shrink-0 flex-col border-r border-gray-100">
-        <div className="border-b border-gray-100 px-4 py-3">
+    <div className="flex h-full overflow-hidden bg-[color:var(--color-obsidian)] text-[color:var(--color-chalk)]">
+      <div className="flex w-72 flex-shrink-0 flex-col border-r border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)]">
+        <div className="border-b border-[color:var(--color-graphite)] px-4 py-3">
           <div className="flex items-center justify-between gap-2">
             <div>
-              <h2 className="text-sm font-semibold text-gray-900">Диалоги</h2>
-              <p className="text-xs text-gray-400">{leads.length} контактов</p>
+              <h2 className="text-sm font-semibold text-[color:var(--color-chalk)]">Диалоги</h2>
+              <p className="text-xs text-[color:var(--color-smoke)]">{leads.length} контактов</p>
             </div>
             <button
               type="button"
               onClick={handleCreateDialog}
               disabled={creatingLead}
-              className="inline-flex items-center gap-1 rounded-lg border border-[#1557FF]/20 bg-[#EEF2FF] px-2.5 py-1.5 text-xs font-medium text-[#1557FF] transition-colors hover:bg-[#DEE7FF] disabled:cursor-not-allowed disabled:opacity-70"
+              className="inline-flex items-center gap-1 rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] px-2.5 py-1.5 text-xs font-medium text-[color:var(--color-chalk)] transition-colors hover:border-[color:var(--color-ash)] disabled:cursor-not-allowed disabled:opacity-70"
             >
               <Plus size={14} />
               <span>Новый диалог</span>
@@ -236,16 +236,16 @@ export default function DialogsPage({ params }: { params: { agentId: string } })
           </div>
         </div>
         <div className="flex-1 overflow-y-auto">
-          {loading && <div className="p-4 text-center text-xs text-gray-400">Загрузка...</div>}
+          {loading && <div className="p-4 text-center text-xs text-[color:var(--color-smoke)]">Загрузка...</div>}
           {!loading && error && (
             <div className="border-b border-red-100 p-4">
-              <div className="rounded-lg border border-red-200 bg-red-50 p-3">
-                <p className="text-xs font-medium text-red-700">Ошибка загрузки диалогов</p>
-                <p className="mt-1 text-xs text-red-600">{error}</p>
+              <div className="rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-3">
+                <p className="text-xs font-medium text-[color:var(--color-chalk)]">Ошибка загрузки диалогов</p>
+                <p className="mt-1 text-xs text-[color:var(--color-smoke)]">{error}</p>
                 <button
                   type="button"
                   onClick={loadLeads}
-                  className="mt-2 w-full rounded bg-red-100 px-3 py-1.5 text-xs text-red-700 transition-colors hover:bg-red-200"
+                  className="mt-2 w-full rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] px-3 py-1.5 text-xs text-[color:var(--color-chalk)] transition-colors hover:border-[color:var(--color-ash)]"
                 >
                   Повторить
                 </button>
@@ -254,8 +254,8 @@ export default function DialogsPage({ params }: { params: { agentId: string } })
           )}
           {!loading && !error && leads.length === 0 && (
             <div className="p-6 text-center">
-              <p className="text-sm text-gray-500">Диалогов пока нет</p>
-              <p className="mt-1 text-xs text-gray-400">Подключите канал и напишите боту</p>
+              <p className="text-sm text-[color:var(--color-smoke)]">Диалогов пока нет</p>
+              <p className="mt-1 text-xs text-[color:var(--color-smoke)]">Подключите канал и напишите боту</p>
             </div>
           )}
           {leads.map((lead) => (
@@ -263,21 +263,21 @@ export default function DialogsPage({ params }: { params: { agentId: string } })
               key={lead.id}
               type="button"
               onClick={() => loadMessages(lead.id)}
-              className={`w-full border-b border-gray-50 px-4 py-3 text-left transition-colors ${
-                selectedLeadId === lead.id ? 'border-l-2 border-l-[#1557FF] bg-[#EEF2FF]' : 'bg-white hover:bg-gray-50'
+              className={`w-full border-b border-[color:var(--color-graphite)] px-4 py-3 text-left transition-colors ${
+                selectedLeadId === lead.id ? 'border-l-2 border-l-[color:var(--color-chalk)] bg-[color:var(--color-obsidian)]' : 'bg-[color:var(--color-carbon)] hover:bg-[color:var(--color-obsidian)]'
               }`}
             >
               <div className="mb-1 flex items-center justify-between">
-                <span className="truncate text-sm font-medium text-gray-900">{lead.name}</span>
-                <span className="ml-2 flex-shrink-0 text-[10px] text-gray-400">
+                <span className="truncate text-sm font-medium text-[color:var(--color-chalk)]">{lead.name}</span>
+                <span className="ml-2 flex-shrink-0 text-[10px] text-[color:var(--color-smoke)]">
                   {formatDistanceToNow(new Date(lead.updated_at ?? lead.created_at), { locale: ru, addSuffix: true })}
                 </span>
               </div>
               <div className="flex items-center gap-2">
                 <span className={`inline-block h-2 w-2 flex-shrink-0 rounded-full ${
-                  lead.status === 'new' ? 'bg-blue-500' : lead.status === 'in_progress' ? 'bg-yellow-500' : lead.status === 'done' ? 'bg-green-500' : 'bg-gray-400'
+                  lead.status === 'new' ? 'bg-[color:var(--color-pulse-green)]' : lead.status === 'in_progress' ? 'bg-[color:var(--color-compass-gold)]' : lead.status === 'done' ? 'bg-[color:var(--color-pulse-green)]' : 'bg-[color:var(--color-iron)]'
                 }`} />
-                <span className="truncate text-xs text-gray-500">{lead.last_message ?? 'Нет сообщений'}</span>
+                <span className="truncate text-xs text-[color:var(--color-smoke)]">{lead.last_message ?? 'Нет сообщений'}</span>
               </div>
             </button>
           ))}
@@ -286,60 +286,60 @@ export default function DialogsPage({ params }: { params: { agentId: string } })
 
       <div className="flex flex-1 flex-col overflow-hidden">
         {!selectedLeadId ? (
-          <div className="flex flex-1 items-center justify-center text-gray-400">
+          <div className="flex flex-1 items-center justify-center text-[color:var(--color-smoke)]">
             <div className="text-center">
               <p className="text-sm">Выберите диалог</p>
             </div>
           </div>
         ) : (
           <>
-            <div className="flex h-14 items-center justify-between border-b border-gray-200 px-6">
+            <div className="flex h-14 items-center justify-between border-b border-[color:var(--color-graphite)] px-6">
               <div className="flex items-center gap-3">
-                <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gray-100 text-sm font-semibold text-gray-700">
+                <div className="flex h-9 w-9 items-center justify-center rounded-full border border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] text-sm font-semibold text-[color:var(--color-chalk)]">
                   {selectedLead?.name?.[0] ?? '?'}
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <p className="text-sm font-semibold text-gray-900">{selectedLead?.name}</p>
-                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                      selectedLead?.status === 'new' ? 'bg-blue-50 text-blue-700' :
-                      selectedLead?.status === 'in_progress' ? 'bg-amber-50 text-amber-700' :
-                      selectedLead?.status === 'done' ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-600'
+                    <p className="text-sm font-semibold text-[color:var(--color-chalk)]">{selectedLead?.name}</p>
+                    <span className={`rounded-full border border-[color:var(--color-graphite)] px-2 py-0.5 text-[10px] font-medium ${
+                      selectedLead?.status === 'new' ? 'bg-[color:var(--color-carbon)] text-[color:var(--color-chalk)]' :
+                      selectedLead?.status === 'in_progress' ? 'bg-[color:var(--color-carbon)] text-[color:var(--color-smoke)]' :
+                      selectedLead?.status === 'done' ? 'bg-[color:var(--color-carbon)] text-[color:var(--color-pulse-green)]' : 'bg-[color:var(--color-carbon)] text-[color:var(--color-smoke)]'
                     }`}>
                       {selectedLead?.status === 'new' ? 'new' : selectedLead?.status === 'in_progress' ? 'in progress' : selectedLead?.status === 'done' ? 'done' : selectedLead?.status}
                     </span>
                   </div>
-                  <p className="text-xs text-gray-400">{selectedLead?.external_id}</p>
+                  <p className="text-xs text-[color:var(--color-smoke)]">{selectedLead?.external_id}</p>
                 </div>
               </div>
               <button
                 type="button"
                 onClick={toggleAiEnabled}
                 disabled={updatingAi}
-                className="flex items-center gap-2 text-sm text-gray-600"
+                className="flex items-center gap-2 text-sm text-[color:var(--color-smoke)]"
               >
-                <span className="text-xs text-gray-500">{selectedLead?.ai_enabled ? 'ИИ вкл' : 'ИИ выкл'}</span>
-                <span className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${selectedLead?.ai_enabled ? 'bg-[#1557FF]' : 'bg-gray-200'}`}>
-                  <span className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${selectedLead?.ai_enabled ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                <span className="text-xs text-[color:var(--color-smoke)]">{selectedLead?.ai_enabled ? 'ИИ вкл' : 'ИИ выкл'}</span>
+                <span className={`relative inline-flex h-6 w-11 items-center rounded-full border border-[color:var(--color-graphite)] transition-colors ${selectedLead?.ai_enabled ? 'bg-[color:var(--color-pulse-green)]' : 'bg-[color:var(--color-graphite)]'}`}>
+                  <span className={`inline-block h-5 w-5 rounded-full bg-[color:var(--color-chalk)] transition-transform ${selectedLead?.ai_enabled ? 'translate-x-5' : 'translate-x-0.5'}`} />
                 </span>
               </button>
             </div>
 
             <div className="flex-1 overflow-y-auto px-6 py-4">
               {loadingMessages ? (
-                <div className="text-center text-sm text-gray-400">Загрузка сообщений...</div>
+                <div className="text-center text-sm text-[color:var(--color-smoke)]">Загрузка сообщений...</div>
               ) : (
                 <div className="space-y-3">
                   {messages.map((message) => (
                     <div key={message.id} className={`flex ${message.sender === 'user' ? 'justify-start' : 'justify-end'}`}>
-                      <div className={`max-w-[75%] rounded-2xl px-4 py-2.5 text-sm ${
+                      <div className={`max-w-[75%] rounded-2xl border border-[color:var(--color-graphite)] px-4 py-2.5 text-sm ${
                         message.sender === 'user'
-                          ? 'border border-gray-200 bg-white text-gray-700 rounded-bl-sm'
+                          ? 'bg-[color:var(--color-carbon)] text-[color:var(--color-chalk)] rounded-bl-sm'
                           : message.sender === 'ai'
-                            ? 'bg-[#1557FF] text-white rounded-br-sm'
-                            : 'rounded-br-sm bg-gray-800 text-white'
+                            ? 'bg-[color:var(--color-obsidian)] text-[color:var(--color-chalk)] rounded-br-sm'
+                            : 'rounded-br-sm bg-[color:var(--color-graphite)] text-[color:var(--color-chalk)]'
                       }`}>
-                        {message.sender === 'operator' && <p className="mb-1 text-[10px] text-gray-300">Оператор</p>}
+                        {message.sender === 'operator' && <p className="mb-1 text-[10px] text-[color:var(--color-smoke)]">Оператор</p>}
                         <p className="whitespace-pre-wrap">{message.content}</p>
                         <p className={`mt-1 text-[10px] ${message.sender === 'user' ? 'text-gray-400' : 'text-white/70'}`}>
                           {new Date(message.created_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
@@ -352,7 +352,7 @@ export default function DialogsPage({ params }: { params: { agentId: string } })
               )}
             </div>
 
-            <div className="border-t border-gray-200 bg-white px-4 py-3">
+            <div className="border-t border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] px-4 py-3">
               <div className="flex items-end gap-3">
                 <button
                   type="button"
@@ -374,9 +374,9 @@ export default function DialogsPage({ params }: { params: { agentId: string } })
                     }}
                     placeholder="Введите сообщение..."
                     rows={1}
-                    className="w-full resize-none rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-gray-700 focus:border-blue-300 focus:outline-none"
+                    className="w-full resize-none rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] px-4 py-2.5 text-sm text-[color:var(--color-chalk)] focus:border-[color:var(--color-ash)] focus:outline-none"
                   />
-                  <p className="mt-1 text-xs text-gray-400">Нажмите Enter для отправки · Shift+Enter для новой строки</p>
+                  <p className="mt-1 text-xs text-[color:var(--color-smoke)]">Нажмите Enter для отправки · Shift+Enter для новой строки</p>
                 </div>
                 <button
                   type="button"
@@ -389,7 +389,7 @@ export default function DialogsPage({ params }: { params: { agentId: string } })
                   type="button"
                   onClick={handleSend}
                   disabled={!input.trim() || isSending}
-                  className="flex h-9 w-9 items-center justify-center rounded-full bg-[#1557FF] text-white transition-colors hover:bg-[#0E3FC9] disabled:cursor-not-allowed disabled:bg-gray-300"
+                  className="flex h-9 w-9 items-center justify-center rounded-full bg-[color:var(--color-signal-white)] text-[color:var(--color-obsidian)] transition-colors hover:bg-[color:var(--color-chalk)] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <Send size={16} />
                 </button>

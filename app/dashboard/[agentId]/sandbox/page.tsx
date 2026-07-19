@@ -205,53 +205,60 @@ export default function SandboxPage({ params }: { params: { agentId: string } })
   }
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between border-b border-gray-100 px-6 py-4">
-        <div>
-          <h1 className="text-base font-semibold text-gray-900">Тестирование</h1>
-          <p className="text-xs text-gray-500">Общайтесь с вашим ИИ-агентом</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={clearChat}
-            className="flex h-9 w-9 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
-            title="Очистить чат"
-          >
-            <RotateCcw size={16} />
-          </button>
-          <button
-            type="button"
-            onClick={startNewSandboxSession}
-            disabled={isStartingSession || isLoading}
-            className="inline-flex items-center gap-2 rounded-lg border border-[#1557FF]/20 bg-[#EEF2FF] px-3 py-2 text-sm font-medium text-[#1557FF] transition-colors hover:bg-[#DEE7FF] disabled:cursor-not-allowed disabled:opacity-70"
-          >
-            <Plus size={14} />
-            <span>Новый диалог</span>
-          </button>
+    <div className="flex h-full flex-col bg-[color:var(--color-obsidian)] text-[color:var(--color-chalk)]">
+      <div className="flex items-center justify-between border-b border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)]">
+        <div className="w-full px-6 py-4">
+          <div className="mx-auto flex w-full max-w-[900px] items-center justify-between">
+            <div>
+              <h1 className="text-base font-semibold text-[color:var(--color-chalk)]">Тестирование</h1>
+              <p className="text-xs text-[color:var(--color-smoke)]">Общайтесь с вашим ИИ-агентом</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={clearChat}
+                className="flex h-9 w-9 items-center justify-center rounded-full border border-[color:var(--color-graphite)] bg-transparent text-[color:var(--color-smoke)] transition-colors hover:border-[color:var(--color-ash)] hover:text-[color:var(--color-chalk)]"
+                title="Очистить чат"
+              >
+                <RotateCcw size={16} />
+              </button>
+              <button
+                type="button"
+                onClick={startNewSandboxSession}
+                disabled={isStartingSession || isLoading}
+                className="inline-flex items-center gap-2 rounded-full border border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] px-3 py-2 text-sm font-medium text-[color:var(--color-chalk)] transition-colors hover:border-[color:var(--color-ash)] disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                <Plus size={14} />
+                <span>Новый диалог</span>
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-6 py-6">
+      <div className="flex-1 w-full overflow-y-auto bg-[radial-gradient(circle_at_top,rgba(111,103,89,0.08),transparent_55%)] px-6 py-6">
         {messages.length === 0 ? (
           <div className="flex h-full items-center justify-center">
             <div className="text-center">
-              <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-blue-50">
-                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-100 text-sm font-bold text-blue-600">
+              <div className="relative mx-auto mb-6 flex h-16 w-16 items-center justify-center">
+                <div className="absolute -left-36 -top-36 -z-10 flex items-center justify-center">
+                  <div className="w-[320px] h-[320px] rounded-full" style={{ background: 'radial-gradient(circle, rgba(111,103,89,0.10) 0%, rgba(111,103,89,0.04) 25%, rgba(111,103,89,0.00) 60%)' }} />
+                </div>
+                <div className="relative flex h-16 w-16 items-center justify-center rounded-full border border-[color:var(--color-graphite)] bg-[color:var(--color-graphite)] text-[27px] font-medium tracking-[0.02em] text-[color:var(--color-chalk)]">
                   {agentName[0]}
                 </div>
               </div>
-              <p className="text-sm text-gray-600">Добрый день, {agentName}</p>
-              <p className="mt-1 text-xs text-gray-400">Начните диалог, чтобы протестировать агента</p>
+              <p className="text-[23px] font-medium tracking-[-0.02em] text-[color:var(--color-chalk)]">Добрый день, {agentName}</p>
+              <p className="mt-2 text-sm text-[color:var(--color-smoke)]">Начните диалог, чтобы протестировать агента</p>
             </div>
           </div>
         ) : (
-          <div className="mx-auto max-w-2xl space-y-4">
+          <div className="mx-auto w-full max-w-[900px] space-y-4">
             {messages.map((message, index) => {
               if (message.role === 'system' && message.content.toLowerCase().includes('передан оператору')) {
                 return (
                   <div key={`${message.role}-${index}`} className="flex items-center justify-center">
-                    <div className="w-full max-w-[80%] rounded-full border border-dashed border-gray-300 bg-white px-4 py-2 text-center text-xs font-medium text-gray-500">
+                    <div className="w-full max-w-[80%] rounded-full border border-dashed border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] px-4 py-2 text-center text-xs font-medium text-[color:var(--color-smoke)]">
                       ─────────────────────────────────
                       <br />
                       🔄 Разговор передан оператору · {agentName} · {formatMessageTime(message.timestamp)}
@@ -268,16 +275,16 @@ export default function SandboxPage({ params }: { params: { agentId: string } })
                   className={`group flex flex-col items-${message.role === 'user' ? 'end' : 'start'}`}
                 >
                   {message.role === 'assistant' ? (
-                    <div className="flex items-center gap-1 mb-1 opacity-0 transition-opacity duration-200 group-hover:opacity-100">
+                    <div className="mb-1 flex items-center gap-1 opacity-0 transition-opacity duration-200 group-hover:opacity-100">
                       <button
                         onClick={() => handleDislike(message.content)}
-                        className="p-1 rounded hover:bg-gray-200 text-gray-400 hover:text-gray-600"
+                        className="rounded-full p-1 text-[color:var(--color-smoke)] transition-colors hover:bg-[color:var(--color-graphite)] hover:text-[color:var(--color-chalk)]"
                         title="Плохой ответ"
                       >
                         <ThumbsDown size={13} />
                       </button>
                       <button
-                        className="p-1 rounded hover:bg-gray-200 text-gray-400 hover:text-gray-600"
+                        className="rounded-full p-1 text-[color:var(--color-smoke)] transition-colors hover:bg-[color:var(--color-graphite)] hover:text-[color:var(--color-chalk)]"
                         title="Скопировать"
                         onClick={() => navigator.clipboard.writeText(message.content)}
                       >
@@ -286,24 +293,24 @@ export default function SandboxPage({ params }: { params: { agentId: string } })
                     </div>
                   ) : null}
                   <div
-                    className={`${message.role === 'user' ? 'bg-blue-600 text-white rounded-br-sm' : message.role === 'system' ? 'bg-transparent px-0 py-0 text-gray-500' : 'bg-gray-100 text-gray-800 rounded-bl-sm'} max-w-[75%] px-4 py-3 rounded-2xl text-sm`}
+                    className={`${message.role === 'user' ? 'rounded-br-sm bg-[color:var(--color-chalk)] text-[color:var(--color-carbon)]' : message.role === 'system' ? 'bg-transparent px-0 py-0 text-[color:var(--color-smoke)]' : 'rounded-bl-sm border border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] text-[color:var(--color-chalk)]'} max-w-[75%] rounded-2xl px-4 py-3 text-sm`}
                   >
                     {message.content}
                     {message.role === 'assistant' && message.retrievalDebug ? (
-                      <div className="mt-3 space-y-2 border-t border-gray-200 pt-3 text-xs">
+                      <div className="mt-3 space-y-2 border-t border-[color:var(--color-graphite)] pt-3 text-xs">
                         <div>
-                          <div className="mb-1 font-semibold text-blue-600">Найдено по запросу</div>
+                          <div className="mb-1 font-semibold text-[color:var(--color-compass-gold)]">Найдено по запросу</div>
                           <div className="space-y-1">
                             {message.retrievalDebug.primaryChunks.length === 0 ? (
-                              <div className="text-gray-500">Нет основных чанков</div>
+                              <div className="text-[color:var(--color-smoke)]">Нет основных чанков</div>
                             ) : message.retrievalDebug.primaryChunks.map((chunk) => (
-                              <div key={chunk.id} className="rounded-lg bg-white/70 p-2">
-                                <div className="flex items-center gap-2 font-medium text-gray-700">
+                              <div key={chunk.id} className="rounded-lg border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)]/70 p-2">
+                                <div className="flex items-center gap-2 font-medium text-[color:var(--color-chalk)]">
                                   {chunk.sourceType === 'instagram' ? <Instagram size={13} className="text-pink-500" /> : null}
                                   <span>{chunk.sourceTitle || 'Источник'}</span>
                                 </div>
-                                <div className="line-clamp-3 text-gray-600">{chunk.content}</div>
-                                <div className="mt-1 text-[10px] uppercase tracking-wide text-gray-500">
+                                <div className="line-clamp-3 text-[color:var(--color-smoke)]">{chunk.content}</div>
+                                <div className="mt-1 text-[10px] uppercase tracking-wide text-[color:var(--color-smoke)]">
                                   {Math.round(chunk.similarity * 100)}% · {chunk.priority || 'chunk'}
                                   {chunk.sourceType === 'instagram' ? ' · instagram' : ''}
                                   {chunk.postType ? ` · ${chunk.postType}` : ''}
@@ -313,18 +320,18 @@ export default function SandboxPage({ params }: { params: { agentId: string } })
                           </div>
                         </div>
                         <div>
-                          <div className="mb-1 font-semibold text-amber-600">Подтянуто по связи</div>
+                          <div className="mb-1 font-semibold text-[color:var(--color-compass-gold)]">Подтянуто по связи</div>
                           <div className="space-y-1">
                             {message.retrievalDebug.linkedChunks.length === 0 ? (
-                              <div className="text-gray-500">Нет связанных чанков</div>
+                              <div className="text-[color:var(--color-smoke)]">Нет связанных чанков</div>
                             ) : message.retrievalDebug.linkedChunks.map((chunk) => (
-                              <div key={chunk.id} className="rounded-lg border border-amber-200 bg-amber-50/70 p-2">
-                                <div className="flex items-center gap-2 font-medium text-gray-700">
+                              <div key={chunk.id} className="rounded-lg border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)]/70 p-2">
+                                <div className="flex items-center gap-2 font-medium text-[color:var(--color-chalk)]">
                                   {chunk.sourceType === 'instagram' ? <Instagram size={13} className="text-pink-500" /> : null}
                                   <span>{chunk.sourceTitle || 'Связанный источник'}</span>
                                 </div>
-                                <div className="line-clamp-3 text-gray-600">{chunk.content}</div>
-                                <div className="mt-1 text-[10px] uppercase tracking-wide text-gray-500">
+                                <div className="line-clamp-3 text-[color:var(--color-smoke)]">{chunk.content}</div>
+                                <div className="mt-1 text-[10px] uppercase tracking-wide text-[color:var(--color-smoke)]">
                                   {chunk.linkType || 'linked'} · {Math.round(chunk.similarity * 100)}% · {chunk.priority || 'chunk'}
                                   {chunk.sourceType === 'instagram' ? ' · instagram' : ''}
                                   {chunk.postType ? ` · ${chunk.postType}` : ''}
@@ -341,11 +348,11 @@ export default function SandboxPage({ params }: { params: { agentId: string } })
             })}
             {isLoading ? (
               <div className="flex justify-start">
-                <div className="rounded-2xl rounded-bl-sm bg-gray-100 px-4 py-3">
+                <div className="rounded-2xl rounded-bl-sm border border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] px-4 py-3">
                   <div className="flex gap-1">
-                    <span className="h-2 w-2 animate-bounce rounded-full bg-gray-400" style={{ animationDelay: '0ms' }} />
-                    <span className="h-2 w-2 animate-bounce rounded-full bg-gray-400" style={{ animationDelay: '150ms' }} />
-                    <span className="h-2 w-2 animate-bounce rounded-full bg-gray-400" style={{ animationDelay: '300ms' }} />
+                    <span className="h-2 w-2 animate-bounce rounded-full bg-[color:var(--color-smoke)]" style={{ animationDelay: '0ms' }} />
+                    <span className="h-2 w-2 animate-bounce rounded-full bg-[color:var(--color-smoke)]" style={{ animationDelay: '150ms' }} />
+                    <span className="h-2 w-2 animate-bounce rounded-full bg-[color:var(--color-smoke)]" style={{ animationDelay: '300ms' }} />
                   </div>
                 </div>
               </div>
@@ -355,8 +362,8 @@ export default function SandboxPage({ params }: { params: { agentId: string } })
         )}
       </div>
 
-      <div className="border-t border-gray-100 px-6 py-4">
-        <div className="mx-auto flex max-w-2xl items-end gap-3">
+      <div className="border-t border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] px-6 py-4">
+          <div className="mx-auto flex w-full max-w-[900px] items-end gap-3">
           <div className="relative flex-1">
             <textarea
               value={input}
@@ -369,9 +376,9 @@ export default function SandboxPage({ params }: { params: { agentId: string } })
               }}
               placeholder="Напишите сообщение..."
               rows={1}
-              className="w-full resize-none rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 pr-12 text-sm focus:border-blue-300 focus:outline-none"
+              className="hyper-input min-h-[48px] resize-none py-3 pr-14 text-sm"
             />
-            <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2 text-gray-400">
+            <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2 text-[color:var(--color-smoke)]">
               <Paperclip size={16} />
               <Mic size={16} />
             </div>
@@ -379,12 +386,12 @@ export default function SandboxPage({ params }: { params: { agentId: string } })
           <button
             onClick={sendMessage}
             disabled={!input.trim() || isLoading}
-            className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-blue-600 text-white transition-colors hover:bg-blue-700 disabled:opacity-40"
+            className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-[color:var(--color-chalk)] text-[color:var(--color-carbon)] transition-all hover:opacity-95 disabled:opacity-40"
           >
-            <Send size={16} />
+            <Send size={16} strokeWidth={1.5} />
           </button>
         </div>
-        <p className="mt-2 text-center text-[10px] text-gray-400">
+        <p className="mt-2 text-center text-[10px] text-[color:var(--color-smoke)]">
           Нажмите Enter для отправки · Shift+Enter для новой строки
         </p>
       </div>

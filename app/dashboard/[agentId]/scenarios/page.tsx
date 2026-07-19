@@ -230,28 +230,28 @@ export default function ScenariosPage({ params }: { params: { agentId: string } 
   const pageCount = Math.ceil(total / 20) || 1;
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-white">
-      <div className="flex items-center justify-between border-b border-gray-100 px-6 py-4">
+    <div className="hyper-dashboard-shell flex h-full flex-col overflow-hidden">
+      <div className="flex items-center justify-between border-b border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] px-6 py-4">
         <div>
-          <h1 className="text-base font-semibold text-gray-900">Сценарии</h1>
-          <p className="text-xs text-gray-500">Управление автоматическими сценариями и историей запусков</p>
+          <h1 className="text-base font-semibold text-[color:var(--color-chalk)]">Сценарии</h1>
+          <p className="text-xs text-[color:var(--color-smoke)]">Управление автоматическими сценариями и историей запусков</p>
         </div>
         <button
           type="button"
           onClick={openCreateForm}
-          className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700"
+          className="hyper-primary-btn inline-flex items-center gap-2 px-4 py-2 text-sm transition"
         >
           <Plus size={14} /> Создать сценарий
         </button>
       </div>
 
-      <div className="flex gap-2 border-b border-gray-100 px-6 py-4">
+      <div className="flex gap-2 border-b border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] px-6 py-4">
         {['scenarios', 'history'].map((tab) => (
           <button
             key={tab}
             type="button"
             onClick={() => setActiveTab(tab as 'scenarios' | 'history')}
-            className={`rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${activeTab === tab ? 'bg-gray-900 text-white' : 'border border-gray-200 bg-white text-gray-500 hover:bg-gray-50'}`}
+            className={`rounded-lg border px-4 py-2 text-sm font-semibold transition-colors ${activeTab === tab ? 'border-[color:var(--color-chalk)] bg-[color:var(--color-carbon)] text-[color:var(--color-chalk)]' : 'border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] text-[color:var(--color-smoke)] hover:border-[color:var(--color-ash)]'}`}
           >
             {tab === 'scenarios' ? 'Сценарии' : 'История запусков'}
           </button>

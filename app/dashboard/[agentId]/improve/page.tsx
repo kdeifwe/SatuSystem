@@ -116,33 +116,33 @@ export default function ImprovePage({ params }: { params: { agentId: string } })
   const SeverityIcon = severityInfo.icon;
 
   return (
-    <div className="flex h-full flex-col bg-slate-50">
-      <div className="border-b border-gray-200 bg-white px-6 py-4">
-        <div className="flex items-center gap-2 text-sm font-medium text-slate-500">
-          <span className="rounded-full bg-blue-50 px-3 py-1 text-blue-700">Улучшение</span>
-          <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-500">Скрипт продаж</span>
+    <div className="hyper-dashboard-shell flex h-full flex-col">
+      <div className="border-b border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] px-6 py-4">
+        <div className="flex flex-wrap items-center gap-2 text-sm font-medium text-[color:var(--color-smoke)]">
+          <span className="rounded-full border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] px-3 py-1 text-[color:var(--color-chalk)]">Улучшение</span>
+          <span className="rounded-full border border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] px-3 py-1 text-[color:var(--color-smoke)]">Скрипт продаж</span>
         </div>
       </div>
 
       <div className="flex-1 overflow-y-auto px-6 py-8">
         <div className="mx-auto max-w-3xl">
           {!result ? (
-            <div className="rounded-3xl border border-dashed border-slate-200 bg-white px-10 py-14 text-center shadow-sm">
-              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-blue-50 text-blue-600">
+            <div className="rounded-[var(--radius-2xl)] border border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] px-10 py-14 text-center shadow-sm">
+              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] text-[color:var(--color-chalk)]">
                 <Sparkles className="h-8 w-8" />
               </div>
-              <h1 className="mt-6 text-2xl font-semibold text-slate-900">Что вы хотите изменить в вашем ИИ-агенте?</h1>
-              <p className="mt-3 text-sm text-slate-500">Опишите проблему, и я помогу улучшить промпт агента.</p>
+              <h1 className="mt-6 text-2xl font-semibold text-[color:var(--color-chalk)]">Что вы хотите изменить в вашем ИИ-агенте?</h1>
+              <p className="mt-3 text-sm text-[color:var(--color-smoke)]">Опишите проблему, и я помогу улучшить промпт агента.</p>
 
               <div className="mt-10 space-y-6 text-left">
                 <div>
-                  <label className="text-sm font-semibold text-slate-900">Опишите задачу</label>
+                  <label className="text-sm font-semibold text-[color:var(--color-chalk)]">Опишите задачу</label>
                   <textarea
                     value={feedback}
                     onChange={(event) => setFeedback(event.target.value)}
                     placeholder="Например: агент слишком формальный, нужно добавить больше вопросов о бюджете..."
                     rows={6}
-                    className="mt-3 w-full rounded-3xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-900 outline-none focus:border-blue-300"
+                    className="hyper-input mt-3 min-h-[160px] px-4 py-4 text-sm"
                   />
                   {error ? <p className="mt-2 text-sm text-rose-600">{error}</p> : null}
                 </div>
@@ -151,7 +151,7 @@ export default function ImprovePage({ params }: { params: { agentId: string } })
                   type="button"
                   onClick={handleSubmit}
                   disabled={loading}
-                  className="w-full rounded-3xl bg-blue-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="hyper-primary-btn w-full px-6 py-3 text-sm disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {loading ? 'Анализирую...' : 'Отправить'}
                 </button>
@@ -159,7 +159,7 @@ export default function ImprovePage({ params }: { params: { agentId: string } })
                 <button
                   type="button"
                   onClick={() => router.push(`/dashboard/${params.agentId}/improve/flow`)}
-                  className="mt-3 flex w-full items-center justify-center gap-2 rounded-3xl border border-slate-200 bg-white px-6 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                  className="mt-3 flex w-full items-center justify-center gap-2 rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] px-6 py-3 text-sm font-semibold text-[color:var(--color-chalk)] transition hover:border-[color:var(--color-ash)]"
                 >
                   <Workflow className="h-4 w-4" />
                   Открыть конструктор воронки

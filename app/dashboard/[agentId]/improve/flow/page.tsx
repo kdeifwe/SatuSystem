@@ -48,12 +48,12 @@ function EditableNode({ id, data }: NodeProps<FunnelNodeData>) {
   };
 
   return (
-    <div className="relative min-w-[240px] rounded-2xl border border-slate-300 bg-white p-3 shadow-sm">
+    <div className="relative min-w-[240px] rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-3 shadow-sm">
       {/* Delete button */}
       <button
         type="button"
         onClick={() => setShowDeleteConfirm(!showDeleteConfirm)}
-        className="absolute right-2 top-2 rounded-full p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-all"
+        className="absolute right-2 top-2 rounded-full p-1 text-[color:var(--color-smoke)] transition-all hover:bg-[color:var(--color-obsidian)] hover:text-[color:var(--color-chalk)]"
         title="Удалить шаг"
       >
         <X className="h-4 w-4" />
@@ -61,17 +61,17 @@ function EditableNode({ id, data }: NodeProps<FunnelNodeData>) {
 
       {/* Delete confirmation */}
       {showDeleteConfirm && (
-        <div className="absolute inset-0 flex items-center justify-center rounded-2xl bg-white/95 backdrop-blur-sm z-50">
+        <div className="absolute inset-0 z-50 flex items-center justify-center rounded-[var(--radius-cards)] bg-[color:var(--color-carbon)]/95 backdrop-blur-sm">
           <div className="text-center">
-            <div className="mb-3 text-xs font-semibold text-slate-600 uppercase">Подтверждение</div>
-            <div className="mb-4 text-sm text-slate-700 px-2">
+            <div className="mb-3 text-xs font-semibold uppercase text-[color:var(--color-smoke)]">Подтверждение</div>
+            <div className="mb-4 px-2 text-sm text-[color:var(--color-chalk)]">
               Удалить шаг<br/>«{data.title || 'без названия'}»?
             </div>
             <div className="flex gap-2 justify-center">
               <button
                 type="button"
                 onClick={() => setShowDeleteConfirm(false)}
-                className="px-3 py-1 text-xs font-medium rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200"
+                className="rounded-lg bg-[color:var(--color-obsidian)] px-3 py-1 text-xs font-medium text-[color:var(--color-chalk)] hover:border-[color:var(--color-ash)]"
               >
                 Отмена
               </button>
@@ -87,17 +87,17 @@ function EditableNode({ id, data }: NodeProps<FunnelNodeData>) {
         </div>
       )}
 
-      <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Шаг</div>
+      <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-[color:var(--color-smoke)]">Шаг</div>
       <input
         value={data.title}
         onChange={(event) => data.onChange(id, 'title', event.target.value)}
-        className="mb-2 w-full rounded-xl border border-slate-200 px-2 py-2 text-sm font-medium text-slate-900 outline-none focus:border-blue-400"
+        className="hyper-input mb-2 px-2 py-2 text-sm font-medium"
       />
       <textarea
         value={data.content}
         onChange={(event) => data.onChange(id, 'content', event.target.value)}
         rows={4}
-        className="w-full rounded-xl border border-slate-200 px-2 py-2 text-sm text-slate-700 outline-none focus:border-blue-400"
+        className="hyper-input px-2 py-2 text-sm"
       />
     </div>
   );
@@ -411,18 +411,18 @@ function FlowCanvas({ agentId }: { agentId: string }) {
   };
 
   return (
-    <div className="flex h-full flex-col bg-slate-50">
-      <div className="border-b border-slate-200 bg-white px-6 py-4">
+    <div className="hyper-dashboard-shell flex h-full flex-col">
+      <div className="border-b border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] px-6 py-4">
         <div className="flex items-center justify-between">
           <div>
-            <div className="text-sm font-semibold text-slate-900">Конструктор воронки продаж</div>
-            <div className="text-sm text-slate-500">Пишите сценарий в чате, а диаграмма будет обновляться автоматически</div>
+            <div className="text-sm font-semibold text-[color:var(--color-chalk)]">Конструктор воронки продаж</div>
+            <div className="text-sm text-[color:var(--color-smoke)]">Пишите сценарий в чате, а диаграмма будет обновляться автоматически</div>
           </div>
           <button
             type="button"
             onClick={saveFlow}
             disabled={saving}
-            className="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+            className="hyper-primary-btn inline-flex items-center gap-2 px-4 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
           >
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
             Сохранить
@@ -432,38 +432,38 @@ function FlowCanvas({ agentId }: { agentId: string }) {
 
       <div className="flex-1 p-4 lg:p-6">
         <div className="grid h-full gap-4 lg:grid-cols-[minmax(320px,0.9fr)_minmax(0,1.6fr)]">
-          <div className="flex h-full flex-col rounded-3xl border border-slate-200 bg-white shadow-sm">
-            <div className="border-b border-slate-200 px-4 py-4">
-              <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-                <MessageSquareText className="h-4 w-4 text-blue-600" />
+          <div className="flex h-full flex-col rounded-[var(--radius-2xl)] border border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] shadow-sm">
+            <div className="border-b border-[color:var(--color-graphite)] px-4 py-4">
+              <div className="flex items-center gap-2 text-sm font-semibold text-[color:var(--color-chalk)]">
+                <MessageSquareText className="h-4 w-4 text-[color:var(--color-ash)]" />
                 Чат с AI
               </div>
             </div>
             <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
-              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+              <div className="rounded-[var(--radius-cards)] border border-dashed border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] p-3 text-sm text-[color:var(--color-smoke)]">
                 Например: «Сначала здороваемся, спрашиваем площадь квартиры, потом говорим о доставке, показываем модель пылесоса. Если готов купить — оформляем заказ. Если сомневается — работаем с возражениями». 
               </div>
               {messages.map((message, index) => (
-                <div key={`${message.role}-${index}`} className={`rounded-2xl px-3 py-2 text-sm ${message.role === 'user' ? 'ml-auto bg-blue-600 text-white' : 'bg-slate-100 text-slate-800'}`}>
+                <div key={`${message.role}-${index}`} className={`rounded-[var(--radius-cards)] px-3 py-2 text-sm ${message.role === 'user' ? 'ml-auto bg-[color:var(--color-signal-white)] text-[color:var(--color-obsidian)]' : 'bg-[color:var(--color-obsidian)] text-[color:var(--color-chalk)]'}`}>
                   {message.text}
                 </div>
               ))}
             </div>
-            <div className="border-t border-slate-200 p-4">
+            <div className="border-t border-[color:var(--color-graphite)] p-4">
               <textarea
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
                 rows={4}
                 placeholder="Опишите, как должен вести диалог агент..."
-                className="w-full rounded-2xl border border-slate-200 px-3 py-3 text-sm outline-none focus:border-blue-400"
+                className="hyper-input w-full px-3 py-3 text-sm"
               />
               <div className="mt-3 flex items-center justify-between">
-                <div className="text-xs text-slate-500">Граф обновляется с сохранением существующих узлов</div>
+                <div className="text-xs text-[color:var(--color-smoke)]">Граф обновляется с сохранением существующих узлов</div>
                 <button
                   type="button"
                   onClick={submitMessage}
                   disabled={loading || !draft.trim()}
-                  className="inline-flex items-center gap-2 rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="hyper-primary-btn inline-flex items-center gap-2 px-4 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
                   Отправить
@@ -472,13 +472,13 @@ function FlowCanvas({ agentId }: { agentId: string }) {
             </div>
           </div>
 
-          <div className="flex h-full flex-col rounded-3xl border border-slate-200 bg-white shadow-sm">
-            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-4">
-              <div className="text-sm font-semibold text-slate-900">Диаграмма воронки</div>
+          <div className="flex h-full flex-col rounded-[var(--radius-2xl)] border border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] shadow-sm">
+            <div className="flex items-center justify-between border-b border-[color:var(--color-graphite)] px-4 py-4">
+              <div className="text-sm font-semibold text-[color:var(--color-chalk)]">Диаграмма воронки</div>
               <select
                 value={flow.entryNodeId}
                 onChange={(event) => setFlow((current) => ({ ...current, entryNodeId: event.target.value }))}
-                className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                className="rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] px-3 py-2 text-sm text-[color:var(--color-chalk)]"
               >
                 {flow.nodes.map((node) => (
                   <option key={node.id} value={node.id}>{node.title || node.id}</option>
@@ -487,7 +487,7 @@ function FlowCanvas({ agentId }: { agentId: string }) {
             </div>
             <div className="flex-1">
               {loading && flow.nodes.length === 0 ? (
-                <div className="flex h-full items-center justify-center text-sm text-slate-500">Загружаю текущий граф…</div>
+                <div className="flex h-full items-center justify-center text-sm text-[color:var(--color-smoke)]">Загружаю текущий граф…</div>
               ) : (
                 <ReactFlow
                   nodes={nodes}
@@ -498,6 +498,8 @@ function FlowCanvas({ agentId }: { agentId: string }) {
                   nodeTypes={nodeTypes}
                   fitView
                   proOptions={{ hideAttribution: true }}
+                  className="bg-[color:var(--color-obsidian)]"
+                  style={{ background: 'var(--color-obsidian)' }}
                 >
                   <Background />
                   <Controls />
@@ -505,7 +507,7 @@ function FlowCanvas({ agentId }: { agentId: string }) {
                 </ReactFlow>
               )}
             </div>
-            {error ? <div className="border-t border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div> : null}
+            {error ? <div className="border-t border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] px-4 py-3 text-sm text-[color:var(--color-ash)]">{error}</div> : null}
           </div>
         </div>
       </div>

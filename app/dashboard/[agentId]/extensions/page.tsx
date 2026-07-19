@@ -305,56 +305,55 @@ export default function ExtensionsPage({ params }: { params: { agentId: string }
 
   const connectedMembers = (telegramData?.members ?? []).filter((member) => Boolean(member.telegram_chat_id));
   const telegramCardClassName =
-    'group rounded-3xl border border-slate-200/80 bg-white p-6 text-left shadow-sm shadow-slate-200/70 transition hover:-translate-y-1 hover:border-slate-300';
+    'group flex h-full flex-col rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-6 text-left transition hover:border-[color:var(--color-ash)]';
   const telegramBadgeClassName =
-    'rounded-full px-3 py-1 text-xs font-medium';
+    'inline-flex shrink-0 items-center rounded-full border border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-[color:var(--color-smoke)]';
 
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <p className="text-sm font-medium uppercase tracking-[0.3em] text-slate-400">Расширения</p>
-          <h1 className="mt-2 text-3xl font-semibold text-white">Настройки поведения агента</h1>
-          <p className="mt-2 max-w-2xl text-sm text-slate-400">
+          <p className="text-sm font-medium uppercase tracking-[0.3em] text-[color:var(--color-smoke)]">Расширения</p>
+          <h1 className="mt-2 text-3xl font-semibold text-[color:var(--color-chalk)]">Настройки поведения агента</h1>
+          <p className="mt-2 max-w-2xl text-sm text-[color:var(--color-smoke)]">
             Агент {params.agentId} получает отдельные правила для Telegram, повторных касаний, пауз, очередей и разбивки ответов.
           </p>
         </div>
 
-        <div className="rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-3 shadow-lg shadow-black/20">
-          <div className="text-sm text-slate-400">Активно</div>
-          <div className="mt-1 text-2xl font-semibold text-white">
+        <div className="rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] px-4 py-3">
+          <div className="text-sm text-[color:var(--color-smoke)]">Активно</div>
+          <div className="mt-1 text-2xl font-semibold text-[color:var(--color-chalk)]">
             {activeCount}/{extensions.length}
           </div>
         </div>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-2">
+      <div className="grid auto-rows-fr gap-6 xl:grid-cols-2">
         {extensions.slice(0, 2).map((extension) => {
           const Icon = extension.icon;
-          const isLightCard = extension.key === 'telegram_notifications' || extension.key === 'repeat_touches';
           return (
             <button
               key={extension.key}
               type="button"
               onClick={() => setSelectedKey(extension.key)}
-              className={`${isLightCard ? telegramCardClassName : `group rounded-3xl border border-white/10 bg-gradient-to-br p-6 text-left shadow-lg shadow-black/20 transition hover:-translate-y-1 hover:border-cyan-400/40 ${extension.accent}`}`}
+              className={telegramCardClassName}
             >
               <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className={`flex items-center gap-2 text-sm font-medium ${isLightCard ? 'text-slate-600' : 'text-slate-300'}`}>
-                    <span className={`rounded-full border p-2 ${isLightCard ? 'border-slate-200 bg-slate-50 text-slate-700' : 'border-white/10 bg-white/5 text-slate-200'}`}>
-                      <Icon className="h-4 w-4" />
-                    </span>
-                    {extension.meta}
+                <div className="flex items-start gap-3">
+                  <span className="mt-0.5 rounded-full border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] p-2 text-[color:var(--color-smoke)]">
+                    <Icon className="h-4 w-4" />
+                  </span>
+                  <div>
+                    <div className="text-sm font-medium text-[color:var(--color-chalk)]">{extension.meta}</div>
+                    <h2 className="mt-3 text-xl font-semibold text-[color:var(--color-chalk)]">{extension.title}</h2>
                   </div>
-                  <h2 className={`mt-4 text-xl font-semibold ${isLightCard ? 'text-slate-900' : 'text-white'}`}>{extension.title}</h2>
-                  <p className={`mt-2 text-sm leading-6 ${isLightCard ? 'text-slate-500' : 'text-slate-400'}`}>{extension.description}</p>
                 </div>
-                <span className={`${telegramBadgeClassName} ${extension.active ? (isLightCard ? 'bg-emerald-50 text-emerald-700' : 'bg-emerald-500/15 text-emerald-300') : (isLightCard ? 'bg-slate-100 text-slate-600' : 'bg-slate-700/70 text-slate-300')}`}>
-                  {extension.active ? 'Активно' : 'Выключено'}
+                <span className={`${telegramBadgeClassName} ${extension.active ? 'bg-[color:var(--color-obsidian)] text-[color:var(--color-pulse-green)]' : 'bg-[color:var(--color-carbon)] text-[color:var(--color-smoke)]'}`}>
+                  {extension.active ? 'Активно' : 'Отключено'}
                 </span>
               </div>
-              <div className={`mt-6 flex items-center justify-between text-sm ${isLightCard ? 'text-slate-700' : 'text-slate-300'}`}>
+              <p className="mt-4 text-sm leading-6 text-[color:var(--color-smoke)]">{extension.description}</p>
+              <div className="mt-auto flex items-center justify-between pt-6 text-sm text-[color:var(--color-smoke)]">
                 <span>Открыть настройки</span>
                 <ChevronRight className="h-4 w-4 transition group-hover:translate-x-1" />
               </div>
@@ -363,7 +362,7 @@ export default function ExtensionsPage({ params }: { params: { agentId: string }
         })}
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
+      <div className="grid auto-rows-fr gap-6 md:grid-cols-2 2xl:grid-cols-3">
         {extensions.slice(2).map((extension) => {
           const Icon = extension.icon;
           return (
@@ -371,19 +370,19 @@ export default function ExtensionsPage({ params }: { params: { agentId: string }
               key={extension.key}
               type="button"
               onClick={() => setSelectedKey(extension.key)}
-              className="rounded-3xl border border-white/10 bg-slate-900/70 p-5 text-left shadow-lg shadow-black/20 transition hover:-translate-y-1 hover:border-white/20"
+              className="flex h-full flex-col rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-6 text-left transition hover:border-[color:var(--color-ash)]"
             >
-              <div className="flex items-center justify-between gap-3">
-                <div className="rounded-full border border-white/10 bg-white/5 p-2 text-slate-200">
+              <div className="flex items-start justify-between gap-3">
+                <div className="rounded-full border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] p-2 text-[color:var(--color-smoke)]">
                   <Icon className="h-4 w-4" />
                 </div>
-                <span className={`rounded-full px-3 py-1 text-xs font-medium ${extension.active ? 'bg-emerald-500/15 text-emerald-300' : 'bg-slate-700/70 text-slate-300'}`}>
+                <span className={`${telegramBadgeClassName} ${extension.active ? 'bg-[color:var(--color-obsidian)] text-[color:var(--color-pulse-green)]' : 'bg-[color:var(--color-carbon)] text-[color:var(--color-smoke)]'}`}>
                   {extension.active ? 'Активно' : 'Отключено'}
                 </span>
               </div>
-              <h3 className="mt-4 text-lg font-semibold text-white">{extension.title}</h3>
-              <p className="mt-2 text-sm leading-6 text-slate-400">{extension.description}</p>
-              <div className="mt-4 flex items-center text-sm text-slate-300">
+              <h3 className="mt-4 text-lg font-semibold text-[color:var(--color-chalk)]">{extension.title}</h3>
+              <p className="mt-2 text-sm leading-6 text-[color:var(--color-smoke)]">{extension.description}</p>
+              <div className="mt-auto flex items-center pt-6 text-sm text-[color:var(--color-smoke)]">
                 <span>Настроить</span>
                 <ChevronRight className="ml-2 h-4 w-4" />
               </div>
@@ -393,8 +392,8 @@ export default function ExtensionsPage({ params }: { params: { agentId: string }
       </div>
 
       {selectedExtension && (
-        <div className="fixed inset-0 z-50 flex items-start justify-end bg-slate-950/80 p-4 sm:p-6">
-          <div className="flex max-h-[calc(100vh-2rem)] w-full max-w-[480px] flex-col overflow-hidden rounded-3xl border border-white/10 bg-slate-950 shadow-2xl shadow-black/50">
+        <div className="fixed inset-0 z-50 flex items-start justify-end bg-[color:var(--color-obsidian)]/80 p-4 sm:p-6">
+          <div className="flex max-h-[calc(100vh-2rem)] w-full max-w-[480px] flex-col overflow-hidden rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)]">
             <div className="flex flex-shrink-0 items-start justify-between gap-4 border-b border-white/10 px-6 py-5">
               <div>
                 <div className="flex items-center gap-2 text-sm font-medium text-slate-400">

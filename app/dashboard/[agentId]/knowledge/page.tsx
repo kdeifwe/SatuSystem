@@ -531,7 +531,7 @@ export default function KnowledgePage() {
   };
 
   return (
-    <div className="flex flex-col h-full overflow-y-auto bg-gray-50">
+    <div className="hyper-dashboard-shell flex h-full flex-col overflow-y-auto">
       <div className="px-8 py-6 max-w-6xl mx-auto w-full">
         <div className="mb-6">
           <h1 className="text-2xl font-bold text-gray-900">База знаний</h1>
@@ -687,7 +687,7 @@ export default function KnowledgePage() {
                   setActiveTab(val);
                   setPage(1);
                 }}
-                className={`rounded-full border px-3 py-1 text-sm font-medium transition-colors ${activeTab === val ? 'border-gray-900 bg-gray-900 text-white' : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'}`}
+                className={`rounded-full border px-3 py-1 text-sm font-medium transition-colors ${activeTab === val ? 'border-[color:var(--color-chalk)] bg-[color:var(--color-carbon)] text-[color:var(--color-chalk)]' : 'border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] text-[color:var(--color-smoke)] hover:border-[color:var(--color-ash)]'}`}
               >
                 {label}
                 {val !== 'all' ? <span className="ml-2 text-xs opacity-80">{categoryCounts[val] || 0}</span> : null}

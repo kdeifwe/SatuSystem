@@ -63,43 +63,48 @@ export default function CreateOrgPage() {
   return (
     <>
       <SiteNav />
-      <main className="container">
-        <div className="card">
-          <h1>Создать организацию</h1>
-        <form onSubmit={handleSubmit}>
-          <div className="form-field">
-            <label htmlFor="name">Название организации</label>
-            <input
-              id="name"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              required
-            />
-          </div>
-          <div className="form-field">
-            <label htmlFor="timezone">Часовой пояс</label>
-            <input
-              id="timezone"
-              value={timezone}
-              onChange={(event) => setTimezone(event.target.value)}
-              required
-            />
-          </div>
-          <div className="form-field">
-            <label htmlFor="currency">Валюта</label>
-            <input
-              id="currency"
-              value={currency}
-              onChange={(event) => setCurrency(event.target.value)}
-              required
-            />
-          </div>
-          <button type="submit" disabled={loading}>
-            {loading ? 'Создание...' : 'Создать организацию'}
-          </button>
-        </form>
+      <main className="container py-10">
+        <div className="hyper-card max-w-md">
+          <h1 className="text-[28px] mb-6 text-[color:var(--color-chalk)] font-normal">Создать организацию</h1>
+          <form onSubmit={handleSubmit}>
+            <div className="form-field">
+              <label htmlFor="name" className="hyper-label">Название организации</label>
+              <input
+                id="name"
+                className="hyper-input"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                required
+              />
+            </div>
+            <div className="form-field">
+              <label htmlFor="timezone" className="hyper-label">Часовой пояс</label>
+              <input
+                id="timezone"
+                className="hyper-input"
+                value={timezone}
+                onChange={(event) => setTimezone(event.target.value)}
+                required
+              />
+            </div>
+            <div className="form-field">
+              <label htmlFor="currency" className="hyper-label">Валюта</label>
+              <input
+                id="currency"
+                className="hyper-input"
+                value={currency}
+                onChange={(event) => setCurrency(event.target.value)}
+                required
+              />
+            </div>
+            <div className="mt-6">
+              <button type="submit" disabled={loading} className="hyper-primary-btn">
+                {loading ? 'Создание...' : 'Создать организацию'}
+              </button>
+            </div>
+          </form>
         </div>
-        {message ? <p>{message}</p> : null}
+        {message ? <p className="mt-4 text-[color:var(--color-smoke)]">{message}</p> : null}
       </main>
     </>
   );

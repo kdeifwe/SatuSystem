@@ -1,7 +1,9 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Save, ToggleLeft, ToggleRight } from 'lucide-react';
+import { Save } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
 
 const DEFAULT_AGENT_MODEL = 'gemini-2.5-flash';
 const ALLOWED_AGENT_MODELS = new Set(['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-pro', 'gemini-2.0-flash']);
@@ -35,28 +37,19 @@ const modelGroups: Array<{
     key: 'images',
     label: 'Генерация изображений',
     description: 'Изображения — агент сможет присылать сгенерированные визуалы',
-    options: [
-      {
-        value: 'gemini-2.5-flash',
-        label: 'Gemini 2.5 Flash — доступна для текстовых сценариев',
-      },
-    ],
+    options: [{ value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash — доступна для текстовых сценариев' }],
   },
   {
     key: 'video',
     label: 'Генерация видео',
     description: 'Видео — для будущих модулей рекламных роликов',
-    options: [
-      { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash — текстовые сценарии без видео', disabled: true },
-    ],
+    options: [{ value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash — текстовые сценарии без видео', disabled: true }],
   },
   {
     key: 'voice',
     label: 'Голос',
     description: 'Голос — для звонков через модуль Голосовой агент',
-    options: [
-      { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash — пока не используется для голосовых сценариев', disabled: true },
-    ],
+    options: [{ value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash — пока не используется для голосовых сценариев', disabled: true }],
   },
   {
     key: 'legacy',
@@ -162,138 +155,121 @@ export default function SettingsPage({ params }: { params: { agentId: string } }
     });
     setSaving(false);
     setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    window.setTimeout(() => setSaved(false), 2000);
   }
 
-  function Toggle({
-    value,
-    onChange,
-    label,
-    description,
-  }: {
-    value: boolean;
-    onChange: (value: boolean) => void;
-    label: string;
-    description: string;
-  }) {
+  function Toggle({ value, onChange, label, description }: { value: boolean; onChange: (value: boolean) => void; label: string; description: string }) {
     return (
-      <div className="flex items-center justify-between border-b border-gray-100 py-4 last:border-0">
+      <div className="flex items-center justify-between border-b border-[color:var(--color-graphite)] py-4 last:border-0">
         <div>
-          <p className="text-sm font-medium text-gray-900">{label}</p>
-          <p className="mt-0.5 text-xs text-gray-500">{description}</p>
+          <p className="text-sm font-medium text-[color:var(--color-chalk)]">{label}</p>
+          <p className="mt-0.5 text-xs text-[color:var(--color-smoke)]">{description}</p>
         </div>
         <button
           type="button"
           onClick={() => onChange(!value)}
-          className={`relative h-6 w-11 rounded-full transition-colors ${value ? 'bg-blue-600' : 'bg-gray-200'}`}
+          className={`relative h-6 w-11 rounded-full transition-colors ${value ? 'bg-[color:var(--color-pulse-green)]' : 'bg-[color:var(--color-graphite)]'}`}
         >
-          <span
-            className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${value ? 'translate-x-5' : 'translate-x-0'}`}
-          />
+          <span className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-[color:var(--color-chalk)] shadow transition-transform ${value ? 'translate-x-5' : 'translate-x-0'}`} />
         </button>
       </div>
     );
   }
 
   if (loading) {
-    return <div className="flex h-full items-center justify-center text-gray-400">Загрузка...</div>;
+    return <div className="flex h-full items-center justify-center text-[color:var(--color-smoke)]">Загрузка...</div>;
   }
 
   return (
-    <div className="flex h-full flex-col overflow-y-auto">
-      <div className="sticky top-0 z-10 flex items-center justify-between border-b border-gray-100 bg-white px-6 py-4">
+    <div className="flex h-full flex-col overflow-y-auto bg-[color:var(--color-obsidian)] text-[color:var(--color-chalk)]">
+      <div className="sticky top-0 z-10 flex items-center justify-between border-b border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] px-6 py-4">
         <div>
-          <h1 className="text-base font-semibold text-gray-900">Настройки агента</h1>
-          <p className="text-xs text-gray-500">Управляйте поведением вашего ИИ-агента</p>
+          <h1 className="text-base font-semibold text-[color:var(--color-chalk)]">Настройки агента</h1>
+          <p className="text-xs text-[color:var(--color-smoke)]">Управляйте поведением вашего ИИ-агента</p>
         </div>
-        <button
-          type="button"
-          onClick={save}
-          disabled={saving}
-          className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
-        >
+        <Button type="button" variant="primary" onClick={save} disabled={saving} className="px-4 py-2">
           <Save size={14} />
           {saved ? '✓ Сохранено' : saving ? 'Сохраняю...' : 'Сохранить'}
-        </button>
+        </Button>
       </div>
 
       <div className="mx-auto w-full max-w-2xl space-y-8 px-6 py-6">
         <section>
-          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-gray-500">Основное</h2>
-          <div className="space-y-4">
+          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-[color:var(--color-smoke)]">Основное</h2>
+          <Card className="space-y-4 border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-6">
             <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">Имя агента</label>
+              <label className="mb-1 block text-sm font-medium text-[color:var(--color-smoke)]">Имя агента</label>
               <input
                 value={settings.name}
                 onChange={(event) => setSettings((current) => ({ ...current, name: event.target.value }))}
-                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                className="w-full rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] px-3 py-2 text-sm text-[color:var(--color-chalk)] focus:border-[color:var(--color-ash)] focus:outline-none"
               />
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">Роль</label>
+              <label className="mb-1 block text-sm font-medium text-[color:var(--color-smoke)]">Роль</label>
               <input
                 value={settings.role}
                 onChange={(event) => setSettings((current) => ({ ...current, role: event.target.value }))}
-                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                className="w-full rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] px-3 py-2 text-sm text-[color:var(--color-chalk)] focus:border-[color:var(--color-ash)] focus:outline-none"
               />
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">Цель</label>
+              <label className="mb-1 block text-sm font-medium text-[color:var(--color-smoke)]">Цель</label>
               <textarea
                 value={settings.goal}
                 onChange={(event) => setSettings((current) => ({ ...current, goal: event.target.value }))}
                 rows={2}
-                className="w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                className="w-full resize-none rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] px-3 py-2 text-sm text-[color:var(--color-chalk)] focus:border-[color:var(--color-ash)] focus:outline-none"
               />
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">Тон общения</label>
+              <label className="mb-1 block text-sm font-medium text-[color:var(--color-smoke)]">Тон общения</label>
               <textarea
                 value={settings.tone_of_voice}
                 onChange={(event) => setSettings((current) => ({ ...current, tone_of_voice: event.target.value }))}
                 rows={2}
-                className="w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                className="w-full resize-none rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] px-3 py-2 text-sm text-[color:var(--color-chalk)] focus:border-[color:var(--color-ash)] focus:outline-none"
               />
             </div>
-          </div>
+          </Card>
         </section>
 
         <section>
-          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-gray-500">Коммуникация и правила</h2>
-          <div className="space-y-4">
+          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-[color:var(--color-smoke)]">Коммуникация и правила</h2>
+          <Card className="space-y-4 border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-6">
             <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">Правила общения</label>
+              <label className="mb-1 block text-sm font-medium text-[color:var(--color-smoke)]">Правила общения</label>
               <textarea
                 value={settings.communication_rules}
                 onChange={(event) => setSettings((current) => ({ ...current, communication_rules: event.target.value }))}
                 rows={3}
-                className="w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                className="w-full resize-none rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] px-3 py-2 text-sm text-[color:var(--color-chalk)] focus:border-[color:var(--color-ash)] focus:outline-none"
               />
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">Стиль общения с людьми</label>
+              <label className="mb-1 block text-sm font-medium text-[color:var(--color-smoke)]">Стиль общения с людьми</label>
               <textarea
                 value={settings.human_communication_style}
                 onChange={(event) => setSettings((current) => ({ ...current, human_communication_style: event.target.value }))}
                 rows={3}
-                className="w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                className="w-full resize-none rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] px-3 py-2 text-sm text-[color:var(--color-chalk)] focus:border-[color:var(--color-ash)] focus:outline-none"
               />
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">Принципы работы с базой знаний</label>
+              <label className="mb-1 block text-sm font-medium text-[color:var(--color-smoke)]">Принципы работы с базой знаний</label>
               <textarea
                 value={settings.knowledge_base_principles}
                 onChange={(event) => setSettings((current) => ({ ...current, knowledge_base_principles: event.target.value }))}
                 rows={3}
-                className="w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                className="w-full resize-none rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] px-3 py-2 text-sm text-[color:var(--color-chalk)] focus:border-[color:var(--color-ash)] focus:outline-none"
               />
             </div>
-          </div>
+          </Card>
         </section>
 
         <section>
-          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-gray-500">Поведение в чате</h2>
-          <div className="rounded-xl bg-gray-50 px-4">
+          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-[color:var(--color-smoke)]">Поведение в чате</h2>
+          <Card className="border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-4">
             <Toggle
               value={settings.split_messages}
               onChange={(value) => setSettings((current) => ({ ...current, split_messages: value }))}
@@ -301,25 +277,25 @@ export default function SettingsPage({ params }: { params: { agentId: string } }
               description="Агент разбивает длинный ответ на 2-3 коротких сообщения — как живой человек"
             />
             {settings.split_messages ? (
-              <div className="border-b border-gray-100 py-4">
-                <p className="mb-2 text-sm font-medium text-gray-900">Максимум сообщений за раз</p>
+              <div className="border-b border-[color:var(--color-graphite)] py-4">
+                <p className="mb-2 text-sm font-medium text-[color:var(--color-chalk)]">Максимум сообщений за раз</p>
                 <div className="flex gap-2">
                   {[1, 2, 3].map((part) => (
                     <button
                       key={part}
                       type="button"
                       onClick={() => setSettings((current) => ({ ...current, split_max_parts: part }))}
-                      className={`h-10 w-10 rounded-lg text-sm font-medium transition-colors ${
+                      className={`h-10 w-10 rounded-[var(--radius-cards)] text-sm font-medium transition-colors ${
                         settings.split_max_parts === part
-                          ? 'bg-gray-900 text-white'
-                          : 'border border-gray-200 bg-white text-gray-700 hover:bg-gray-50'
+                          ? 'bg-[color:var(--color-signal-white)] text-[color:var(--color-obsidian)]'
+                          : 'border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] text-[color:var(--color-chalk)] hover:border-[color:var(--color-ash)]'
                       }`}
                     >
                       {part}
                     </button>
                   ))}
                 </div>
-                <p className="mt-2 text-xs text-gray-400">Рекомендуем: 2-3 для продаж, 1 для поддержки</p>
+                <p className="mt-2 text-xs text-[color:var(--color-smoke)]">Рекомендуем: 2-3 для продаж, 1 для поддержки</p>
               </div>
             ) : null}
             <Toggle
@@ -328,26 +304,26 @@ export default function SettingsPage({ params }: { params: { agentId: string } }
               label="Имитация набора текста"
               description="Задержка перед каждым сообщением пропорциональна его длине (~40 символов/сек)"
             />
-          </div>
+          </Card>
         </section>
 
         <section>
-          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-gray-500">Передача оператору</h2>
-          <div className="rounded-xl bg-gray-50 p-4">
+          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-[color:var(--color-smoke)]">Передача оператору</h2>
+          <Card className="space-y-4 border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-6">
             <Toggle
               value={settings.handoff_enabled}
               onChange={(value) => setSettings((current) => ({ ...current, handoff_enabled: value }))}
               label="Включить авто-передачу"
               description="Когда триггер срабатывает, агент отключает AI и передаёт диалог оператору"
             />
-            <div className="mt-4 grid gap-3 border-t border-gray-100 pt-4">
+            <div className="mt-4 grid gap-3 border-t border-[color:var(--color-graphite)] pt-4">
               {[
                 { key: 'explicit_request', label: 'Клиент явно просит оператора' },
                 { key: 'anger_complaint', label: 'Злость / жалоба / угроза' },
                 { key: 'no_answer_after_two_searches', label: 'Агент не нашёл ответ 2 раза подряд' },
                 { key: 'asks_if_bot', label: 'Клиент спрашивает «ты бот?»' },
               ].map((trigger) => (
-                <label key={trigger.key} className="flex items-center gap-2 text-sm text-gray-700">
+                <label key={trigger.key} className="flex items-center gap-2 text-sm text-[color:var(--color-smoke)]">
                   <input
                     type="checkbox"
                     checked={settings.handoff_triggers[trigger.key as keyof typeof settings.handoff_triggers]}
@@ -360,44 +336,44 @@ export default function SettingsPage({ params }: { params: { agentId: string } }
                         },
                       }))
                     }
-                    className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    className="h-4 w-4 rounded border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] text-[color:var(--color-pulse-green)] focus:ring-0"
                   />
                   <span>{trigger.label}</span>
                 </label>
               ))}
             </div>
-            <div className="mt-4 space-y-3 border-t border-gray-100 pt-4">
+            <div className="mt-4 space-y-3 border-t border-[color:var(--color-graphite)] pt-4">
               <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700">Сообщение клиенту при передаче</label>
+                <label className="mb-1 block text-sm font-medium text-[color:var(--color-smoke)]">Сообщение клиенту при передаче</label>
                 <textarea
                   value={settings.handoff_client_message}
                   onChange={(event) => setSettings((current) => ({ ...current, handoff_client_message: event.target.value }))}
                   rows={2}
-                  className="w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                  className="w-full resize-none rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] px-3 py-2 text-sm text-[color:var(--color-chalk)] focus:border-[color:var(--color-ash)] focus:outline-none"
                 />
               </div>
               <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700">Сообщение оператору</label>
+                <label className="mb-1 block text-sm font-medium text-[color:var(--color-smoke)]">Сообщение оператору</label>
                 <textarea
                   value={settings.handoff_operator_message}
                   onChange={(event) => setSettings((current) => ({ ...current, handoff_operator_message: event.target.value }))}
                   rows={2}
-                  className="w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                  className="w-full resize-none rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] px-3 py-2 text-sm text-[color:var(--color-chalk)] focus:border-[color:var(--color-ash)] focus:outline-none"
                 />
               </div>
             </div>
-          </div>
+          </Card>
         </section>
 
         <section>
-          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-gray-500">Продвинутые</h2>
-          <div className="space-y-4">
+          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-[color:var(--color-smoke)]">Продвинутые</h2>
+          <Card className="space-y-4 border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-6">
             <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">Модель</label>
+              <label className="mb-1 block text-sm font-medium text-[color:var(--color-smoke)]">Модель</label>
               <select
                 value={settings.model}
                 onChange={(event) => setSettings((current) => ({ ...current, model: event.target.value }))}
-                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                className="w-full rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] px-3 py-2 text-sm text-[color:var(--color-chalk)] focus:border-[color:var(--color-ash)] focus:outline-none"
               >
                 {modelGroups.map((group) => (
                   <optgroup key={group.key} label={group.label}>
@@ -411,15 +387,15 @@ export default function SettingsPage({ params }: { params: { agentId: string } }
               </select>
               <div className="mt-2 space-y-1">
                 {modelGroups.map((group) => (
-                  <p key={group.key} className="text-xs text-gray-400">
+                  <p key={group.key} className="text-xs text-[color:var(--color-smoke)]">
                     {group.description}
                   </p>
                 ))}
               </div>
             </div>
             <div>
-              <label className="mb-2 block text-sm font-medium text-gray-700">
-                Температура: <span className="font-semibold text-blue-600">{settings.temperature}</span>
+              <label className="mb-2 block text-sm font-medium text-[color:var(--color-smoke)]">
+                Температура: <span className="font-semibold text-[color:var(--color-chalk)]">{settings.temperature}</span>
               </label>
               <input
                 type="range"
@@ -428,14 +404,14 @@ export default function SettingsPage({ params }: { params: { agentId: string } }
                 step="0.1"
                 value={settings.temperature}
                 onChange={(event) => setSettings((current) => ({ ...current, temperature: parseFloat(event.target.value) }))}
-                className="w-full accent-blue-600"
+                className="w-full accent-[color:var(--color-pulse-green)]"
               />
-              <div className="mt-1 flex justify-between text-xs text-gray-400">
+              <div className="mt-1 flex justify-between text-xs text-[color:var(--color-smoke)]">
                 <span>Точнее (0)</span>
                 <span>Креативнее (1)</span>
               </div>
             </div>
-          </div>
+          </Card>
         </section>
       </div>
     </div>
