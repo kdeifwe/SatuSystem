@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { format } from 'date-fns';
 import { ChevronDown, Settings, Download } from 'lucide-react';
 import { StatsFilters, Period, Outcome } from '@/hooks/useStats';
+import { Card } from '@/components/ui/card';
 
 interface FilterPanelProps {
   filters: StatsFilters;
@@ -86,7 +87,7 @@ export const FilterPanel = ({
   };
 
   return (
-    <div className="mb-6 bg-white rounded-lg border border-gray-200 p-4">
+    <Card className="mb-6 border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-4">
       <div className="flex items-center gap-3 overflow-x-auto pb-2">
         {/* Settings button */}
         <button className="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-300 hover:bg-gray-50 whitespace-nowrap text-sm font-medium">
@@ -226,6 +227,6 @@ export const FilterPanel = ({
           {isExporting ? 'Выгружаю…' : 'Выгрузить'}
         </button>
       </div>
-    </div>
+    </Card>
   );
 };

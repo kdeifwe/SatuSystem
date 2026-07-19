@@ -7,10 +7,10 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  Legend,
   ResponsiveContainer,
 } from 'recharts';
 import { StatsData } from '@/hooks/useStats';
+import { Card } from '@/components/ui/card';
 
 interface TrendsBlockProps {
   data: StatsData | null;
@@ -21,20 +21,20 @@ export const TrendsBlock = ({ data, loading }: TrendsBlockProps) => {
   if (loading) {
     return (
       <div className="mb-8">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">Тренды</h2>
+        <h2 className="mb-4 text-lg font-normal text-[color:var(--color-chalk)]">Тренды</h2>
         <div className="grid grid-cols-2 gap-4">
-          <div className="bg-white rounded-lg border border-gray-200 p-6 h-80">
-            <div className="w-full h-full bg-gray-200 rounded animate-pulse"></div>
-          </div>
-          <div className="bg-white rounded-lg border border-gray-200 p-6 h-80">
-            <div className="w-full h-full bg-gray-200 rounded animate-pulse"></div>
-          </div>
+          <Card className="h-80 border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-6">
+            <div className="h-full w-full animate-pulse rounded bg-[color:var(--color-obsidian)]" />
+          </Card>
+          <Card className="h-80 border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-6">
+            <div className="h-full w-full animate-pulse rounded bg-[color:var(--color-obsidian)]" />
+          </Card>
         </div>
       </div>
     );
   }
 
-  const conversationsTrendData = data?.trends.conversations.map(item => ({
+  const conversationsTrendData = data?.trends.conversations.map((item) => ({
     day: new Date(item.day).toLocaleDateString('ru-RU', {
       month: 'short',
       day: 'numeric',
@@ -42,7 +42,7 @@ export const TrendsBlock = ({ data, loading }: TrendsBlockProps) => {
     value: item.value,
   })) || [];
 
-  const conversionTrendData = data?.trends.conversion.map(item => ({
+  const conversionTrendData = data?.trends.conversion.map((item) => ({
     day: new Date(item.day).toLocaleDateString('ru-RU', {
       month: 'short',
       day: 'numeric',
@@ -52,87 +52,59 @@ export const TrendsBlock = ({ data, loading }: TrendsBlockProps) => {
 
   return (
     <div className="mb-8">
-      <h2 className="text-lg font-semibold text-gray-900 mb-4">Тренды</h2>
+      <h2 className="mb-4 text-lg font-normal text-[color:var(--color-chalk)]">Тренды</h2>
       <div className="grid grid-cols-2 gap-4">
-        {/* Conversations trend */}
-        <div className="bg-white rounded-lg border border-gray-200 p-6">
-          <h3 className="text-sm font-medium text-gray-700 mb-4">
-            Количество диалогов
-          </h3>
+        <Card className="border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-6">
+          <h3 className="mb-4 text-sm font-medium text-[color:var(--color-smoke)]">Количество диалогов</h3>
           {conversationsTrendData.length > 0 ? (
             <ResponsiveContainer width="100%" height={300}>
               <LineChart data={conversationsTrendData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                <XAxis
-                  dataKey="day"
-                  tick={{ fontSize: 12 }}
-                  stroke="#9ca3af"
-                />
-                <YAxis tick={{ fontSize: 12 }} stroke="#9ca3af" />
+                <CartesianGrid strokeDasharray="3 3" stroke="#3a3f46" />
+                <XAxis dataKey="day" tick={{ fontSize: 12, fill: '#8f969f' }} stroke="#8f969f" />
+                <YAxis tick={{ fontSize: 12, fill: '#8f969f' }} stroke="#8f969f" />
                 <Tooltip
                   contentStyle={{
-                    backgroundColor: '#ffffff',
-                    border: '1px solid #e5e7eb',
+                    backgroundColor: '#111317',
+                    border: '1px solid #2e3338',
                     borderRadius: '0.5rem',
+                    color: '#f5f5f5',
                   }}
                   formatter={(value: number) => [value, 'Диалогов']}
-                  labelStyle={{ color: '#1f2937' }}
+                  labelStyle={{ color: '#f5f5f5' }}
                 />
-                <Line
-                  type="monotone"
-                  dataKey="value"
-                  stroke="#3b82f6"
-                  dot={{ fill: '#3b82f6', r: 4 }}
-                  strokeWidth={2}
-                />
+                <Line type="monotone" dataKey="value" stroke="#7ce0a6" dot={{ fill: '#7ce0a6', r: 4 }} strokeWidth={2} />
               </LineChart>
             </ResponsiveContainer>
           ) : (
-            <div className="h-80 flex items-center justify-center text-gray-500">
-              За этот период данных нет
-            </div>
+            <div className="flex h-80 items-center justify-center text-[color:var(--color-smoke)]">За этот период данных нет</div>
           )}
-        </div>
+        </Card>
 
-        {/* Conversion trend */}
-        <div className="bg-white rounded-lg border border-gray-200 p-6">
-          <h3 className="text-sm font-medium text-gray-700 mb-4">
-            Конверсия в основную цель
-          </h3>
+        <Card className="border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-6">
+          <h3 className="mb-4 text-sm font-medium text-[color:var(--color-smoke)]">Конверсия в основную цель</h3>
           {conversionTrendData.length > 0 ? (
             <ResponsiveContainer width="100%" height={300}>
               <LineChart data={conversionTrendData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                <XAxis
-                  dataKey="day"
-                  tick={{ fontSize: 12 }}
-                  stroke="#9ca3af"
-                />
-                <YAxis tick={{ fontSize: 12 }} stroke="#9ca3af" />
+                <CartesianGrid strokeDasharray="3 3" stroke="#3a3f46" />
+                <XAxis dataKey="day" tick={{ fontSize: 12, fill: '#8f969f' }} stroke="#8f969f" />
+                <YAxis tick={{ fontSize: 12, fill: '#8f969f' }} stroke="#8f969f" />
                 <Tooltip
                   contentStyle={{
-                    backgroundColor: '#ffffff',
-                    border: '1px solid #e5e7eb',
+                    backgroundColor: '#111317',
+                    border: '1px solid #2e3338',
                     borderRadius: '0.5rem',
+                    color: '#f5f5f5',
                   }}
                   formatter={(value: number) => [value, 'Конверсии']}
-                  labelStyle={{ color: '#1f2937' }}
+                  labelStyle={{ color: '#f5f5f5' }}
                 />
-                <Line
-                  type="monotone"
-                  dataKey="value"
-                  stroke="#10b981"
-                  dot={{ fill: '#10b981', r: 4 }}
-                  strokeWidth={2}
-                />
+                <Line type="monotone" dataKey="value" stroke="#8db8ff" dot={{ fill: '#8db8ff', r: 4 }} strokeWidth={2} />
               </LineChart>
             </ResponsiveContainer>
           ) : (
-            <div className="h-80 flex items-center justify-center text-gray-500">
-              За этот период данных нет
-            </div>
+            <div className="flex h-80 items-center justify-center text-[color:var(--color-smoke)]">За этот период данных нет</div>
           )}
-        </div>
+        </Card>
       </div>
     </div>
   );

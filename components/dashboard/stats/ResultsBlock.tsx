@@ -1,35 +1,31 @@
 'use client';
 
+import { useState, type ReactNode } from 'react';
 import { Info } from 'lucide-react';
 import { StatsData } from '@/hooks/useStats';
+import { Card } from '@/components/ui/card';
 
 interface ResultsBlockProps {
   data: StatsData | null;
   loading: boolean;
 }
 
-const Tooltip = ({ text, children }: { text: string; children: React.ReactNode }) => {
-  const [show, setShow] = React.useState(false);
+const Tooltip = ({ text, children }: { text: string; children: ReactNode }) => {
+  const [show, setShow] = useState(false);
   return (
     <div className="relative inline-block">
-      <div
-        onMouseEnter={() => setShow(true)}
-        onMouseLeave={() => setShow(false)}
-        className="cursor-help"
-      >
+      <div onMouseEnter={() => setShow(true)} onMouseLeave={() => setShow(false)} className="cursor-help">
         {children}
       </div>
       {show && (
-        <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-gray-900 text-white text-xs rounded px-2 py-1 whitespace-nowrap z-20">
+        <div className="absolute bottom-full left-1/2 z-20 mb-2 -translate-x-1/2 whitespace-nowrap rounded bg-[color:var(--color-obsidian)] px-2 py-1 text-xs text-[color:var(--color-chalk)]">
           {text}
-          <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-900"></div>
+          <div className="absolute left-1/2 top-full -translate-x-1/2 border-4 border-transparent border-t-[color:var(--color-obsidian)]" />
         </div>
       )}
     </div>
   );
 };
-
-import * as React from 'react';
 
 const ResultCard = ({
   title,
@@ -46,37 +42,37 @@ const ResultCard = ({
 }) => {
   if (loading) {
     return (
-      <div className="bg-white rounded-lg border border-gray-200 p-6">
-        <div className="flex items-center justify-between mb-4">
-          <div className="h-5 w-32 bg-gray-200 rounded animate-pulse"></div>
-          <Info size={16} className="text-gray-400" />
+      <Card className="border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-6">
+        <div className="mb-4 flex items-center justify-between">
+          <div className="h-5 w-32 animate-pulse rounded bg-[color:var(--color-obsidian)]" />
+          <Info size={16} className="text-[color:var(--color-smoke)]" />
         </div>
-        <div className="h-8 w-16 bg-gray-200 rounded animate-pulse mb-2"></div>
-        <div className="h-4 w-20 bg-gray-200 rounded animate-pulse"></div>
-      </div>
+        <div className="mb-2 h-8 w-16 animate-pulse rounded bg-[color:var(--color-obsidian)]" />
+        <div className="h-4 w-20 animate-pulse rounded bg-[color:var(--color-obsidian)]" />
+      </Card>
     );
   }
 
   return (
-    <div className="bg-white rounded-lg border border-gray-200 p-6">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-sm font-medium text-gray-700">{title}</h3>
+    <Card className="border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-6">
+      <div className="mb-4 flex items-center justify-between">
+        <h3 className="text-sm font-medium text-[color:var(--color-smoke)]">{title}</h3>
         <Tooltip text={tooltip}>
-          <Info size={16} className="text-gray-400 hover:text-gray-600" />
+          <Info size={16} className="text-[color:var(--color-smoke)] hover:text-[color:var(--color-chalk)]" />
         </Tooltip>
       </div>
-      <div className="text-3xl font-bold text-gray-900 mb-1">
+      <div className="mb-1 text-3xl font-normal tracking-[-0.02em] text-[color:var(--color-chalk)]">
         {percentage !== null ? `${percentage}%` : 'N/A'}
       </div>
-      <div className="text-sm text-gray-500">{count}</div>
-    </div>
+      <div className="text-sm text-[color:var(--color-smoke)]">{count}</div>
+    </Card>
   );
 };
 
 export const ResultsBlock = ({ data, loading }: ResultsBlockProps) => {
   return (
     <div className="mb-8">
-      <h2 className="text-lg font-semibold text-gray-900 mb-4">Результаты</h2>
+      <h2 className="mb-4 text-lg font-normal text-[color:var(--color-chalk)]">Результаты</h2>
       <div className="grid grid-cols-3 gap-4">
         <ResultCard
           title="Конверсия в основную цель"
