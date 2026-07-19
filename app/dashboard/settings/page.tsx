@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { Save } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
 
 function parseList(value: string) {
   return value
@@ -116,168 +118,163 @@ export default function PlatformSettingsPage() {
     });
     setSaving(false);
     setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    window.setTimeout(() => setSaved(false), 2000);
   }
 
   if (loading) {
-    return <div className="flex h-full items-center justify-center text-gray-400">Загрузка...</div>;
+    return <div className="flex h-full items-center justify-center text-[color:var(--color-smoke)]">Загрузка...</div>;
   }
 
   return (
-    <div className="flex h-full flex-col overflow-y-auto">
-      <div className="sticky top-0 z-10 flex items-center justify-between border-b border-gray-100 bg-white px-6 py-4">
+    <div className="flex h-full flex-col overflow-y-auto bg-[color:var(--color-obsidian)] text-[color:var(--color-chalk)]">
+      <div className="sticky top-0 z-10 flex items-center justify-between border-b border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] px-6 py-4">
         <div>
-          <h1 className="text-base font-semibold text-gray-900">Платформенные настройки</h1>
-          <p className="text-xs text-gray-500">Базовые правила для всех новых агентов организации</p>
+          <h1 className="text-base font-semibold text-[color:var(--color-chalk)]">Платформенные настройки</h1>
+          <p className="text-xs text-[color:var(--color-smoke)]">Базовые правила для всех новых агентов организации</p>
         </div>
-        <button
-          type="button"
-          onClick={save}
-          disabled={saving}
-          className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
-        >
+        <Button type="button" variant="primary" onClick={save} disabled={saving} className="px-4 py-2">
           <Save size={14} />
           {saved ? '✓ Сохранено' : saving ? 'Сохраняю...' : 'Сохранить'}
-        </button>
+        </Button>
       </div>
 
       <div className="mx-auto w-full max-w-3xl space-y-8 px-6 py-6">
         <section>
-          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-gray-500">Основные данные</h2>
-          <div className="grid gap-4 md:grid-cols-2">
+          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-[color:var(--color-smoke)]">Основные данные</h2>
+          <Card className="grid gap-4 border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-6 md:grid-cols-2">
             <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">Название организации</label>
+              <label className="mb-1 block text-sm font-medium text-[color:var(--color-smoke)]">Название организации</label>
               <input
                 value={settings.name}
                 onChange={(event) => setSettings((current) => ({ ...current, name: event.target.value }))}
-                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                className="w-full rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] px-3 py-2 text-sm text-[color:var(--color-chalk)] focus:border-[color:var(--color-ash)] focus:outline-none"
               />
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">Часовой пояс</label>
+              <label className="mb-1 block text-sm font-medium text-[color:var(--color-smoke)]">Часовой пояс</label>
               <input
                 value={settings.timezone}
                 onChange={(event) => setSettings((current) => ({ ...current, timezone: event.target.value }))}
-                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                className="w-full rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] px-3 py-2 text-sm text-[color:var(--color-chalk)] focus:border-[color:var(--color-ash)] focus:outline-none"
               />
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">Валюта</label>
+              <label className="mb-1 block text-sm font-medium text-[color:var(--color-smoke)]">Валюта</label>
               <input
                 value={settings.currency}
                 onChange={(event) => setSettings((current) => ({ ...current, currency: event.target.value }))}
-                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                className="w-full rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] px-3 py-2 text-sm text-[color:var(--color-chalk)] focus:border-[color:var(--color-ash)] focus:outline-none"
               />
             </div>
-          </div>
+          </Card>
         </section>
 
         <section>
-          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-gray-500">Базовые правила агентов</h2>
-          <div className="space-y-4">
+          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-[color:var(--color-smoke)]">Базовые правила агентов</h2>
+          <Card className="space-y-4 border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-6">
             <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">Стиль общения с людьми</label>
+              <label className="mb-1 block text-sm font-medium text-[color:var(--color-smoke)]">Стиль общения с людьми</label>
               <textarea
                 value={settings.human_communication_style}
                 onChange={(event) => setSettings((current) => ({ ...current, human_communication_style: event.target.value }))}
                 rows={4}
-                className="w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                className="w-full resize-none rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] px-3 py-2 text-sm text-[color:var(--color-chalk)] focus:border-[color:var(--color-ash)] focus:outline-none"
               />
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">Принципы работы с базой знаний</label>
+              <label className="mb-1 block text-sm font-medium text-[color:var(--color-smoke)]">Принципы работы с базой знаний</label>
               <textarea
                 value={settings.knowledge_base_principles}
                 onChange={(event) => setSettings((current) => ({ ...current, knowledge_base_principles: event.target.value }))}
                 rows={4}
-                className="w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                className="w-full resize-none rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] px-3 py-2 text-sm text-[color:var(--color-chalk)] focus:border-[color:var(--color-ash)] focus:outline-none"
               />
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">Защита от prompt injection и утечки личности</label>
+              <label className="mb-1 block text-sm font-medium text-[color:var(--color-smoke)]">Защита от prompt injection и утечки личности</label>
               <textarea
                 value={settings.identity_protection}
                 onChange={(event) => setSettings((current) => ({ ...current, identity_protection: event.target.value }))}
                 rows={4}
-                className="w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                className="w-full resize-none rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] px-3 py-2 text-sm text-[color:var(--color-chalk)] focus:border-[color:var(--color-ash)] focus:outline-none"
               />
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">Доступные инструменты по умолчанию</label>
+              <label className="mb-1 block text-sm font-medium text-[color:var(--color-smoke)]">Доступные инструменты по умолчанию</label>
               <input
                 value={settings.default_allowed_tools}
                 onChange={(event) => setSettings((current) => ({ ...current, default_allowed_tools: event.target.value }))}
-                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                className="w-full rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] px-3 py-2 text-sm text-[color:var(--color-chalk)] focus:border-[color:var(--color-ash)] focus:outline-none"
                 placeholder="searchKnowledgeBase,redirectToOperator"
               />
             </div>
-          </div>
+          </Card>
         </section>
 
         <section>
-          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-gray-500">Передача оператору</h2>
-          <div className="space-y-4">
+          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-[color:var(--color-smoke)]">Передача оператору</h2>
+          <Card className="space-y-4 border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-6">
             <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">Триггеры</label>
+              <label className="mb-1 block text-sm font-medium text-[color:var(--color-smoke)]">Триггеры</label>
               <textarea
                 value={settings.handoff_triggers}
                 onChange={(event) => setSettings((current) => ({ ...current, handoff_triggers: event.target.value }))}
                 rows={3}
-                className="w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                className="w-full resize-none rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] px-3 py-2 text-sm text-[color:var(--color-chalk)] focus:border-[color:var(--color-ash)] focus:outline-none"
               />
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">Примеры фраз</label>
+              <label className="mb-1 block text-sm font-medium text-[color:var(--color-smoke)]">Примеры фраз</label>
               <textarea
                 value={settings.handoff_phrasing_examples}
                 onChange={(event) => setSettings((current) => ({ ...current, handoff_phrasing_examples: event.target.value }))}
                 rows={3}
-                className="w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                className="w-full resize-none rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] px-3 py-2 text-sm text-[color:var(--color-chalk)] focus:border-[color:var(--color-ash)] focus:outline-none"
               />
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">Никогда не говорить</label>
+              <label className="mb-1 block text-sm font-medium text-[color:var(--color-smoke)]">Никогда не говорить</label>
               <textarea
                 value={settings.handoff_never_say}
                 onChange={(event) => setSettings((current) => ({ ...current, handoff_never_say: event.target.value }))}
                 rows={3}
-                className="w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                className="w-full resize-none rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] px-3 py-2 text-sm text-[color:var(--color-chalk)] focus:border-[color:var(--color-ash)] focus:outline-none"
               />
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">Что делать после передачи</label>
+              <label className="mb-1 block text-sm font-medium text-[color:var(--color-smoke)]">Что делать после передачи</label>
               <textarea
                 value={settings.handoff_after}
                 onChange={(event) => setSettings((current) => ({ ...current, handoff_after: event.target.value }))}
                 rows={2}
-                className="w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                className="w-full resize-none rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] px-3 py-2 text-sm text-[color:var(--color-chalk)] focus:border-[color:var(--color-ash)] focus:outline-none"
               />
             </div>
-          </div>
+          </Card>
         </section>
 
         <section>
-          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-gray-500">Память агента</h2>
-          <div className="space-y-4">
+          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-[color:var(--color-smoke)]">Память агента</h2>
+          <Card className="space-y-4 border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-6">
             <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">Внутри одного диалога</label>
+              <label className="mb-1 block text-sm font-medium text-[color:var(--color-smoke)]">Внутри одного диалога</label>
               <textarea
                 value={settings.memory_within}
                 onChange={(event) => setSettings((current) => ({ ...current, memory_within: event.target.value }))}
                 rows={2}
-                className="w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                className="w-full resize-none rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] px-3 py-2 text-sm text-[color:var(--color-chalk)] focus:border-[color:var(--color-ash)] focus:outline-none"
               />
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">Между диалогами</label>
+              <label className="mb-1 block text-sm font-medium text-[color:var(--color-smoke)]">Между диалогами</label>
               <textarea
                 value={settings.memory_between}
                 onChange={(event) => setSettings((current) => ({ ...current, memory_between: event.target.value }))}
                 rows={2}
-                className="w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                className="w-full resize-none rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] px-3 py-2 text-sm text-[color:var(--color-chalk)] focus:border-[color:var(--color-ash)] focus:outline-none"
               />
             </div>
-          </div>
+          </Card>
         </section>
       </div>
     </div>

@@ -1,9 +1,11 @@
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
-import { Plus, Bot, Sparkles } from 'lucide-react';
+import { Plus, Bot } from 'lucide-react';
 import { createClient } from '../../lib/supabase/server';
 import { AgentCard } from '../../components/dashboard/agent-card';
+import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
+import { Card } from '../../components/ui/card';
 import { EmptyState } from '../../components/ui/empty-state';
 
 async function deleteAgent(agentId: string) {
@@ -51,27 +53,24 @@ export default async function DashboardPage() {
   }));
 
   return (
-    <main className="min-h-screen bg-slate-50 px-4 py-8 text-slate-900 sm:px-6 lg:px-8">
+    <main className="min-h-screen bg-[color:var(--color-obsidian)] px-4 py-8 text-[color:var(--color-chalk)] sm:px-6 lg:px-8">
       <div className="mx-auto max-w-7xl">
-        <div className="flex flex-col gap-4 rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm sm:flex-row sm:items-center sm:justify-between sm:p-8">
+        <Card className="flex flex-col gap-4 border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-6 sm:flex-row sm:items-center sm:justify-between sm:p-8">
           <div>
-            <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-sm font-medium text-blue-700">
-              <Sparkles size={16} />
-              Satu.AI
-            </div>
-            <h1 className="text-3xl font-semibold tracking-tight text-slate-900">Дашборд</h1>
-            <p className="mt-2 text-sm text-slate-500">Управляйте ИИ-агентами в одном месте</p>
+            <Badge color="gray">Satu.AI</Badge>
+            <h1 className="mt-4 text-3xl font-normal tracking-[-0.02em] text-[color:var(--color-chalk)]">Дашборд</h1>
+            <p className="mt-2 text-sm text-[color:var(--color-smoke)]">Управляйте ИИ-агентами в одном месте</p>
           </div>
 
           <Link href="/dashboard/create">
-            <Button variant="primary" type="button" className="rounded-2xl bg-blue-600 px-5 py-3 text-white hover:bg-blue-700">
+            <Button variant="primary" type="button" className="px-5 py-3">
               <span className="flex items-center gap-2">
-                Создать ИИ-агента +
+                Создать ИИ-агента
                 <Plus size={16} />
               </span>
             </Button>
           </Link>
-        </div>
+        </Card>
 
         <div className="mt-8">
           {agents.length > 0 ? (
@@ -81,10 +80,10 @@ export default async function DashboardPage() {
               ))}
             </div>
           ) : (
-            <div className="mt-12 rounded-[28px] border border-slate-200 bg-white p-10 text-center shadow-sm">
+            <div className="mt-12">
               <EmptyState
                 icon={
-                  <div className="mx-auto inline-flex h-16 w-16 items-center justify-center rounded-full bg-slate-100 text-slate-400">
+                  <div className="mx-auto inline-flex h-16 w-16 items-center justify-center rounded-full border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] text-[color:var(--color-chalk)]">
                     <Bot size={28} />
                   </div>
                 }
@@ -92,8 +91,8 @@ export default async function DashboardPage() {
                 description="Создайте первого агента, чтобы начать автоматизировать общение и поддержку клиентов."
                 action={
                   <Link href="/dashboard/create">
-                    <Button variant="primary" type="button" className="rounded-2xl bg-blue-600 px-5 py-3 text-white hover:bg-blue-700">
-                      Создать первого агента +
+                    <Button variant="primary" type="button" className="px-5 py-3">
+                      Создать первого агента
                     </Button>
                   </Link>
                 }

@@ -2,17 +2,28 @@ import Link from 'next/link';
 
 export default function SiteNav() {
   return (
-    <nav className="border-b border-gray-200 bg-white">
-      <div className="container mx-auto flex flex-wrap items-center gap-4 px-4 py-4">
-        <Link href="/" className="font-semibold text-gray-900">
-          Satu.AI
+    <nav className="border-b border-[color:var(--color-graphite)] bg-transparent">
+      <div className="container flex flex-wrap items-center justify-between gap-4 py-4">
+        <Link href="/" className="text-[18px] font-normal uppercase tracking-[0.16em] text-[color:var(--color-chalk)]">
+          SatuSystem
         </Link>
-        <div className="flex flex-wrap items-center gap-4 text-sm text-gray-600">
-          <Link href="/">Главная</Link>
-          <Link href="/dashboard">Дашборд</Link>
-          <Link href="/login">Вход</Link>
-          <Link href="/register">Регистрация</Link>
+        <div className="flex flex-wrap items-center gap-5">
+          <Link href="/" className="hyper-nav-link">
+            Главная
+          </Link>
+          <Link href="/dashboard" className="hyper-nav-link">
+            Dashboard
+          </Link>
+          <Link href="/login" className="hyper-nav-link">
+            Вход
+          </Link>
+          <Link href="/register" className="hyper-nav-link">
+            Регистрация
+          </Link>
         </div>
+        <Link href="/login" className="hyper-secondary-btn">
+          Войти
+        </Link>
       </div>
     </nav>
   );

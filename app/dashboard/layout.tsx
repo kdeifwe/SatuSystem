@@ -1,33 +1,31 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
+import { Avatar } from '@/components/ui/avatar';
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   return (
-    <div className="min-h-screen bg-slate-50">
-      <header className="border-b border-gray-200 bg-white shadow-sm">
+    <div className="min-h-screen bg-[color:var(--color-obsidian)] text-[color:var(--color-chalk)]">
+      <header className="border-b border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)]">
         <div className="container mx-auto flex flex-wrap items-center justify-between gap-4 px-4 py-4">
           <div className="flex flex-wrap items-center gap-8">
-            <span className="text-lg font-semibold text-gray-900">Satu.AI</span>
-            <nav className="flex flex-wrap items-center gap-4 text-sm font-medium text-gray-600">
-              <Link href="/dashboard" className="text-gray-900 hover:text-gray-900">
+            <Link href="/dashboard" className="text-lg font-normal uppercase tracking-[0.2em] text-[color:var(--color-chalk)]">
+              Satu.AI
+            </Link>
+            <nav className="flex flex-wrap items-center gap-4 text-sm uppercase tracking-[0.16em] text-[color:var(--color-smoke)]">
+              <Link href="/dashboard" className="transition-colors hover:text-[color:var(--color-chalk)]">
                 Дашборд
               </Link>
-              <Link href="/dashboard/team" className="hover:text-gray-900">
-                Команда
-              </Link>
-              <Link href="/dashboard/settings" className="hover:text-gray-900">
+              <Link href="/dashboard/settings" className="transition-colors hover:text-[color:var(--color-chalk)]">
                 Настройки
               </Link>
             </nav>
           </div>
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#1557FF] text-sm font-semibold uppercase text-white shadow-sm">
-              S
-            </div>
+            <Avatar name="S" />
           </div>
         </div>
       </header>
-      <main>{children}</main>
+      <main className="min-h-[calc(100vh-73px)]">{children}</main>
     </div>
   );
 }
