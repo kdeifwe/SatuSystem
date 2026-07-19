@@ -30,30 +30,69 @@ export default function StatsPage() {
       try {
         const supabase = createClient();
 
-        // Get channels
+        // Get agent's org_id first
+        const { data: agentRow, error: agentErr } = await supabase
+          .from('agents')
+          .select('org_id')
+          .eq('id', agentId)
+          .single();
+
+        if (agentErr) {
+          console.error('Failed to load agent row:', agentErr);
+          setChannels([]);
+          setCampaigns([]);
+          return;
+        }
+
+        const orgId = agentRow?.org_id;
+
+        // Channels: filter by org_id (channels table has no agent_id)
         const { data: channelData } = await supabase
           .from('channels')
           .select('type')
-          .eq('agent_id', agentId);
+          .eq('org_id', orgId);
 
         const channelTypes = [...new Set(
           channelData
-            ?.map(c => c.type)
+            ?.map((c: any) => c.type)
             .filter(Boolean) as string[] || []
         )] as string[];
         setChannels(channelTypes);
 
-        // Get campaigns
-        const { data: campaignData } = await supabase
-          .from('leads')
-          .select('campaign')
+        // Campaigns: find lead_ids from conversations for this agent, then fetch leads.campaign
+        const { data: convRows } = await supabase
+          .from('conversations')
+          .select('lead_id')
           .eq('agent_id', agentId);
 
-        const campaignNames = [...new Set(
-          campaignData
-            ?.map(c => c.campaign)
-            .filter(Boolean) as string[] || []
-        )] as string[];
+        const leadIds = [...new Set((convRows ?? []).map((c: any) => c.lead_id).filter(Boolean))];
+
+        let campaignNames: string[] = [];
+        if (leadIds.length) {
+          const { data: leadRows } = await supabase
+            .from('leads')
+            .select('campaign')
+            .in('id', leadIds);
+
+          campaignNames = [...new Set(
+            leadRows
+              ?.map((l: any) => l.campaign)
+              .filter(Boolean) as string[] || []
+          )] as string[];
+        } else {
+          // Fallback: get campaigns for org if no conversations for this agent
+          const { data: leadRows } = await supabase
+            .from('leads')
+            .select('campaign')
+            .eq('org_id', orgId);
+
+          campaignNames = [...new Set(
+            leadRows
+              ?.map((l: any) => l.campaign)
+              .filter(Boolean) as string[] || []
+          )] as string[];
+        }
+
         setCampaigns(campaignNames);
       } catch (err) {
         console.error('Failed to fetch metadata:', err);
