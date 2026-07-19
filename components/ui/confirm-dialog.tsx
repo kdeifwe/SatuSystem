@@ -1,5 +1,6 @@
 import { type ReactNode, useState } from 'react';
 import { Button } from './button';
+import { Card } from './card';
 import { X, Trash2 } from 'lucide-react';
 
 interface ConfirmDialogProps {
@@ -26,15 +27,15 @@ export function ConfirmDialog({
       <div onClick={() => setOpen(true)}>{children}</div>
 
       {open ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4 py-6">
-          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 py-6">
+          <Card className="w-full max-w-md border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-6">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <p className="text-lg font-semibold text-gray-900">{title}</p>
-                <p className="mt-2 text-sm text-gray-500">{description}</p>
+                <p className="text-lg font-semibold text-[color:var(--color-chalk)]">{title}</p>
+                <p className="mt-2 text-sm text-[color:var(--color-smoke)]">{description}</p>
               </div>
               <button
-                className="rounded-full p-2 text-gray-500 hover:bg-gray-100"
+                className="rounded-full p-2 text-[color:var(--color-smoke)] hover:bg-[color:var(--color-graphite)]"
                 onClick={() => setOpen(false)}
                 aria-label="Закрыть"
               >
@@ -42,7 +43,7 @@ export function ConfirmDialog({
               </button>
             </div>
             <div className="mt-6 flex justify-end gap-3">
-              <Button variant="outline" onClick={() => setOpen(false)}>
+              <Button variant="ghost" onClick={() => setOpen(false)}>
                 {cancelLabel}
               </Button>
               <Button
@@ -56,7 +57,7 @@ export function ConfirmDialog({
                 {confirmLabel}
               </Button>
             </div>
-          </div>
+          </Card>
         </div>
       ) : null}
     </div>

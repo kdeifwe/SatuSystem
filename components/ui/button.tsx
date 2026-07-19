@@ -8,12 +8,13 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 
 const variantClasses: Record<NonNullable<ButtonProps['variant']>, string> = {
   primary:
-    'bg-[#1557FF] text-white hover:bg-[#0E3FC9] border border-transparent',
+    'border border-[color:var(--color-signal-white)] bg-[color:var(--color-signal-white)] text-[color:var(--color-obsidian)] hover:bg-[color:var(--color-chalk)] rounded-full uppercase tracking-[0.12em]',
   outline:
-    'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50',
-  ghost: 'bg-transparent text-gray-700 hover:bg-gray-100 border border-transparent',
+    'border border-[color:var(--color-chalk)] bg-transparent text-[color:var(--color-chalk)] hover:border-[color:var(--color-ash)] hover:text-[color:var(--color-ash)] rounded-[var(--radius-cards)]',
+  ghost:
+    'border border-[color:var(--color-graphite)] bg-transparent text-[color:var(--color-smoke)] hover:border-[color:var(--color-ash)] hover:text-[color:var(--color-chalk)] rounded-[var(--radius-cards)]',
   danger:
-    'bg-red-600 text-white hover:bg-red-700 border border-transparent',
+    'border border-transparent bg-[color:var(--color-iron)] text-[color:var(--color-chalk)] hover:border-[color:var(--color-graphite)]',
 };
 
 const sizeClasses: Record<NonNullable<ButtonProps['size']>, string> = {
@@ -28,7 +29,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
         ref={ref}
         type={type}
         className={cn(
-          'inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1557FF] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60',
+          'inline-flex items-center justify-center gap-2 font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--color-ash)] focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--color-obsidian)] disabled:cursor-not-allowed disabled:opacity-60',
           variantClasses[variant],
           sizeClasses[size],
           className
