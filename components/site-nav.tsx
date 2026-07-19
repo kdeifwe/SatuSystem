@@ -18,7 +18,7 @@ export default function SiteNav() {
             Вход
           </Link>
           <Link href="/register" className="hyper-nav-link">
-            Регистрация
+            Регистрация по приглашению
           </Link>
         </div>
         <Link href="/login" className="hyper-secondary-btn">

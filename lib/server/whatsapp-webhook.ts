@@ -5,6 +5,8 @@ import { runAgentTurnWithLead } from '@/lib/server/ai/orchestrator';
 import { splitAgentMessage, calculateTypingDelay } from '@/lib/server/ai/message-splitter';
 import { sendWhatsAppMessage } from '@/lib/channels/whatsapp';
 
+// WhatsApp webhook callbacks run outside a user session, so we use a service-role
+// Supabase client here to bypass RLS while still keeping the webhook handling secure.
 function getAdmin() {
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -97,6 +99,57 @@ async function resolveWhatsAppChannelByPhoneNumberId(phoneNumberId: string | und
   return channel;
 }
 
+async function resolveWhatsAppChannelForPhoneNumber(admin: ReturnType<typeof getAdmin>, phoneNumber: string | undefined | null, phoneNumberId: string | undefined | null) {
+  if (phoneNumberId) {
+    const { data: channel, error } = await admin
+      .from('channels')
+      .select('id, org_id, credentials')
+      .eq('type', 'whatsapp')
+      .eq('is_active', true)
+      .eq('credentials->>phone_number_id', phoneNumberId)
+      .maybeSingle();
+
+    if (!error && channel) {
+      return channel;
+    }
+  }
+
+  if (phoneNumber) {
+    const { data: lead, error } = await admin
+      .from('leads')
+      .select('channel_id')
+      .eq('external_id', phoneNumber)
+      .maybeSingle();
+
+    if (!error && lead?.channel_id) {
+      const { data: channel, error: channelError } = await admin
+        .from('channels')
+        .select('id, org_id, credentials')
+        .eq('type', 'whatsapp')
+        .eq('is_active', true)
+        .eq('id', lead.channel_id)
+        .maybeSingle();
+
+      if (!channelError && channel) {
+        return channel;
+      }
+    }
+  }
+
+  const { data: channels, error: channelsError } = await admin
+    .from('channels')
+    .select('id, org_id, credentials')
+    .eq('type', 'whatsapp')
+    .eq('is_active', true)
+    .order('created_at', { ascending: true });
+
+  if (!channelsError && Array.isArray(channels) && channels.length === 1) {
+    return channels[0];
+  }
+
+  return null;
+}
+
 async function verifyMetaSignature(req: NextRequest, rawBody: string, appSecret?: string | null) {
   if (process.env.SKIP_WEBHOOK_SIGNATURE_CHECK === 'true') {
     console.warn('[whatsapp webhook] ⚠️ Signature check SKIPPED (dev mode)');
@@ -162,7 +215,7 @@ export async function processIncomingWhatsAppMessage(body: any) {
     }
 
     const webhookPhoneNumberId = value?.metadata?.phone_number_id;
-    const channel = await resolveWhatsAppChannelByPhoneNumberId(webhookPhoneNumberId);
+    const channel = await resolveWhatsAppChannelForPhoneNumber(admin, phoneNumber, webhookPhoneNumberId);
 
     if (!channel) {
       console.error('[whatsapp webhook] channel not found for phone_number_id', webhookPhoneNumberId);

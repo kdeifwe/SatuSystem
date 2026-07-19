@@ -15,6 +15,9 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
               <Link href="/dashboard" className="transition-colors hover:text-[color:var(--color-chalk)]">
                 Дашборд
               </Link>
+              <Link href="/dashboard/invites" className="transition-colors hover:text-[color:var(--color-chalk)]">
+                Приглашения
+              </Link>
               <Link href="/dashboard/settings" className="transition-colors hover:text-[color:var(--color-chalk)]">
                 Настройки
               </Link>

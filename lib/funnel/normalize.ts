@@ -12,6 +12,19 @@ function slugify(text: string): string {
     .replace(/(^-|-$)/g, '') || 'step';
 }
 
+function normalizeNodeId(id: string | undefined, index: number): string {
+  if (typeof id !== 'string' || id.trim().length === 0) {
+    return `n${index + 1}`;
+  }
+
+  const trimmed = id.trim();
+  if (/^\d+$/.test(trimmed)) {
+    return `n${trimmed}`;
+  }
+
+  return trimmed;
+}
+
 export function normalizeFunnelFlow(value: unknown): FunnelFlow | null {
   if (!value) return null;
 
@@ -27,16 +40,32 @@ export function normalizeFunnelFlow(value: unknown): FunnelFlow | null {
 
   const candidate = value as Partial<FunnelFlow> & LegacyDialogueFlow;
   if (Array.isArray(candidate.nodes) && candidate.nodes.length > 0) {
+    const normalizedNodes = candidate.nodes.map((node, index) => ({
+      ...node,
+      id: normalizeNodeId(node?.id, index),
+      position: {
+        x: typeof node?.position?.x === 'number' ? node.position.x : 0,
+        y: typeof node?.position?.y === 'number' ? node.position.y : 0,
+      },
+    })) as FunnelFlow['nodes'];
+
+    const normalizedEdges = Array.isArray(candidate.edges)
+      ? (candidate.edges as FunnelFlow['edges']).map((edge, index) => ({
+          ...edge,
+          id: typeof edge?.id === 'string' && edge.id.trim().length > 0 ? edge.id : `edge-${index + 1}`,
+          from: normalizeNodeId(edge?.from, index),
+          to: normalizeNodeId(edge?.to, index),
+        }))
+      : [];
+
+    const entryNodeId = typeof candidate.entryNodeId === 'string' && candidate.entryNodeId.trim().length > 0
+      ? normalizeNodeId(candidate.entryNodeId, 0)
+      : normalizedNodes[0]?.id ?? '';
+
     return {
-      nodes: candidate.nodes.map((node) => ({
-        ...node,
-        position: {
-          x: typeof node?.position?.x === 'number' ? node.position.x : 0,
-          y: typeof node?.position?.y === 'number' ? node.position.y : 0,
-        },
-      })) as FunnelFlow['nodes'],
-      edges: Array.isArray(candidate.edges) ? (candidate.edges as FunnelFlow['edges']) : [],
-      entryNodeId: typeof candidate.entryNodeId === 'string' ? candidate.entryNodeId : candidate.nodes[0]?.id ?? '',
+      nodes: normalizedNodes,
+      edges: normalizedEdges,
+      entryNodeId,
     };
   }
 

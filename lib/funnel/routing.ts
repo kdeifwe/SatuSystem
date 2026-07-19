@@ -89,6 +89,7 @@ function extractText(response: Record<string, unknown>): string {
 function buildRoutingSchema(transitions: FunnelTransitionLike[]): Record<string, unknown> {
   const conditionValues = Array.from(new Set([
     ...transitions.map((transition) => normalizeCondition(transition.condition)).filter((condition): condition is string => Boolean(condition)),
+    'answers_received',
     'no_match',
   ])).sort();
 
@@ -410,6 +411,25 @@ export async function upsertLeadFunnelState(
   return Array.isArray(data) ? data[0] : data ?? null;
 }
 
+function getNodeTransitions(node: FunnelNodeWithRouting, flow: FunnelFlow | null | undefined): FunnelTransitionLike[] {
+  if (Array.isArray(node.transitions) && node.transitions.length > 0) {
+    return node.transitions;
+  }
+
+  const outgoingEdges = Array.isArray(flow?.edges)
+    ? flow.edges.filter((edge) => edge.from === node.id && typeof edge.to === 'string' && edge.to.trim().length > 0)
+    : [];
+
+  if (outgoingEdges.length === 0) {
+    return [];
+  }
+
+  return outgoingEdges.map((edge) => ({
+    condition: /ответ|continue|next/i.test(edge.label ?? '') ? 'answers_received' : 'default',
+    target: edge.to,
+  }));
+}
+
 export async function applyFunnelRouting(args: ApplyRoutingArgs): Promise<ApplyRoutingResult> {
   if (!args.leadId || !args.conversationId || !args.flow || !args.currentNodeId) {
     return {
@@ -434,7 +454,7 @@ export async function applyFunnelRouting(args: ApplyRoutingArgs): Promise<ApplyR
     };
   }
 
-  const transitions = Array.isArray(node.transitions) ? node.transitions : [];
+  const transitions = getNodeTransitions(node, args.flow);
   if (transitions.length === 0) {
     return {
       skippedClassifier: true,
@@ -465,18 +485,20 @@ export async function applyFunnelRouting(args: ApplyRoutingArgs): Promise<ApplyR
     };
   }
 
+  const routingNode = { ...node, transitions } as FunnelNodeWithRouting;
+
   let classifierResult: RoutingClassifierResult | null = null;
   try {
     classifierResult = args.classifier
-      ? await args.classifier(node, args.userMessage, args.assistantReply)
-      : await classifyTransition(node, args.userMessage, args.assistantReply);
+      ? await args.classifier(routingNode, args.userMessage, args.assistantReply)
+      : await classifyTransition(routingNode, args.userMessage, args.assistantReply);
   } catch (error) {
     console.warn('[Funnel] routing classifier failed, falling back to no_match', error);
     classifierResult = { condition: 'no_match' };
   }
 
   const initialDecision = resolveRoutingDecision({
-    node,
+    node: routingNode,
     classifierResult,
     noMatchRetryCount: 0,
   });
@@ -493,12 +515,12 @@ export async function applyFunnelRouting(args: ApplyRoutingArgs): Promise<ApplyR
   const currentStateStatus = typeof persistedState?.status === 'string' ? persistedState.status : null;
   const wasAlreadyPaused = Boolean(persistedState?.was_already_paused);
   const decision = resolveRoutingDecision({
-    node,
+    node: routingNode,
     classifierResult,
     noMatchRetryCount: currentRetryCount,
   });
 
-  const threshold = typeof node.max_retries_before_handoff === 'number' ? node.max_retries_before_handoff : null;
+  const threshold = typeof routingNode.max_retries_before_handoff === 'number' ? routingNode.max_retries_before_handoff : null;
   const retryState = {
     retryCount: currentRetryCount,
     shouldHandoff: decision.shouldHandoff,

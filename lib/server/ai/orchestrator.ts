@@ -96,6 +96,25 @@ function getDialogueNode(flow: ReturnType<typeof normalizeFunnelFlow> | null | u
   return flow.nodes?.find((node) => node.id === nodeId) ?? null;
 }
 
+function extractLegacyScriptText(node: { content?: string | null; message_type?: string | null; script_parts?: string[] | null } | null | undefined): string | null {
+  const content = typeof node?.content === 'string' ? node.content.trim() : '';
+  if (!content) return null;
+
+  const directReplyPatterns = [
+    /(?:отправь клиенту текст|отправь клиенту|send client text|reply with|отправить клиенту)\s*[:\-]?\s*["“]([^"”]+)["”]/i,
+    /(?:отправь клиенту текст|отправь клиенту|send client text|reply with|отправить клиенту)\s*[:\-]?\s*([^\n\r]+)/i,
+  ];
+
+  for (const pattern of directReplyPatterns) {
+    const match = content.match(pattern);
+    if (match?.[1]) {
+      return match[1].trim();
+    }
+  }
+
+  return null;
+}
+
 // Helper: Convert script_parts array to AgentMessagePart[] with typing delays
 export function handleScriptMessageParts(
   scriptParts: string[] | undefined,
@@ -124,10 +143,16 @@ export async function resolveDialogueNodeExecution(
   options?: { callGemini?: () => Promise<unknown> },
 ): Promise<DialogueNodeExecutionResult> {
   const currentDialogueNode = getDialogueNode(flow, nodeId);
+  const legacyScriptText = extractLegacyScriptText(currentDialogueNode);
+  const hasScriptParts = Array.isArray(currentDialogueNode?.script_parts) && currentDialogueNode.script_parts.length > 0;
 
-  if (currentDialogueNode?.message_type === 'script') {
-    if (Array.isArray(currentDialogueNode?.script_parts) && currentDialogueNode.script_parts.length > 0) {
-      const messageParts = handleScriptMessageParts(currentDialogueNode.script_parts, typingSimulationEnabled);
+  if (currentDialogueNode?.message_type === 'script' || hasScriptParts || legacyScriptText) {
+    const scriptParts = hasScriptParts
+      ? currentDialogueNode!.script_parts!
+      : (legacyScriptText ? [legacyScriptText] : []);
+
+    if (scriptParts.length > 0) {
+      const messageParts = handleScriptMessageParts(scriptParts, typingSimulationEnabled);
       const finalAnswer = messageParts.map((part) => part.text).join('\n\n');
       return {
         mode: 'script',
@@ -667,10 +692,15 @@ async function callGemini(
     const body: Record<string, unknown> = {
       system_instruction: { parts: [{ text: systemPrompt }] },
       contents,
-      tools,
-      toolConfig: { functionCallingConfig: { mode: 'AUTO' } },
       generationConfig,
     };
+
+    if (Array.isArray(tools) && tools.length > 0) {
+      Object.assign(body, {
+        tools,
+        toolConfig: { functionCallingConfig: { mode: 'AUTO' } },
+      });
+    }
 
     let res: Response;
     try {
@@ -933,6 +963,7 @@ export async function runAgentTurn(
 
   // Формируем toolDeclarations только для разрешённых тулов
   const toolDeclarations = buildToolDeclarationsForAgent(allowedToolNames, agentData?.dialogue_flow);
+  const toolPayload = toolDeclarations.length > 0 ? [{ functionDeclarations: toolDeclarations }] : [];
   console.log(`[AGENT_TOOLS] Agent ${agentId}: allowed tools: [${allowedToolNames.join(', ')}], declarations: [${toolDeclarations.map((d) => d.name).join(', ')}]`);
 
   const { leadId, conversationId, orgId, leadAttributes, previousConversationSummary, userMessageId: persistedUserMessageId, isSandbox } = await ensureLeadContext(admin, agentId, userMessage, externalLeadId, existingUserMessageId);
@@ -1216,7 +1247,7 @@ export async function runAgentTurn(
     response = await callGemini(GEMINI_CHAT_MODEL, fullSystemPrompt, [
       ...conversationContents,
       { role: 'user', parts: [{ text: userMessage }] },
-    ], [{ functionDeclarations: toolDeclarations }]);
+    ], toolPayload);
     tokensInput += response.payload.usageMetadata?.promptTokenCount ?? 0;
     tokensOutput += response.payload.usageMetadata?.candidatesTokenCount ?? 0;
   } catch (err) {
@@ -1329,7 +1360,7 @@ export async function runAgentTurn(
         { role: 'model', parts: currentParts ?? [] },
         { role: 'user', parts: functionResponseParts },
       ],
-      [{ functionDeclarations: toolDeclarations }],
+      toolPayload,
     );
 
     tokensInput += followUpResponse.payload.usageMetadata?.promptTokenCount ?? 0;
@@ -1358,7 +1389,7 @@ export async function runAgentTurn(
           ...conversationContents,
           { role: 'user', parts: [{ text: userMessage }] },
         ],
-        [{ functionDeclarations: toolDeclarations }],
+        toolPayload,
       );
       const retryParts = retryResponse.payload.parts;
       const retryText = extractTextFromParts(retryParts);

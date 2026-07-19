@@ -4,7 +4,7 @@ import SiteNav from '../../../components/site-nav';
 import { useState, type FormEvent } from 'react';
 
 export default function RegisterPage() {
-  const [email, setEmail] = useState('');
+  const [token, setToken] = useState('');
   const [password, setPassword] = useState('');
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
@@ -15,10 +15,10 @@ export default function RegisterPage() {
     setMessage('');
 
     try {
-      const response = await fetch('/api/register', {
+      const response = await fetch('/api/invites/accept', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ token, password }),
       });
 
       const result = await response.json();
@@ -29,9 +29,9 @@ export default function RegisterPage() {
         return;
       }
 
-      setEmail('');
+      setToken('');
       setPassword('');
-      setMessage('Регистрация выполнена. Проверьте почту, если требуется подтверждение.');
+      setMessage('Регистрация завершена. Войдите с вашим email и паролем.');
     } catch (error) {
       setLoading(false);
       setMessage('Ошибка подключения. Повторите попытку позже.');
@@ -46,12 +46,12 @@ export default function RegisterPage() {
           <h1>Регистрация</h1>
         <form onSubmit={handleSubmit}>
           <div className="form-field">
-            <label htmlFor="email">Email</label>
+            <label htmlFor="token">Токен приглашения</label>
             <input
-              id="email"
-              type="email"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
+              id="token"
+              type="text"
+              value={token}
+              onChange={(event) => setToken(event.target.value)}
               required
             />
           </div>

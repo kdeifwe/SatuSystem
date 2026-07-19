@@ -3,6 +3,8 @@ import { createClient } from '@supabase/supabase-js';
 import { runAgentTurnWithLead } from '@/lib/server/ai/orchestrator';
 import { splitAgentMessage, calculateTypingDelay } from '@/lib/server/ai/message-splitter';
 
+// Webhook processing must use a service-role Supabase client because the request
+// is unauthenticated and webhook events need cross-org access for leads/conversations/messages.
 function getAdmin() {
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,

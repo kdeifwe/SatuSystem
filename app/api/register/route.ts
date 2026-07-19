@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
-import { getSupabaseAdminClient } from '../../../lib/supabase-server';
 
+// Regular self-registration is intentionally disabled; invite-based onboarding is the only path.
 const MIN_PASSWORD_LENGTH = 6;
 
 export async function POST(request: Request) {
@@ -24,28 +24,11 @@ export async function POST(request: Request) {
     );
   }
 
-  const supabaseAdmin = getSupabaseAdminClient();
-  const { data, error } = await supabaseAdmin.auth.admin.createUser({
-    email,
-    password,
-  });
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 400 });
-  }
-
-  const user = data.user;
-  if (user?.id) {
-    const { error: profileError } = await supabaseAdmin.from('profiles').upsert({
-      id: user.id,
-      email: user.email,
-      full_name: null,
-    });
-
-    if (profileError) {
-      return NextResponse.json({ error: profileError.message }, { status: 500 });
-    }
-  }
-
-  return NextResponse.json({ ok: true });
+  return NextResponse.json(
+    {
+      error:
+        'Регистрация закрыта. Вход доступен только через приглашение. Используйте API /api/invites/accept.',
+    },
+    { status: 403 }
+  );
 }

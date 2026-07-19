@@ -16,7 +16,7 @@ export default function HomePage() {
               Система для роста продаж, поддержки и доверия.
             </h1>
             <p className="max-w-2xl text-[18px] leading-[1.5] text-[color:var(--color-smoke)]">
-              Платформа AI-агентов для WhatsApp и Telegram, где диалоги, сценарии и аналитика собраны в одном рабочем пространстве.
+              Платформа AI-агентов для WhatsApp и Telegram, где диалоги, сценарии и аналитика собраны в одном рабочем пространстве. Доступ предоставляется только по приглашению.
             </p>
           </div>
           <div className="flex flex-wrap gap-3">
@@ -24,10 +24,7 @@ export default function HomePage() {
               Войти
             </Link>
             <Link href="/register" className="hyper-secondary-btn">
-              Регистрация
-            </Link>
-            <Link href="/org/create" className="hyper-secondary-btn">
-              Создать организацию
+              Регистрация по приглашению
             </Link>
             <Link href="/dashboard" className="hyper-primary-btn">
               Дашборд
