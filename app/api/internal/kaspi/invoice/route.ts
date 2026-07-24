@@ -3,9 +3,11 @@ import { getSupabaseAdminClient } from '@/lib/supabase-server';
 
 export const runtime = 'nodejs';
 
-const MAX_AUTO_INVOICE_AMOUNT = 50000;
+const MAX_AUTO_INVOICE_AMOUNT = 200000;
 const DEFAULT_TIMEOUT_MS = 8000;
 const RETRY_DELAY_MS = 1000;
+
+const INTERNAL_API_SECRET_HEADER = 'X-Internal-Secret';
 
 type KaspiInvoiceRequestBody = {
   lead_id?: unknown;
@@ -54,6 +56,11 @@ function extractQrOperationId(responseBody: unknown): string | null {
 }
 
 export async function POST(req: NextRequest) {
+  const incomingSecret = req.headers.get(INTERNAL_API_SECRET_HEADER);
+  if (!process.env.INTERNAL_API_SECRET || incomingSecret !== process.env.INTERNAL_API_SECRET) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   let body: KaspiInvoiceRequestBody;
 
   try {

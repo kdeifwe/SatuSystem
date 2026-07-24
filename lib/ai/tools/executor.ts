@@ -63,6 +63,8 @@ async function dispatch(call: ToolCall, ctx: ToolContext): Promise<unknown> {
       return getMediaFiles(call.args as { category: string; search_query?: string }, ctx);
     case 'update_lead_status':
       return updateLeadStatus(call.args as { lead_id: string; status: string }, ctx);
+    case 'createKaspiInvoice':
+      return createKaspiInvoice(call.args as { phone: string; amount: number; comment?: string }, ctx);
     case 'update_lead_info':
       return updateLeadInfo(call.args as { lead_id: string; fields: Record<string, unknown> }, ctx);
     case 'add_lead_note':
@@ -619,6 +621,36 @@ async function sendCustomNotification(args: { message: string; target: string },
 
   console.warn('[TOOL] sendCustomNotification: unknown target', { target: args.target });
   return { success: true, telegram_sent: false, reason: 'unknown_target' };
+}
+
+async function createKaspiInvoice(args: { phone: string; amount: number; comment?: string }, ctx: ToolContext) {
+  if (!ctx.leadId) {
+    throw new Error('lead_id is required in the conversation context for createKaspiInvoice');
+  }
+
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || 'http://localhost:3000';
+  const endpoint = `${appUrl.replace(/\/$/, '')}/api/internal/kaspi/invoice`;
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Internal-Secret': process.env.INTERNAL_API_SECRET ?? '',
+    },
+    body: JSON.stringify({
+      lead_id: ctx.leadId,
+      phone: args.phone,
+      amount: args.amount,
+      comment: args.comment ?? '',
+      conversation_id: ctx.conversationId,
+    }),
+  });
+
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(`createKaspiInvoice failed: ${payload?.error ?? response.statusText}`);
+  }
+
+  return payload;
 }
 
 async function scheduleMessage(args: { lead_id: string; message: string; send_at: string }, ctx: ToolContext) {

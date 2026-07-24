@@ -176,6 +176,28 @@ export const PRODUCTION_TOOL_DECLARATIONS: GeminiFunctionDeclaration[] = [
       required: ['lead_id', 'note'],
     },
   },
+  {
+    name: 'createKaspiInvoice',
+    description: 'Выставляет счёт клиенту через Kaspi Pay на указанный номер телефона. Вызывать только после явного подтверждения клиентом суммы и состава заказа в диалоге.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        phone: {
+          type: 'STRING',
+          description: 'Номер телефона клиента в формате 7XXXXXXXXXX',
+        },
+        amount: {
+          type: 'NUMBER',
+          description: 'Сумма счёта в тенге.',
+        },
+        comment: {
+          type: 'STRING',
+          description: 'Краткое описание — что оплачивается.',
+        },
+      },
+      required: ['phone', 'amount'],
+    },
+  },
 ];
 
 export const PRODUCTION_TOOL_NAMES = PRODUCTION_TOOL_DECLARATIONS.map((declaration) => declaration.name);
@@ -294,6 +316,7 @@ export type ToolName =
   | 'getCurrentDate'
   | 'getMediaFiles'
   | 'update_lead_status'
+  | 'createKaspiInvoice'
   | 'update_lead_info'
   | 'add_lead_note'
   | 'sendCustomNotification'
