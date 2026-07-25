@@ -645,7 +645,18 @@ async function createKaspiInvoice(args: { phone: string; amount: number; comment
     }),
   });
 
-  const payload = await response.json();
+  const responseText = await response.text();
+  console.error('[createKaspiInvoice DEBUG] endpoint:', endpoint);
+  console.error('[createKaspiInvoice DEBUG] status:', response.status);
+  console.error('[createKaspiInvoice DEBUG] body (first 500 chars):', responseText.slice(0, 500));
+
+  let payload;
+  try {
+    payload = JSON.parse(responseText);
+  } catch {
+    throw new Error(`createKaspiInvoice: non-JSON response (status ${response.status}): ${responseText.slice(0, 200)}`);
+  }
+
   if (!response.ok) {
     throw new Error(`createKaspiInvoice failed: ${payload?.error ?? response.statusText}`);
   }
