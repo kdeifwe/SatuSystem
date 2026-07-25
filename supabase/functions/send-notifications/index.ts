@@ -148,6 +148,13 @@ ${payload.email ? `📧 Email: <b>${escapeHtml(String(payload.email))}</b>` : ''
         lead: payload,
       });
 
+    case 'kaspi_auth_expired':
+      return `
+⚠️ <b>Kaspi Pay требует реавторизации</b>
+Сессия Kaspi Pay истекла. AI-агент больше не может выставлять счета.
+→ Откройте Настройки → Интеграции → Kaspi Pay
+      `.trim();
+
     default:
       return `🔔 Уведомление платформы\nТип: ${eventType}`;
   }

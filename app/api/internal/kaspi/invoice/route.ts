@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { notifyOrgAdmins } from '@/lib/notifications';
 import { getSupabaseAdminClient } from '@/lib/supabase-server';
 
 export const runtime = 'nodejs';
@@ -28,6 +29,20 @@ function buildBasicAuthHeader(username: string, password: string) {
 
 function isValidUuid(value: string | null | undefined) {
   return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value.trim());
+}
+
+function normalizeKzPhone(raw: string): string {
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length === 11 && digits.startsWith('8')) {
+    return '7' + digits.slice(1);
+  }
+  if (digits.length === 11 && digits.startsWith('7')) {
+    return digits;
+  }
+  if (digits.length === 10) {
+    return '7' + digits;
+  }
+  return digits;
 }
 
 async function sleep(ms: number) {
@@ -109,6 +124,7 @@ export async function POST(req: NextRequest) {
     const normalizedConversationId = typeof conversation_id === 'string' && conversation_id.trim() ? conversation_id.trim() : null;
     const normalizedConversationIdForDb = isValidUuid(normalizedConversationId) ? normalizedConversationId : null;
     const normalizedComment = typeof comment === 'string' ? comment : null;
+    const normalizedPhone = normalizeKzPhone(phone.trim());
 
     const admin = getSupabaseAdminClient();
     let organizationId: string | null = null;
@@ -146,7 +162,7 @@ export async function POST(req: NextRequest) {
         org_id: organizationId,
         lead_id: normalizedLeadIdForDb,
         conversation_id: normalizedConversationIdForDb,
-        phone: phone.trim(),
+        phone: normalizedPhone,
         amount: normalizedAmount,
         comment: normalizedComment,
         status: 'pending',
@@ -180,7 +196,7 @@ export async function POST(req: NextRequest) {
 
     const kaspiUrl = `${kaspiServiceUrl.replace(/\/$/, '')}/api/invoice/create`;
     const payload = {
-      phoneNumber: phone.trim(),
+      phoneNumber: normalizedPhone,
       amount: normalizedAmount,
       comment: normalizedComment ?? '',
     };
@@ -213,6 +229,14 @@ export async function POST(req: NextRequest) {
 
         if (response.status === 401 || response.status === 403) {
           await updateInvoiceRecord({ status: 'failed', error_message: 'KASPI_AUTH_EXPIRED' });
+          try {
+            await notifyOrgAdmins(
+              organizationId,
+              '⚠️ Сессия Kaspi Pay истекла — AI-агент не может выставлять счета. Нужна реавторизация в Настройки → Интеграции → Kaspi Pay'
+            );
+          } catch (alertError) {
+            console.error('[kaspi invoice] failed to notify org admins about auth expiry', alertError);
+          }
           return NextResponse.json(
             {
               error: 'KASPI_AUTH_EXPIRED',

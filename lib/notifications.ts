@@ -18,7 +18,8 @@ export type NotificationEventType =
   | 'scheduled_failed'
   | 'ai_error'
   | 'worker_down'
-  | 'whatsapp_disconnected';
+  | 'whatsapp_disconnected'
+  | 'kaspi_auth_expired';
 
 interface NotificationPayload {
   [key: string]: unknown;
@@ -41,6 +42,7 @@ const DEDUP_CONFIG: Record<NotificationEventType, { window?: number; key: string
   ai_error: { window: 15 * 60 * 1000, key: ['agent_id', 'event_type'] },
   worker_down: { window: 15 * 60 * 1000, key: ['org_id', 'event_type'] },
   whatsapp_disconnected: { window: 2 * 60 * 1000, key: ['agent_id', 'event_type'] }, // notify once per 2 min per agent
+  kaspi_auth_expired: { window: 60 * 60 * 1000, key: ['org_id', 'event_type'] }, // throttle repeated auth-expired alerts per org
 };
 
 interface EnqueueOptions {
@@ -56,7 +58,7 @@ interface EnqueueOptions {
 /**
  * Check if notification should be sent (dedup logic)
  */
-async function shouldSendNotification(
+export async function shouldSendNotification(
   admin: ReturnType<typeof createAdminClient>,
   eventType: NotificationEventType,
   payload: NotificationPayload,
@@ -137,6 +139,86 @@ async function shouldSendNotification(
     }
   }
 
+  return true;
+}
+
+export async function getOrgAdminRecipientProfiles(
+  admin: ReturnType<typeof createAdminClient>,
+  orgId: string
+): Promise<string[]> {
+  const { data: memberships, error: membershipsError } = await admin
+    .from('org_members')
+    .select('user_id, role')
+    .eq('org_id', orgId)
+    .in('role', ['owner', 'admin']);
+
+  if (membershipsError || !memberships?.length) {
+    return [];
+  }
+
+  const memberIds = memberships
+    .map((membership) => membership.user_id)
+    .filter(Boolean) as string[];
+
+  if (memberIds.length === 0) {
+    return [];
+  }
+
+  const { data: profiles, error: profilesError } = await admin
+    .from('profiles')
+    .select('id')
+    .in('id', memberIds)
+    .not('telegram_chat_id', 'is', null);
+
+  if (profilesError) {
+    return [];
+  }
+
+  return (profiles ?? []).map((profile) => profile.id).filter(Boolean) as string[];
+}
+
+export async function notifyOrgAdmins(orgId: string | null | undefined, message: string): Promise<boolean> {
+  if (!orgId) {
+    return false;
+  }
+
+  const admin = createAdminClient();
+  const payload = { message };
+
+  const shouldSend = await shouldSendNotification(admin, 'kaspi_auth_expired', payload, { orgId });
+  if (!shouldSend) {
+    console.log('[notifications] Dedup: skipping org admin alert', { orgId, eventType: 'kaspi_auth_expired' });
+    return false;
+  }
+
+  const recipientProfileIds = await getOrgAdminRecipientProfiles(admin, orgId);
+  if (recipientProfileIds.length === 0) {
+    console.log('[notifications] No owner/admin recipients found for org alert', { orgId });
+    return false;
+  }
+
+  const insertPromises = recipientProfileIds.map((recipientProfileId) =>
+    admin.from('notification_log').insert({
+      org_id: orgId,
+      agent_id: null,
+      lead_id: null,
+      event_type: 'kaspi_auth_expired',
+      recipient_profile_id: recipientProfileId,
+      payload: { message },
+      delivery_status: 'pending',
+      attempts: 0,
+    })
+  );
+
+  const results = await Promise.allSettled(insertPromises);
+  const failed = results.filter((result) => result.status === 'rejected').length;
+
+  if (failed > 0) {
+    console.error('[notifications] Some org admin alert inserts failed', { orgId, failed, total: recipientProfileIds.length });
+    return failed < recipientProfileIds.length;
+  }
+
+  console.log('[notifications] Enqueued org admin alert', { orgId, recipients: recipientProfileIds.length });
   return true;
 }
 

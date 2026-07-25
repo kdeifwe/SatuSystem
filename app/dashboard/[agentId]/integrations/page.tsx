@@ -3,13 +3,14 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase-browser';
 
-type IntegrationType = 'telegram_bot' | 'telegram_userbot' | 'whatsapp' | 'instagram';
+type IntegrationType = 'telegram_bot' | 'telegram_userbot' | 'whatsapp' | 'instagram' | 'kaspi';
 
 type IntegrationStatus = {
   telegram_bot?: { connected: boolean; bot_username?: string | null } | null;
   telegram_userbot?: { connected: boolean; phone?: string | null } | null;
   whatsapp?: { connected: boolean } | null;
   instagram?: { connected: boolean } | null;
+  kaspi?: { connected: boolean; status?: string | null } | null;
 };
 
 interface Integration {
@@ -56,6 +57,15 @@ const INTEGRATIONS: Integration[] = [
     iconBg: 'bg-[color:var(--color-carbon)] border border-[color:var(--color-graphite)]',
     isOfficial: false,
     warning: 'Требует бизнес-аккаунт Instagram привязанный к Facebook. Используйте на свой страх и риск.',
+  },
+  {
+    id: 'kaspi',
+    name: 'Kaspi Pay',
+    description: 'Управление авторизацией Kaspi Pay для выставления счетов и работы с кассой. Сейчас это организация-level статус и заглушка для будущей реавторизации.',
+    icon: '💳',
+    iconBg: 'bg-[color:var(--color-carbon)] border border-[color:var(--color-graphite)]',
+    isOfficial: true,
+    warning: 'Временное решение: карточка расположена на странице интеграций агента, но статус относится к организации в целом. В будущем этот блок будет вынесен на org-level страницу интеграций.',
   },
 ];
 
@@ -111,7 +121,8 @@ export default function IntegrationsPage({ params }: { params: { agentId: string
               (integration.id === 'telegram_bot' && connectedChannels.telegram_bot?.connected) ||
               (integration.id === 'telegram_userbot' && connectedChannels.telegram_userbot?.connected) ||
               (integration.id === 'whatsapp' && connectedChannels.whatsapp?.connected) ||
-              (integration.id === 'instagram' && connectedChannels.instagram?.connected)
+              (integration.id === 'instagram' && connectedChannels.instagram?.connected) ||
+              (integration.id === 'kaspi' && Boolean(connectedChannels.kaspi?.connected))
             );
 
             return (
@@ -200,6 +211,30 @@ function IntegrationDetail({ type, agentId, connectedStatus, onBack, onStatusCha
         {type === 'telegram_userbot' && <TelegramUserbotForm agentId={agentId} />}
         {type === 'whatsapp' && <WhatsAppForm agentId={agentId} />}
         {type === 'instagram' && <InstagramForm agentId={agentId} />}
+        {type === 'kaspi' && <KaspiPlaceholder />}
+      </div>
+    </div>
+  );
+}
+
+function KaspiPlaceholder() {
+  return (
+    <div className="space-y-4">
+      <div className="rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-5">
+        <div className="mb-3 flex items-center gap-2">
+          <span className="text-lg">💳</span>
+          <h2 className="text-sm font-medium text-[color:var(--color-chalk)]">Статус Kaspi Pay</h2>
+        </div>
+        <p className="text-sm text-[color:var(--color-smoke)] leading-relaxed">
+          Здесь появится статус авторизации Kaspi Pay для всей организации. Пока что это временная заглушка, а реальная реавторизация будет добавлена отдельным шагом после проверки алертов.
+        </p>
+      </div>
+
+      <div className="rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-5">
+        <div className="text-sm font-medium text-[color:var(--color-chalk)]">Текущее состояние</div>
+        <p className="mt-2 text-sm text-[color:var(--color-smoke)]">
+          Ожидается авторизация и настройка интеграции на уровне организации. При истечении сессии SatuSystem будет отправлять системный алерт владельцам и администраторам.
+        </p>
       </div>
     </div>
   );
