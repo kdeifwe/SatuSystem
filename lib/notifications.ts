@@ -211,7 +211,18 @@ export async function notifyOrgAdmins(orgId: string | null | undefined, message:
   );
 
   const results = await Promise.allSettled(insertPromises);
-  const failed = results.filter((result) => result.status === 'rejected').length;
+  const rejected = results.filter((result) => result.status === 'rejected').length;
+  const dbErrors = results.filter(
+    (result) => result.status === 'fulfilled' && (result as PromiseFulfilledResult<any>).value?.error
+  ).length;
+  const failed = rejected + dbErrors;
+
+  if (dbErrors > 0) {
+    const firstError = results.find(
+      (result) => result.status === 'fulfilled' && (result as PromiseFulfilledResult<any>).value?.error
+    ) as PromiseFulfilledResult<any> | undefined;
+    console.error('[notifications] DB error inserting org admin alert', firstError?.value?.error ?? firstError);
+  }
 
   if (failed > 0) {
     console.error('[notifications] Some org admin alert inserts failed', { orgId, failed, total: recipientProfileIds.length });
@@ -331,7 +342,18 @@ export async function enqueueNotification(
     );
 
     const results = await Promise.allSettled(insertPromises);
-    const failed = results.filter((r) => r.status === 'rejected').length;
+    const rejected = results.filter((r) => r.status === 'rejected').length;
+    const dbErrors = results.filter(
+      (result) => result.status === 'fulfilled' && (result as PromiseFulfilledResult<any>).value?.error
+    ).length;
+    const failed = rejected + dbErrors;
+
+    if (dbErrors > 0) {
+      const firstError = results.find(
+        (result) => result.status === 'fulfilled' && (result as PromiseFulfilledResult<any>).value?.error
+      ) as PromiseFulfilledResult<any> | undefined;
+      console.error('[notifications] DB error inserting notification', firstError?.value?.error ?? firstError);
+    }
 
     if (failed > 0) {
       console.error('[notifications] Some inserts failed', { eventType, failed, total: uniqueRecipients.length });
