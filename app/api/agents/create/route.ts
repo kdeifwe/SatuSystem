@@ -54,6 +54,7 @@ export async function POST() {
         knowledge_base_principles: initialKnowledgeBasePrinciples,
         general_capabilities: {
           allowed_tools: defaultAllowedTools,
+          kaspi_invoice_enabled: false,
         },
       })
       .select('id')

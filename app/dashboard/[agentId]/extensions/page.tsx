@@ -56,6 +56,13 @@ type TelegramLinkState = {
   expiresAt: string;
 };
 
+type AgentSettings = {
+  general_capabilities?: {
+    kaspi_invoice_enabled?: boolean;
+    [key: string]: unknown;
+  };
+};
+
 function patchEventConfig(
   current: TelegramExtensionSettings,
   eventKey: string,
@@ -164,6 +171,46 @@ export default function ExtensionsPage({ params }: { params: { agentId: string }
   });
   const [countdownLabel, setCountdownLabel] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [isSavingAgentSettings, setIsSavingAgentSettings] = useState(false);
+  const [agentSettingsSaveError, setAgentSettingsSaveError] = useState<string | null>(null);
+
+  const { data: agentSettings, error: agentSettingsError, mutate: mutateAgentSettings } = useSWR<AgentSettings>(
+    ['agent-settings', params.agentId],
+    async () => {
+      const response = await fetch(`/api/agents/${params.agentId}/settings`);
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload?.error ?? 'Не удалось загрузить настройки агента');
+      }
+      return payload as AgentSettings;
+    },
+    { revalidateOnFocus: false }
+  );
+
+  const kaspiInvoiceEnabled = agentSettings?.general_capabilities?.kaspi_invoice_enabled === true;
+  const isLoadingAgentSettings = !agentSettings && !agentSettingsError;
+
+  const handleToggleKaspiInvoice = async () => {
+    setIsSavingAgentSettings(true);
+    setAgentSettingsSaveError(null);
+
+    const nextValue = !kaspiInvoiceEnabled;
+    const response = await fetch(`/api/agents/${params.agentId}/settings`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ general_capabilities: { kaspi_invoice_enabled: nextValue } }),
+    });
+
+    const payload = await response.json();
+    if (!response.ok) {
+      setAgentSettingsSaveError(payload?.error ?? 'Не удалось сохранить настройку');
+      setIsSavingAgentSettings(false);
+      return;
+    }
+
+    setIsSavingAgentSettings(false);
+    await mutateAgentSettings();
+  };
 
   const selectedExtension = useMemo(
     () => extensions.find((item) => item.key === selectedKey) ?? null,
@@ -324,6 +371,41 @@ export default function ExtensionsPage({ params }: { params: { agentId: string }
           <div className="text-sm text-[color:var(--color-smoke)]">Активно</div>
           <div className="mt-1 text-2xl font-semibold text-[color:var(--color-chalk)]">
             {activeCount}/{extensions.length}
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-6">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <p className="text-sm font-medium uppercase tracking-[0.3em] text-[color:var(--color-smoke)]">Kaspi Pay счета</p>
+            <h2 className="mt-2 text-2xl font-semibold text-[color:var(--color-chalk)]">Отключён по умолчанию</h2>
+            <p className="mt-2 max-w-2xl text-sm text-[color:var(--color-smoke)]">
+              Инструмент createKaspiInvoice доступен только если ручной переключатель включен владельцем или администратором.
+            </p>
+          </div>
+
+          <div className="flex flex-col items-start gap-3 sm:items-end">
+            <div className="flex items-center gap-3">
+              <span className="text-sm font-medium text-[color:var(--color-chalk)]">{kaspiInvoiceEnabled ? 'Включено' : 'Отключено'}</span>
+              <button
+                type="button"
+                onClick={handleToggleKaspiInvoice}
+                disabled={isSavingAgentSettings || isLoadingAgentSettings}
+                className="rounded-full border border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] px-4 py-2 text-sm font-medium text-[color:var(--color-smoke)] transition hover:border-[color:var(--color-ash)] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isSavingAgentSettings ? 'Сохраняем…' : kaspiInvoiceEnabled ? 'Отключить' : 'Включить'}
+              </button>
+            </div>
+            {agentSettingsError ? (
+              <div className="text-sm text-rose-400">Не удалось загрузить настройки: {agentSettingsError.message}</div>
+            ) : null}
+            {agentSettingsSaveError ? (
+              <div className="text-sm text-rose-400">{agentSettingsSaveError}</div>
+            ) : null}
+            <div className="text-sm text-[color:var(--color-smoke)]">
+              Только роль owner/admin может менять этот флаг. Остальные пользователи увидят ошибку при попытке.
+            </div>
           </div>
         </div>
       </div>

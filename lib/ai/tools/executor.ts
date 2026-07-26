@@ -624,6 +624,18 @@ async function sendCustomNotification(args: { message: string; target: string },
 }
 
 async function createKaspiInvoice(args: { phone: string; amount: number; comment?: string }, ctx: ToolContext) {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from('agents')
+    .select('general_capabilities')
+    .eq('id', ctx.agentId)
+    .maybeSingle();
+
+  const generalCapabilities = (data?.general_capabilities as Record<string, unknown> | null) ?? {};
+  if (generalCapabilities.kaspi_invoice_enabled !== true) {
+    throw new Error('Kaspi Pay недоступен для этого агента');
+  }
+
   if (!ctx.leadId) {
     throw new Error('lead_id is required in the conversation context for createKaspiInvoice');
   }

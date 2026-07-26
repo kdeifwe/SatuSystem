@@ -962,7 +962,7 @@ export async function runAgentTurn(
     : [];
 
   // Формируем toolDeclarations только для разрешённых тулов
-  const toolDeclarations = buildToolDeclarationsForAgent(allowedToolNames, agentData?.dialogue_flow);
+  const toolDeclarations = buildToolDeclarationsForAgent(allowedToolNames, generalCapabilities, agentData?.dialogue_flow);
   const toolPayload = toolDeclarations.length > 0 ? [{ functionDeclarations: toolDeclarations }] : [];
   console.log(`[AGENT_TOOLS] Agent ${agentId}: allowed tools: [${allowedToolNames.join(', ')}], declarations: [${toolDeclarations.map((d) => d.name).join(', ')}]`);
 

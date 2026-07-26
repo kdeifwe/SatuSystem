@@ -80,8 +80,13 @@ function buildAdvanceFunnelStepDeclaration(flow: unknown): GeminiFunctionDeclara
   };
 }
 
-export function buildToolDeclarationsForAgent(allowedToolNames: string[], _flow: unknown): GeminiFunctionDeclaration[] {
+export function buildToolDeclarationsForAgent(allowedToolNames: string[], generalCapabilities: unknown, _flow: unknown): GeminiFunctionDeclaration[] {
   const allowedNames = new Set(allowedToolNames);
+  const capabilities = (generalCapabilities as Record<string, unknown> | null) ?? {};
+
+  if (capabilities.kaspi_invoice_enabled !== true) {
+    allowedNames.delete('createKaspiInvoice');
+  }
 
   return ALL_TOOL_DECLARATIONS.filter((declaration) => allowedNames.has(declaration.name))
     .map((declaration) => ({

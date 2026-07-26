@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient as createUserClient } from '@/lib/supabase/server';
 import { createClient } from '@supabase/supabase-js';
 import { compileAndSaveSystemPrompt } from '@/lib/ai/compile-system-prompt';
+import { requireOwnerOrAdmin } from '@/lib/server/permissions';
 
 function getAdmin() {
   return createClient(
@@ -38,9 +39,21 @@ export async function PATCH(req: NextRequest, { params }: { params: { agentId: s
 
   const existing = await getAdmin()
     .from('agents')
-    .select('system_prompt_compiled, general_capabilities')
+    .select('org_id, system_prompt_compiled, general_capabilities')
     .eq('id', params.agentId)
     .single();
+
+  if (!existing.data) {
+    return NextResponse.json({ error: 'Агент не найден' }, { status: 404 });
+  }
+
+  if (body.general_capabilities?.kaspi_invoice_enabled !== undefined) {
+    try {
+      await requireOwnerOrAdmin(supabase, user.id, existing.data.org_id);
+    } catch (error) {
+      return NextResponse.json({ error: (error as Error).message }, { status: 403 });
+    }
+  }
 
   const allowed = [
     'name',
@@ -61,7 +74,15 @@ export async function PATCH(req: NextRequest, { params }: { params: { agentId: s
 
   const updates: Record<string, unknown> = {};
   for (const key of allowed) {
-    if (key in body) updates[key] = body[key];
+    if (key in body && key !== 'general_capabilities') updates[key] = body[key];
+  }
+
+  if ('general_capabilities' in body) {
+    const existingCapabilities = (existing.data?.general_capabilities as Record<string, unknown> | null) ?? {};
+    updates.general_capabilities = {
+      ...existingCapabilities,
+      ...(body.general_capabilities as Record<string, unknown>),
+    };
   }
 
   const { error } = await getAdmin().from('agents').update(updates).eq('id', params.agentId);
