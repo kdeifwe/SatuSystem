@@ -230,11 +230,14 @@ export async function POST(req: NextRequest) {
         if (response.status === 401 || response.status === 403) {
           await updateInvoiceRecord({ status: 'failed', error_message: 'KASPI_AUTH_EXPIRED' });
           try {
-            await notifyOrgAdmins(
+            console.error('[K8 DEBUG] organizationId before notifyOrgAdmins:', organizationId);
+            const notifyResult = await notifyOrgAdmins(
               organizationId,
               '⚠️ Сессия Kaspi Pay истекла — AI-агент не может выставлять счета. Нужна реавторизация в Настройки → Интеграции → Kaspi Pay'
             );
+            console.error('[K8 DEBUG] notifyOrgAdmins result:', notifyResult);
           } catch (alertError) {
+            console.error('[K8 DEBUG] notifyOrgAdmins threw:', alertError);
             console.error('[kaspi invoice] failed to notify org admins about auth expiry', alertError);
           }
           return NextResponse.json(
