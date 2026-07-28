@@ -1,21 +1,9 @@
-// @ts-nocheck
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.1';
+import { NextRequest, NextResponse } from 'next/server';
+import { createAdminClient } from '@/lib/supabase/admin';
 
-const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
-const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
-const defaultBotToken = Deno.env.get('TELEGRAM_NOTIFICATIONS_BOT_TOKEN') ?? '';
-const appUrl = Deno.env.get('NEXT_PUBLIC_APP_URL') ?? 'http://localhost:3001';
-
-const supabase = createClient(supabaseUrl, serviceRoleKey, {
-  auth: { persistSession: false, autoRefreshToken: false },
-});
-
-function formatTemplate(template: string, payload: Record<string, unknown>) {
-  return template.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, key: string) => {
-    const value = payload[key.trim()];
-    return value !== null && value !== undefined ? String(value) : '—';
-  });
-}
+const AUTH_HEADER = 'authorization';
+const BOT_TOKEN = process.env.TELEGRAM_NOTIFICATIONS_BOT_TOKEN ?? '';
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000';
 
 function escapeHtml(text: string): string {
   return text
@@ -26,11 +14,17 @@ function escapeHtml(text: string): string {
     .replace(/'/g, '&#039;');
 }
 
-function renderMessage(record: Record<string, unknown>): string {
-  const eventType = record.event_type as string;
-  const payload = (record.payload as Record<string, unknown>) ?? {};
+function formatTemplate(template: string, payload: Record<string, unknown>) {
+  return template.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, key: string) => {
+    const value = payload[key.trim()];
+    return value !== null && value !== undefined ? String(value) : '—';
+  });
+}
 
-  const dashboardUrl = `${appUrl}/dashboard`;
+function renderMessage(record: any): string {
+  const eventType = String(record.event_type || '');
+  const payload = record.payload || {};
+  const dashboardUrl = `${APP_URL}/dashboard`;
 
   switch (eventType) {
     case 'operator_needed':
@@ -177,12 +171,10 @@ async function sendTelegramMessage(chatId: string, text: string, token: string) 
   }
 }
 
-async function getActiveTelegramSettings(agentId: string | null) {
-  if (!agentId) {
-    return null;
-  }
+async function getActiveTelegramSettings(admin: ReturnType<typeof createAdminClient>, agentId: string | null) {
+  if (!agentId) return null;
 
-  const { data: settings } = await supabase
+  const { data: settings } = await admin
     .from('extension_settings')
     .select('config')
     .eq('agent_id', agentId)
@@ -193,62 +185,57 @@ async function getActiveTelegramSettings(agentId: string | null) {
   return settings?.config ?? null;
 }
 
-async function getBotTokenForRow(row: Record<string, unknown>) {
-  const agentId = row.agent_id as string | undefined;
-  const settings = await getActiveTelegramSettings(agentId ?? null);
+async function getBotTokenForRow(admin: ReturnType<typeof createAdminClient>, row: any): Promise<string | null> {
+  const settings = await getActiveTelegramSettings(admin, row.agent_id ?? null);
   if (settings?.bot_token) {
     return String(settings.bot_token);
   }
 
-  return defaultBotToken || null;
+  return BOT_TOKEN || null;
 }
 
-async function getAgentIdForRow(row: Record<string, unknown>) {
+async function getAgentIdForRow(admin: ReturnType<typeof createAdminClient>, row: any): Promise<string | null> {
   if (row.agent_id) {
-    return String(row.agent_id);
+    return row.agent_id;
   }
 
   if (!row.lead_id) {
     return null;
   }
 
-  const { data: lead } = await supabase.from('leads').select('agent_id').eq('id', String(row.lead_id)).maybeSingle();
+  const { data: lead } = await admin.from('leads').select('agent_id').eq('id', row.lead_id).maybeSingle();
   return lead?.agent_id ?? null;
 }
 
-async function resolveRecipientIdsForRow(row: Record<string, unknown>) {
+async function resolveRecipientIdsForRow(admin: ReturnType<typeof createAdminClient>, row: any): Promise<string[]> {
   const recipients = new Set<string>();
 
   if (row.recipient_profile_id) {
-    recipients.add(String(row.recipient_profile_id));
+    recipients.add(row.recipient_profile_id);
     return Array.from(recipients);
   }
 
-  const agentId = await getAgentIdForRow(row);
-  const settings = await getActiveTelegramSettings(agentId);
+  const agentId = await getAgentIdForRow(admin, row);
+  const settings = await getActiveTelegramSettings(admin, agentId);
+
   if (Array.isArray(settings?.recipients)) {
     for (const recipient of settings.recipients) {
-      if (recipient) {
-        recipients.add(String(recipient));
-      }
+      if (recipient) recipients.add(recipient);
     }
   }
 
-  if (
-    ['operator_needed', 'ai_silent', 'deal_won', 'contact_received'].includes(String(row.event_type || '')) &&
-    row.lead_id
-  ) {
-    const { data: lead } = await supabase.from('leads').select('assigned_to').eq('id', String(row.lead_id)).maybeSingle();
+  if (['operator_needed', 'ai_silent', 'deal_won', 'contact_received'].includes(String(row.event_type || '')) && row.lead_id) {
+    const { data: lead } = await admin.from('leads').select('assigned_to').eq('id', row.lead_id).maybeSingle();
     if (lead?.assigned_to) {
-      recipients.add(String(lead.assigned_to));
+      recipients.add(lead.assigned_to);
     }
   }
 
   return Array.from(recipients);
 }
 
-async function splitPendingRow(row: Record<string, unknown>) {
-  const recipientIds = await resolveRecipientIdsForRow(row);
+async function splitPendingRow(admin: ReturnType<typeof createAdminClient>, row: any): Promise<boolean> {
+  const recipientIds = await resolveRecipientIdsForRow(admin, row);
   if (recipientIds.length === 0) {
     return false;
   }
@@ -265,26 +252,33 @@ async function splitPendingRow(row: Record<string, unknown>) {
     attempts: 0,
   }));
 
-  const { error } = await supabase.from('notification_log').insert(insertRows);
+  const { error } = await admin.from('notification_log').insert(insertRows);
   if (error) {
-    console.error('[send-notifications] failed to split pending row', { row, error });
+    console.error('[send-notifications] failed to split pending row', { rowId: row.id, error });
     return false;
   }
 
-  await supabase
+  await admin
     .from('notification_log')
     .update({
       delivery_status: 'failed',
-      attempts: (Number(row.attempts ?? 0) || 0) + 1,
+      attempts: (row.attempts ?? 0) + 1,
       last_error: `missing recipient_profile_id; split into ${recipientIds.length} rows`,
     })
-    .eq('id', String(row.id));
+    .eq('id', row.id);
 
   return true;
 }
 
-Deno.serve(async () => {
-  const { data: pendingRows, error } = await supabase
+export async function GET(req: NextRequest) {
+  const token = req.headers.get(AUTH_HEADER)?.replace('Bearer ', '').trim();
+  if (!token || token !== process.env.CRON_SECRET) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  const admin = createAdminClient();
+
+  const { data: pendingRows, error } = await admin
     .from('notification_log')
     .select('id, org_id, agent_id, lead_id, event_type, custom_condition_key, recipient_profile_id, payload, attempts')
     .eq('delivery_status', 'pending')
@@ -293,94 +287,96 @@ Deno.serve(async () => {
     .limit(50);
 
   if (error) {
-    console.error(error);
-    return new Response(JSON.stringify({ ok: false, error: error.message }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    console.error('[send-notifications] failed to fetch pending rows', error);
+    return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
   }
 
-  for (const row of pendingRows ?? []) {
-    const recipientId = row.recipient_profile_id as string | undefined;
+  const results = [] as Array<{ id: string; status: string; error?: string }>;
 
+  for (const row of pendingRows ?? []) {
     try {
-      if (!recipientId) {
-        const split = await splitPendingRow(row);
+      if (!row.recipient_profile_id) {
+        const split = await splitPendingRow(admin, row);
         if (split) {
+          results.push({ id: row.id, status: 'split' });
           continue;
         }
 
-        await supabase
+        await admin
           .from('notification_log')
           .update({
             delivery_status: 'failed',
-            attempts: (Number(row.attempts ?? 0) || 0) + 1,
+            attempts: (row.attempts ?? 0) + 1,
             last_error: 'missing recipient_profile_id',
           })
-          .eq('id', String(row.id));
+          .eq('id', row.id);
 
+        results.push({ id: row.id, status: 'failed', error: 'missing recipient_profile_id' });
         continue;
       }
 
-      const { data: profile } = await supabase
+      const { data: profile } = await admin
         .from('profiles')
         .select('telegram_chat_id')
-        .eq('id', recipientId)
+        .eq('id', row.recipient_profile_id)
         .maybeSingle();
 
-      const chatId = String(profile?.telegram_chat_id ?? '');
+      const chatId = String(profile?.telegram_chat_id || '');
       if (!chatId) {
-        await supabase
+        await admin
           .from('notification_log')
           .update({
             delivery_status: 'failed',
-            attempts: (Number(row.attempts ?? 0) || 0) + 1,
+            attempts: (row.attempts ?? 0) + 1,
             last_error: 'recipient has no telegram chat id',
           })
-          .eq('id', String(row.id));
+          .eq('id', row.id);
 
+        results.push({ id: row.id, status: 'failed', error: 'recipient has no telegram chat id' });
         continue;
       }
 
-      const botToken = await getBotTokenForRow(row);
+      const botToken = await getBotTokenForRow(admin, row);
       if (!botToken) {
-        await supabase
+        await admin
           .from('notification_log')
           .update({
             delivery_status: 'failed',
-            attempts: (Number(row.attempts ?? 0) || 0) + 1,
+            attempts: (row.attempts ?? 0) + 1,
             last_error: 'telegram bot token is not configured',
           })
-          .eq('id', String(row.id));
+          .eq('id', row.id);
 
+        results.push({ id: row.id, status: 'failed', error: 'telegram bot token is not configured' });
         continue;
       }
 
       const text = renderMessage(row);
       await sendTelegramMessage(chatId, text, botToken);
 
-      await supabase
+      await admin
         .from('notification_log')
         .update({
           delivery_status: 'sent',
-          attempts: (Number(row.attempts ?? 0) || 0) + 1,
+          attempts: (row.attempts ?? 0) + 1,
         })
-        .eq('id', String(row.id));
+        .eq('id', row.id);
+
+      results.push({ id: row.id, status: 'sent' });
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
-      console.error('[send-notifications] failed to send notification', { row, error: errorMessage });
-      await supabase
+      console.error('[send-notifications] failed to send notification', { rowId: row.id, error: errorMessage });
+      await admin
         .from('notification_log')
         .update({
           delivery_status: 'failed',
-          attempts: (Number(row.attempts ?? 0) || 0) + 1,
+          attempts: (row.attempts ?? 0) + 1,
           last_error: errorMessage,
         })
-        .eq('id', String(row.id));
+        .eq('id', row.id);
+      results.push({ id: row.id, status: 'failed', error: errorMessage });
     }
   }
 
-  return new Response(JSON.stringify({ ok: true, processed: pendingRows?.length ?? 0 }), {
-    headers: { 'Content-Type': 'application/json' },
-  });
-});
+  return NextResponse.json({ ok: true, processed: results.length, results });
+}

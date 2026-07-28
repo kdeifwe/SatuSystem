@@ -7,6 +7,7 @@ import { registerTelegramNotificationsWebhook } from '@/lib/extensions/telegram-
 import { getDefaultConfig } from '@/lib/telegram-extension-config';
 
 export type TelegramExtensionSettings = {
+  bot_token?: string;
   recipients: string[];
   events: {
     operator_needed: { enabled: boolean };
