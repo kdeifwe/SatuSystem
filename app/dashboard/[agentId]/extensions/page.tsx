@@ -333,10 +333,10 @@ export default function ExtensionsPage({ params }: { params: { agentId: string }
 
     const result = await saveExtensionSettings(params.agentId, {
       isActive: selectedExtension?.active ?? true,
-      config: {
+      config: getDefaultConfig({
+        ...draftConfig,
         recipients: draftRecipients,
-        events: draftConfig?.events ?? {},
-      },
+      }),
     });
 
     if (result.error) {
@@ -622,6 +622,36 @@ export default function ExtensionsPage({ params }: { params: { agentId: string }
                     )}
                   </div>
                 </div>
+
+                <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-4">
+                  <div className="text-sm font-medium text-white">Telegram Bot Token</div>
+                  <p className="mt-1 text-sm text-slate-400">Введите токен бота для отправки уведомлений Telegram.</p>
+                  <div className="mt-4">
+                    <input
+                      type="text"
+                      value={draftConfig?.bot_token ?? ''}
+                      onChange={(event) =>
+                        setDraftConfig((current) => ({
+                          ...current,
+                          bot_token: event.target.value,
+                        }))
+                      }
+                      placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+                      className="w-full rounded-xl border border-white/10 bg-slate-900 px-3 py-2 text-slate-100 placeholder:text-slate-500"
+                    />
+                  </div>
+                </div>
+
+                {(!draftRecipients.length || !draftConfig?.bot_token) ? (
+                  <div className="rounded-2xl border border-amber-400/30 bg-amber-500/10 p-4 text-sm text-amber-100">
+                    <div className="font-medium text-amber-200">Внимание</div>
+                    <div className="mt-2 space-y-1 text-amber-100/90">
+                      {!draftRecipients.length ? <div>Не выбраны получатели уведомлений. Добавьте хотя бы одного получателя.</div> : null}
+                      {!draftConfig?.bot_token ? <div>Токен Telegram бота не указан. Введите bot_token и сохраните настройки.</div> : null}
+                      <div>Пересохраните настройки, чтобы обновить устаревший конфиг Telegram и начать получать уведомления.</div>
+                    </div>
+                  </div>
+                ) : null}
 
                 <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-4">
                   <div className="text-sm font-medium text-white">События для уведомлений</div>

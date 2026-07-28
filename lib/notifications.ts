@@ -177,6 +177,38 @@ export async function getOrgAdminRecipientProfiles(
   return (profiles ?? []).map((profile) => profile.id).filter(Boolean) as string[];
 }
 
+export async function getOrgOwnerRecipientProfiles(
+  admin: ReturnType<typeof createAdminClient>,
+  orgId: string
+): Promise<string[]> {
+  const { data: memberships, error: membershipsError } = await admin
+    .from('org_members')
+    .select('user_id')
+    .eq('org_id', orgId)
+    .eq('role', 'owner');
+
+  if (membershipsError || !memberships?.length) {
+    return [];
+  }
+
+  const ownerIds = memberships.map((membership) => membership.user_id).filter(Boolean) as string[];
+  if (ownerIds.length === 0) {
+    return [];
+  }
+
+  const { data: profiles, error: profilesError } = await admin
+    .from('profiles')
+    .select('id')
+    .in('id', ownerIds)
+    .not('telegram_chat_id', 'is', null);
+
+  if (profilesError) {
+    return [];
+  }
+
+  return (profiles ?? []).map((profile) => profile.id).filter(Boolean) as string[];
+}
+
 export async function notifyOrgAdmins(orgId: string | null | undefined, message: string): Promise<boolean> {
   if (!orgId) {
     return false;
@@ -191,10 +223,14 @@ export async function notifyOrgAdmins(orgId: string | null | undefined, message:
     return false;
   }
 
-  const recipientProfileIds = await getOrgAdminRecipientProfiles(admin, orgId);
+  let recipientProfileIds = await getOrgAdminRecipientProfiles(admin, orgId);
   if (recipientProfileIds.length === 0) {
-    console.log('[notifications] No owner/admin recipients found for org alert', { orgId });
-    return false;
+    recipientProfileIds = await getOrgOwnerRecipientProfiles(admin, orgId);
+    if (recipientProfileIds.length === 0) {
+      console.log('[notifications] No owner/admin recipients found for org alert', { orgId });
+      return false;
+    }
+    console.log('[notifications] Using org owner fallback recipients for org alert', { orgId, recipients: recipientProfileIds });
   }
 
   const insertPromises = recipientProfileIds.map((recipientProfileId) =>
@@ -320,7 +356,15 @@ export async function enqueueNotification(
     recipients.push(...baseRecipients);
 
     // Deduplicate
-    const uniqueRecipients = [...new Set(recipients)];
+    let uniqueRecipients = [...new Set(recipients)];
+
+    if (uniqueRecipients.length === 0 && orgId) {
+      const fallbackRecipients = await getOrgOwnerRecipientProfiles(admin, orgId);
+      if (fallbackRecipients.length > 0) {
+        uniqueRecipients = [...new Set(fallbackRecipients)];
+        console.log('[notifications] Using org owner fallback recipients', { eventType, orgId, recipients: uniqueRecipients });
+      }
+    }
 
     if (uniqueRecipients.length === 0) {
       console.log('[notifications] No recipients found for event', { eventType });
