@@ -351,6 +351,29 @@ export async function enqueueNotification(
     // Build recipient list
     const recipients: string[] = [];
     const baseRecipients = (config.recipients as string[]) || [];
+    const resolvedBaseRecipients = [] as string[];
+
+    for (const recipient of baseRecipients) {
+      if (!recipient) {
+        continue;
+      }
+
+      const recipientValue = String(recipient);
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(recipientValue)) {
+        resolvedBaseRecipients.push(recipientValue);
+        continue;
+      }
+
+      const { data: profile } = await admin
+        .from('profiles')
+        .select('id')
+        .eq('telegram_chat_id', recipientValue)
+        .maybeSingle();
+
+      if (profile?.id) {
+        resolvedBaseRecipients.push(profile.id);
+      }
+    }
 
     // Add specific recipients based on event type
     if (eventType === 'operator_needed' || eventType === 'ai_silent') {
@@ -362,7 +385,7 @@ export async function enqueueNotification(
     }
 
     // Add base recipients
-    recipients.push(...baseRecipients);
+    recipients.push(...resolvedBaseRecipients);
 
     // Deduplicate
     let uniqueRecipients = [...new Set(recipients)];

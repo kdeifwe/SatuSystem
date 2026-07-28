@@ -50,9 +50,11 @@ export async function sendTelegramNotification(chatId: string | number, message:
     }),
   });
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(`Telegram API error: ${JSON.stringify(err)}`);
+  const data = await res.json().catch(() => ({}));
+
+  if (!res.ok || !data.ok) {
+    const description = data?.description ?? data?.error?.message ?? 'Telegram API error';
+    throw new Error(`Telegram API error: ${description}`);
   }
 }
 
