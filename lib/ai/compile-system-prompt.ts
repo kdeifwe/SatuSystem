@@ -219,12 +219,28 @@ export function buildSystemPrompt(
   ];
 
   const identityProtectionItems = normalizeStringList(defaults.identity_protection);
-  const handoff = (defaults.handoff as Record<string, unknown> | null) ?? {};
-  const handoffTriggers = normalizeStringList(handoff.triggers);
-  const handoffPhrasing = normalizeStringList(handoff.phrasing_examples);
-  const handoffNeverSay = normalizeStringList(handoff.never_say);
-  const handoffAfter = normalizeText(handoff.after_handoff);
+  const agentHandoff = (generalCapabilities?.handoff as Record<string, unknown> | null) ?? null;
+  const orgHandoff = (defaults.handoff as Record<string, unknown> | null) ?? {};
+  const handoff = agentHandoff ?? orgHandoff;
+  const handoffEnabled = typeof generalCapabilities?.handoff_enabled === 'boolean'
+    ? generalCapabilities.handoff_enabled
+    : typeof handoff?.enabled === 'boolean'
+      ? (handoff.enabled as boolean)
+      : true;
+  const handoffTriggers = normalizeStringList(
+    (handoff?.triggers ?? generalCapabilities?.handoff_triggers) as unknown
+  );
+  const handoffPhrasing = normalizeStringList(
+    (handoff?.phrasing_examples ?? handoff?.phrasingExamples) as unknown
+  );
+  const handoffNeverSay = normalizeStringList(
+    (handoff?.never_say ?? handoff?.neverSay) as unknown
+  );
+  const handoffAfter = normalizeText(
+    (handoff?.after_handoff ?? handoff?.afterHandoff) as unknown
+  );
   const handoffBlockItems = [
+    ...(typeof handoffEnabled === 'boolean' ? [`Включено: ${handoffEnabled ? 'да' : 'нет'}`] : []),
     ...(handoffTriggers.length > 0 ? [`Триггеры: ${handoffTriggers.join(', ')}`] : []),
     ...(handoffPhrasing.length > 0 ? [`Фразы: ${handoffPhrasing.join(', ')}`] : []),
     ...(handoffNeverSay.length > 0 ? [`Никогда не говорить: ${handoffNeverSay.join(', ')}`] : []),

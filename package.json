@@ -38,15 +38,19 @@
   },
   "devDependencies": {
     "@types/node": "^20.19.43",
+    "@types/pg": "^8.20.0",
     "@types/qrcode": "^1.5.6",
     "@types/react": "18.3.3",
     "autoprefixer": "10.4.21",
     "dotenv": "^17.4.2",
     "eslint": "8.57.0",
     "eslint-config-next": "14.2.5",
+    "pg": "^8.22.0",
     "postcss": "8.4.44",
     "tailwindcss": "3.4.5",
     "ts-node": "^10.9.2",
-    "typescript": "5.5.4"
+    "tsx": "^4.23.1",
+    "typescript": "5.5.4",
+    "zod": "^4.4.3"
   }
 }

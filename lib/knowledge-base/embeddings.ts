@@ -1,43 +1,11 @@
-import {
-  GEMINI_API_BASE,
-  GEMINI_EMBEDDING_MODEL,
-  GEMINI_EMBEDDING_OUTPUT_DIMENSIONALITY,
-} from '@/lib/server/ai/gemini-client';
+import { GEMINI_EMBEDDING_MODEL, GEMINI_EMBEDDING_OUTPUT_DIMENSIONALITY } from '@/lib/server/ai/gemini-client';
+
+const GEMINI_EMBED_URL =
+  `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_EMBEDDING_MODEL}:embedContent`;
 
 const BATCH_SIZE = 20; // Gemini allows batching; stay conservative
 const RETRY_ATTEMPTS = 3;
 const RETRY_BASE_DELAY_MS = 1000;
-
-function getEmbeddingModelCandidates(): string[] {
-  const configured = process.env.GEMINI_EMBEDDING_MODEL?.trim();
-  return Array.from(new Set([configured, GEMINI_EMBEDDING_MODEL, 'gemini-embedding-001', 'gemini-embedding-2-preview'].filter(Boolean) as string[]));
-}
-
-async function requestEmbedding(text: string, taskType: 'RETRIEVAL_DOCUMENT' | 'RETRIEVAL_QUERY', model: string): Promise<number[]> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error('GEMINI_API_KEY is not set');
-
-  const res = await fetch(`${GEMINI_API_BASE}/models/${model}:embedContent?key=${apiKey}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: `models/${model}`,
-      content: { parts: [{ text }] },
-      taskType,
-      outputDimensionality: GEMINI_EMBEDDING_OUTPUT_DIMENSIONALITY,
-    }),
-  });
-
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Gemini embed error ${res.status}: ${body}`);
-  }
-
-  const data = await res.json();
-  const embedding = normalizeEmbedding(data.embedding.values as number[]);
-  console.log('[KB] Embedding generated with model:', model, 'dimensions:', embedding.length);
-  return embedding;
-}
 
 export interface EmbeddingResult {
   embedding: number[];
@@ -54,36 +22,44 @@ function normalizeEmbedding(values: number[]): number[] {
 }
 
 export async function generateEmbedding(text: string): Promise<number[]> {
-  const models = getEmbeddingModelCandidates();
-  let lastError: Error | null = null;
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error('GEMINI_API_KEY is not set');
 
   for (let attempt = 0; attempt < RETRY_ATTEMPTS; attempt++) {
-    lastError = null;
+    const res = await fetch(`${GEMINI_EMBED_URL}?key=${apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: { parts: [{ text }] },
+        taskType: 'RETRIEVAL_DOCUMENT',
+        outputDimensionality: GEMINI_EMBEDDING_OUTPUT_DIMENSIONALITY,
+      }),
+    });
 
-    for (const model of models) {
-      try {
-        return await requestEmbedding(text, 'RETRIEVAL_DOCUMENT', model);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        lastError = error instanceof Error ? error : new Error(message);
-
-        if (message.includes('404') || message.includes('400')) {
-          console.warn(`[KB] Embedding model ${model} failed, trying fallback`, message);
-          continue;
-        }
-
-        throw error;
-      }
+    if (res.ok) {
+      const data = await res.json();
+      const embedding = normalizeEmbedding(data.embedding.values as number[]);
+      console.log('[KB] Embedding generated, dimensions:', embedding.length);
+      return embedding;
     }
 
-    if (lastError) {
+    if (res.status === 404) {
+      const body = await res.text();
+      console.error(`Gemini embed model not found: ${GEMINI_EMBEDDING_MODEL} (${res.status})`, body);
+      throw new Error(`Gemini embed model not found: ${GEMINI_EMBEDDING_MODEL}`);
+    }
+
+    if (res.status === 429 || res.status >= 500) {
       const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
-      console.warn(`Gemini embed attempt ${attempt + 1} failed, retrying in ${delay}ms`, lastError.message);
+      console.warn(`Gemini embed attempt ${attempt + 1} failed (${res.status}), retrying in ${delay}ms`);
       await new Promise((r) => setTimeout(r, delay));
+      continue;
     }
+
+    throw new Error(`Gemini embed error: ${res.status} ${await res.text()}`);
   }
 
-  throw new Error(`Gemini embed: max retries exceeded${lastError ? `: ${lastError.message}` : ''}`);
+  throw new Error('Gemini embed: max retries exceeded');
 }
 
 /**
@@ -98,6 +74,7 @@ export async function generateEmbeddingsBatch(texts: string[]): Promise<Embeddin
     const embeddings = await Promise.all(batch.map((t) => generateEmbedding(t)));
     results.push(...batch.map((content, j) => ({ content, embedding: embeddings[j] })));
 
+    // Small delay between batches to be gentle on rate limits
     if (i + BATCH_SIZE < texts.length) {
       await new Promise((r) => setTimeout(r, 200));
     }
@@ -110,34 +87,42 @@ export async function generateEmbeddingsBatch(texts: string[]): Promise<Embeddin
  * Generates an embedding for semantic search (uses RETRIEVAL_QUERY task type).
  */
 export async function generateQueryEmbedding(query: string): Promise<number[]> {
-  const models = getEmbeddingModelCandidates();
-  let lastError: Error | null = null;
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error('GEMINI_API_KEY is not set');
 
   for (let attempt = 0; attempt < RETRY_ATTEMPTS; attempt++) {
-    lastError = null;
+    const res = await fetch(`${GEMINI_EMBED_URL}?key=${apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: { parts: [{ text: query }] },
+        taskType: 'RETRIEVAL_QUERY',
+        outputDimensionality: GEMINI_EMBEDDING_OUTPUT_DIMENSIONALITY,
+      }),
+    });
 
-    for (const model of models) {
-      try {
-        return await requestEmbedding(query, 'RETRIEVAL_QUERY', model);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        lastError = error instanceof Error ? error : new Error(message);
-
-        if (message.includes('404') || message.includes('400')) {
-          console.warn(`[KB] Query embedding model ${model} failed, trying fallback`, message);
-          continue;
-        }
-
-        throw error;
-      }
+    if (res.ok) {
+      const data = await res.json();
+      const embedding = normalizeEmbedding(data.embedding.values as number[]);
+      console.log('[KB] Query embedding generated, dimensions:', embedding.length);
+      return embedding;
     }
 
-    if (lastError) {
+    if (res.status === 404) {
+      const body = await res.text();
+      console.error(`Gemini query embed model not found: ${GEMINI_EMBEDDING_MODEL} (${res.status})`, body);
+      throw new Error(`Gemini query embed model not found: ${GEMINI_EMBEDDING_MODEL}`);
+    }
+
+    if (res.status === 429 || res.status >= 500) {
       const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
-      console.warn(`Gemini query embed attempt ${attempt + 1} failed, retrying in ${delay}ms`, lastError.message);
+      console.warn(`Gemini query embed attempt ${attempt + 1} failed (${res.status}), retrying in ${delay}ms`);
       await new Promise((r) => setTimeout(r, delay));
+      continue;
     }
+
+    throw new Error(`Gemini query embed error: ${res.status}`);
   }
 
-  throw new Error(`Gemini query embed: max retries exceeded${lastError ? `: ${lastError.message}` : ''}`);
+  throw new Error('Gemini query embed: max retries exceeded');
 }

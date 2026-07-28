@@ -13,6 +13,8 @@ import {
   Zap,
   Wrench,
   Mic,
+  Tag,
+  Lightbulb,
   ChevronDown,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/server';
@@ -34,6 +36,14 @@ const navSections = [
   {
     label: 'Аналитика',
     items: [{ href: 'stats', icon: BarChart3, label: 'Статистика' }],
+  },
+  {
+    label: 'ПРОДАЖИ',
+    items: [
+      { href: '/dashboard/sales-niches', icon: Tag, label: 'Ниши' },
+      { href: '/dashboard/sales-techniques', icon: Lightbulb, label: 'Техники' },
+      { href: '/dashboard/sales-examples', icon: MessageSquare, label: 'Примеры' },
+    ],
   },
   {
     label: 'Интеграции',
@@ -94,7 +104,7 @@ export default async function AgentLayout({
                 {section.items.map((item) => (
                   <li key={item.href}>
                     <Link
-                      href={`/dashboard/${params.agentId}/${item.href}`}
+                      href={item.href.startsWith('/') ? item.href : `/dashboard/${params.agentId}/${item.href}`}
                       className="flex items-center gap-2.5 rounded-[var(--radius-cards)] px-2 py-2 text-sm text-[color:var(--color-smoke)] transition-colors hover:bg-[color:var(--color-obsidian)] hover:text-[color:var(--color-chalk)]"
                     >
                       <item.icon size={16} className="flex-shrink-0" />

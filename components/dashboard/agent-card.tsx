@@ -17,10 +17,9 @@ interface AgentCardProps {
     description: string | null;
     role?: string | null;
   };
-  deleteAgent: (agentId: string) => Promise<{ error?: string }>;
 }
 
-export function AgentCard({ agent, deleteAgent }: AgentCardProps) {
+export function AgentCard({ agent }: AgentCardProps) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -31,15 +30,25 @@ export function AgentCard({ agent, deleteAgent }: AgentCardProps) {
   };
 
   const handleDelete = async () => {
-    const result = await deleteAgent(agent.id);
-    if (result?.error) {
-      setError(result.error);
-      return;
+    try {
+      const response = await fetch(`/api/agents/${agent.id}`, {
+        method: 'DELETE',
+      });
+
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || 'Не удалось удалить агента');
+      }
+
+      setError(null);
+      setMenuOpen(false);
+      startTransition(() => {
+        router.refresh();
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось удалить агента');
     }
-    setError(null);
-    startTransition(() => {
-      router.refresh();
-    });
   };
 
   const parsedVariant = Number.parseInt(agent.id.replace(/[^\d]/g, ''), 10);

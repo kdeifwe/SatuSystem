@@ -1,7 +1,7 @@
 import { BusinessInfo, GeneratedPrompt } from './types';
 import { BASE_POLICY } from '../../ai/base-policy.ts';
 
-async function callGemini(apiKey: string, prompt: string, temp = 0.7): Promise<string> {
+async function callGemini(apiKey: string, prompt: string, temp = 0.7, maxOutputTokens = 32768): Promise<string> {
   const models = ['gemini-2.5-flash', 'gemini-2.5-pro'];
   for (const model of models) {
     try {
@@ -12,7 +12,7 @@ async function callGemini(apiKey: string, prompt: string, temp = 0.7): Promise<s
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             contents: [{ role: 'user', parts: [{ text: prompt }] }],
-            generationConfig: { temperature: temp, maxOutputTokens: 8192 },
+            generationConfig: { temperature: temp, maxOutputTokens },
           }),
         }
       );
@@ -160,11 +160,100 @@ function extractJSON(text: string): Record<string, any> {
     }
   }
 
+  const trimmedText = extractedText.trim();
+  if (trimmedText.startsWith('{') && trimmedText.endsWith('}')) {
+    try {
+      console.warn('[prompt-generator] Falling back to direct JSON.parse because balanced object scan did not yield a parseable payload');
+      return JSON.parse(trimmedText);
+    } catch (parseError) {
+      console.error('[prompt-generator] Direct JSON.parse failed:', parseError instanceof Error ? parseError.message : String(parseError));
+    }
+  }
+
   console.error('[prompt-generator] extractJSON failed - no JSON object balanced');
   throw new Error(`JSON не найден: ${text.slice(0, 200)}`);
 }
 
+async function generateStructuredJson(
+  apiKey: string,
+  prompt: string,
+  temp: number,
+  maxOutputTokens = 32768,
+): Promise<Record<string, any>> {
+  try {
+    const text = await callGemini(apiKey, prompt, temp, maxOutputTokens);
+
+    try {
+      return extractJSON(text);
+    } catch (error) {
+      const firstError = error instanceof Error ? error : new Error(String(error));
+      const trimmedText = text.trim();
+      const textLooksTruncated = trimmedText.length > 0 && !trimmedText.endsWith('}');
+
+      if (!textLooksTruncated) {
+        throw firstError;
+      }
+
+      console.warn('[prompt-generator] Gemini response looked truncated, retrying once with a stricter JSON instruction');
+      const retryPrompt = `${prompt}\n\nPrevious response was truncated. Return ONLY the complete JSON object, no extra text.`;
+      const retriedText = await callGemini(apiKey, retryPrompt, 0.3, maxOutputTokens);
+
+      try {
+        return extractJSON(retriedText);
+      } catch (retryError) {
+        throw firstError;
+      }
+    }
+  } catch (error) {
+    throw error instanceof Error ? error : new Error(String(error));
+  }
+}
+
 export type { BusinessInfo, GeneratedPrompt } from './types';
+
+function buildChannelContext(info: BusinessInfo): string {
+  const enabled = Object.entries(info.channels.enabled)
+    .filter(([, enabled]) => enabled)
+    .map(([channel]) => channel);
+
+  if (enabled.length === 0) {
+    return 'Каналы: не указан ни один канал. Агент должен вести себя как универсальный помощник в чате.';
+  }
+
+  return `Каналы коммуникации: ${enabled.join(', ')}. В ответах учитывай естественный стиль для этих каналов и избегай перегружать текст.`;
+}
+
+function buildBehaviorContext(info: BusinessInfo): string {
+  const toolNames = info.behavior.allowedTools.join(', ') || 'нет дополнительных инструментов';
+  const handoffTriggers = info.behavior.handoffTriggers.length > 0 ? info.behavior.handoffTriggers.join(', ') : 'нет специальных триггеров';
+  const neverSay = info.behavior.neverSayPhrases.length > 0 ? info.behavior.neverSayPhrases.join(', ') : 'нет специальных запретов';
+
+  return `Операционные правила: задержка ответа ${info.behavior.responseDelayMs} мс; follow-up ${info.behavior.followUpEnabled ? 'включён' : 'выключен'}; разрешённые инструменты: ${toolNames}; триггеры передачи оператору: ${handoffTriggers}; не говорить: ${neverSay}`;
+}
+
+function buildFunnelContext(info: BusinessInfo): string {
+  if (info.funnel.steps.length === 0) {
+    return 'Фуннел не задан. Используй общую логику приветствия, уточнения, предложения и закрытия.';
+  }
+
+  return `Стадии диалога:\n${info.funnel.steps
+    .slice()
+    .sort((a, b) => a.order - b.order)
+    .map((step) => `- ${step.order}. ${step.title}: ${step.triggerDescription || '—'} | Пример сообщения: ${step.sampleMessage || '—'}`)
+    .join('\n')}`;
+}
+
+function inferScenarioTemperature(scenario: BusinessInfo['business']['scenario']): number {
+  switch (scenario) {
+    case 'support':
+      return 0.7;
+    case 'consultant':
+      return 0.55;
+    case 'sales':
+    default:
+      return 0.4;
+  }
+}
 
 export async function generateAgentPrompt(
   info: BusinessInfo,
@@ -172,6 +261,12 @@ export async function generateAgentPrompt(
 ): Promise<GeneratedPrompt> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY не задан');
+
+  const effectiveAdvanced = {
+    model: info.advanced?.model || 'gemini-2.5-flash',
+    temperature: typeof info.advanced?.temperature === 'number' ? info.advanced.temperature : inferScenarioTemperature(info.business.scenario),
+    topP: typeof info.advanced?.topP === 'number' ? info.advanced.topP : 0.9,
+  };
 
   const analysisPrompt = `You are a world-class CIS market sales psychologist and AI agent architect.
 
@@ -181,8 +276,13 @@ BUSINESS DATA:
 - Description: ${info.companyDescription}
 - Goal: ${info.goal}
 - Key advantages: ${info.advantages}
+- Scenario: ${info.business.scenario}
+- Target audience: ${info.business.targetAudience}
+- First question: ${info.business.firstQuestion}
+- Common objections: ${info.business.commonObjections.join(', ') || 'none'}
 - Currency: ${info.currency} | Timezone: ${info.timezone}
 - Writing style: ${info.writingStyle} | Address form: ${info.addressStyle}
+- Channels: ${Object.entries(info.channels.enabled).filter(([, enabled]) => enabled).map(([channel]) => channel).join(', ') || 'none'}
 
 ${kbSources.length > 0 ? `KNOWLEDGE BASE:\n${kbSources.slice(0, 3).join('\n---\n')}` : ''}
 
@@ -191,6 +291,7 @@ STEP 1 - Deeply analyze:
 2. WHAT objections will they raise? Price, trust, urgency, alternatives
 3. WHAT emotional triggers drive them to buy?
 4. WHAT language do they use? Formal/casual, local slang?
+5. Which funnel stages are most natural for this business and which tools are likely needed?
 
 Return raw JSON only (no markdown, start with {):
 {
@@ -198,12 +299,13 @@ Return raw JSON only (no markdown, start with {):
   "top_objections": ["objection1", "objection2", "objection3", "objection4", "objection5"],
   "emotional_triggers": ["trigger1", "trigger2", "trigger3"],
   "language_style": "how this audience actually talks in messengers",
-  "trust_signals": ["what builds trust with this audience"]
+  "trust_signals": ["what builds trust with this audience"],
+  "funnelStageSuggestions": ["stage1", "stage2", "stage3"],
+  "recommendedTools": ["searchKnowledgeBase", "redirectToOperator"]
 }`;
 
   console.log('[prompt-gen] Step 1: Analyzing business...');
-  const analysisText = await callGemini(apiKey, analysisPrompt, 0.4);
-  const analysis = extractJSON(analysisText);
+  const analysis = await generateStructuredJson(apiKey, analysisPrompt, 0.4);
 
   const generationPrompt = `You are an expert AI prompt engineer specializing in HUMAN-LIKE sales agents for CIS market.
 
@@ -211,6 +313,9 @@ BUSINESS PROFILE:
 - Agent: ${info.agentName} at ${info.companyName}
 - Goal: ${info.goal}
 - Style: ${info.writingStyle}, ${info.addressStyle}
+- Scenario: ${info.business.scenario}
+- First question: ${info.business.firstQuestion}
+- Common objections: ${JSON.stringify(info.business.commonObjections)}
 
 AUDIENCE ANALYSIS:
 - Target: ${analysis.target_audience}
@@ -224,6 +329,7 @@ ${kbSources.length > 0 ? `PRODUCT KNOWLEDGE:\n${kbSources.slice(0, 2).join('\n--
 Create a PERFECT agent profile for a human-like sales/support messenger assistant.
 
 CRITICAL HUMAN-LIKE RULES TO EMBED:
+- Keep all text fields concise. Do not write long paragraphs. Return compact JSON.
 - Messages should read like a real person in chat: 1-2 sentences, no paragraphs.
 - One question per message only.
 - Mirror client energy and use natural, varied length.
@@ -239,14 +345,39 @@ Return raw JSON only (no markdown, start with {):
   "human_communication_style": "7 specific rules for sounding human. Include: message length, emoji usage, fillers, mirroring, acknowledgment patterns",
   "communication_rules": "10 numbered rules specific to THIS business. Cover objections: ${(analysis.top_objections as string[]).slice(0, 3).join(', ')}. Include price handling, urgency, trust building, escalation",
   "knowledge_base_principles": "5 rules for KB usage: when to search, how to handle missing info, how to cite, when to say 'не знаю', when to escalate",
-  "dialogue_flow": "8 steps for complete sales script. Each step: trigger → what agent says (example phrase) → what to listen for → next step trigger",
+  "dialogue_flow": [{"id": "welcome", "title": "Приветствие", "triggerDescription": "клиент открыл чат", "sampleMessage": "Здравствуйте!", "order": 1}, {"id": "qualify", "title": "Уточнение потребности", "triggerDescription": "клиент ответил на первое сообщение", "sampleMessage": "Что вам нужно?", "order": 2}],
+  "recommended_handoff_triggers": ["жалоба", "просьба к человеку", "недостаточно данных"],
+  "recommended_tools": ["searchKnowledgeBase", "redirectToOperator"],
   "forbidden_phrases": "10 phrases agent must NEVER say (corporate speak, robotic phrases)",
   "example_conversations": "3 short example exchanges showing ideal human-like responses vs bad robotic responses"
 }`;
 
   console.log('[prompt-gen] Step 2: Generating human-like prompt...');
-  const generationText = await callGemini(apiKey, generationPrompt, 0.6);
-  const generated = extractJSON(generationText);
+  const generated = await generateStructuredJson(apiKey, generationPrompt, effectiveAdvanced.temperature);
+
+  const funnelSteps = Array.isArray(generated.dialogue_flow) && generated.dialogue_flow.length > 0
+    ? generated.dialogue_flow.map((step: any, index: number) => ({
+        id: String(step.id || `step-${index + 1}`),
+        title: String(step.title || `Шаг ${index + 1}`),
+        triggerDescription: String(step.triggerDescription || ''),
+        sampleMessage: String(step.sampleMessage || ''),
+        order: Number(step.order || index + 1),
+      }))
+    : info.funnel.steps.length > 0
+      ? info.funnel.steps.map((step, index) => ({ ...step, order: step.order || index + 1 }))
+      : [
+          { id: 'welcome', title: 'Приветствие', triggerDescription: 'клиент открыл чат', sampleMessage: 'Здравствуйте!', order: 1 },
+          { id: 'qualify', title: 'Уточнение потребности', triggerDescription: 'клиент ответил', sampleMessage: 'Что вам нужно?', order: 2 },
+          { id: 'offer', title: 'Предложение решения', triggerDescription: 'есть потребность', sampleMessage: 'Могу помочь с этим', order: 3 },
+        ];
+
+  const recommendedTools = Array.isArray(generated.recommended_tools) && generated.recommended_tools.length > 0
+    ? generated.recommended_tools.filter((tool: unknown): tool is string => typeof tool === 'string')
+    : (info.behavior.allowedTools.length > 0 ? info.behavior.allowedTools : []);
+
+  const recommendedHandoffTriggers = Array.isArray(generated.recommended_handoff_triggers) && generated.recommended_handoff_triggers.length > 0
+    ? generated.recommended_handoff_triggers.filter((value: unknown): value is string => typeof value === 'string')
+    : info.behavior.handoffTriggers;
 
   const system_prompt_compiled = `${BASE_POLICY}
 
@@ -259,8 +390,23 @@ Return raw JSON only (no markdown, start with {):
 ${generated.goal}
 </goal>
 
+<business_context>
+Сценарий: ${info.business.scenario}. Цель агента: ${info.goal || 'помогать клиентам'}.
+Аудитория: ${info.business.targetAudience || analysis.target_audience || 'клиент'}.
+Первый вопрос: ${info.business.firstQuestion || 'Какой у вас запрос сегодня?'}.
+Типичные возражения: ${info.business.commonObjections.join(', ') || (analysis.top_objections as string[]).join(', ')}.
+</business_context>
+
+<channel_context>
+${buildChannelContext(info)}
+</channel_context>
+
+<funnel_steps>
+${buildFunnelContext({ ...info, funnel: { steps: funnelSteps } })}
+</funnel_steps>
+
 <location_context>
-Часовой пояс: ${info.timezone}. Валюта: ${info.currency}.
+Часовой пояс: ${info.timezone}. Валюта: ${info.currency}. Модель: ${effectiveAdvanced.model}. Температура: ${effectiveAdvanced.temperature}. Top P: ${effectiveAdvanced.topP}.
 </location_context>
 
 <tone_of_voice>
@@ -289,9 +435,14 @@ ${generated.knowledge_base_principles}
 Никогда не отвечай "уточню у коллег", если запрошенный факт реально есть в найденном контексте — используй его.
 </knowledge_base_principles>
 
-<dialogue_flow>
-${generated.dialogue_flow}
-</dialogue_flow>
+<behavior_context>
+${buildBehaviorContext({ ...info, behavior: { ...info.behavior, handoffTriggers: recommendedHandoffTriggers } })}
+</behavior_context>
+
+<handoff_rules>
+Триггеры передачи оператору: ${recommendedHandoffTriggers.join(', ') || 'нет специальных триггеров'}.
+Никогда не говори: ${info.behavior.neverSayPhrases.join(', ') || 'нет специальных запретов'}.
+</handoff_rules>
 
 <forbidden>
 НИКОГДА не говори: ${generated.forbidden_phrases}
@@ -309,7 +460,7 @@ searchKnowledgeBase — перед любым фактическим утвер�
 redirectToOperator — при жалобе, явной просьбе о человеке, или если не можешь помочь.
 update_lead_info — когда клиент назвал имя, телефон, email или класс. Сохраняй все данные в lead.attributes, например grade. Если клиент назвал класс обучения, немедленно сохрани его в attributes.grade, прежде чем отвечать дальше.
 add_lead_note — важная деталь для команды.
-Не вызывай инструменты без явного повода в диалоге.
+Не вызывай инструменты без явного повоса в диалоге.
 </tools_calling_instructions>`;
 
   return {
@@ -320,6 +471,8 @@ add_lead_note — важная деталь для команды.
     human_communication_style: generated.human_communication_style || '',
     communication_rules: generated.communication_rules || '',
     knowledge_base_principles: generated.knowledge_base_principles || '',
-    dialogue_flow: generated.dialogue_flow || '',
+    dialogue_flow: funnelSteps,
+    recommended_tools: recommendedTools,
+    recommended_handoff_triggers: recommendedHandoffTriggers,
   };
 }

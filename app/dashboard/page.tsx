@@ -8,18 +8,6 @@ import { Button } from '../../components/ui/button';
 import { Card } from '../../components/ui/card';
 import { EmptyState } from '../../components/ui/empty-state';
 
-async function deleteAgent(agentId: string) {
-  'use server';
-  const supabase = createClient();
-  const { error } = await supabase.from('agents').delete().eq('id', agentId);
-
-  if (error) {
-    return { error: error.message };
-  }
-
-  return { success: true };
-}
-
 type Agent = {
   id: string;
   name: string;
@@ -76,7 +64,7 @@ export default async function DashboardPage() {
           {agents.length > 0 ? (
             <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
               {agents.map((agent) => (
-                <AgentCard key={agent.id} agent={agent} deleteAgent={deleteAgent} />
+                <AgentCard key={agent.id} agent={agent} />
               ))}
             </div>
           ) : (
