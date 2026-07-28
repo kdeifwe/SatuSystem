@@ -332,10 +332,19 @@ export async function enqueueNotification(
 
     const config = settings.config as Record<string, unknown>;
     const events = config.events as Record<string, unknown>;
-    const eventConfig = events?.[eventType] as Record<string, unknown>;
+    const eventConfig = events?.[eventType] as Record<string, unknown> | null;
 
-    if (!eventConfig?.enabled) {
-      console.log('[notifications] Event type disabled in config', { eventType });
+    let enabled: boolean;
+    if (eventConfig?.enabled !== undefined) {
+      enabled = Boolean(eventConfig.enabled);
+    } else if (eventType === 'operator_needed') {
+      enabled = true;
+    } else {
+      enabled = Array.isArray(config.recipients) && config.recipients.length > 0;
+    }
+
+    if (!enabled) {
+      console.log('[notifications] Event type disabled in config or no recipients available', { eventType, enabled });
       return false;
     }
 

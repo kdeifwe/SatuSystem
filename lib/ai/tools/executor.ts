@@ -178,11 +178,28 @@ async function searchKnowledgeBase(args: { query: string; top_k?: number }, ctx:
 }
 
 async function redirectToOperator(args: { reason: string; priority?: string }, ctx: ToolContext) {
+  const payload = {
+    conversation_id: ctx.conversationId,
+    channel: null,
+    lead_id: ctx.leadId,
+    agent_id: ctx.agentId,
+    text: 'Требуется оператор',
+  };
+
+  try {
+    const result = await enqueueNotification(
+      'operator_needed',
+      ctx.leadId,
+      ctx.agentId,
+      payload,
+      { orgId: ctx.orgId, skipDedupCheck: ctx.isSandbox },
+    );
+    console.log('[redirectToOperator] enqueue result:', result);
+  } catch (error) {
+    console.error('[redirectToOperator] enqueueNotification failed', error);
+  }
+
   if (ctx.isSandbox) {
-    await enqueueNotification('operator_needed', ctx.leadId, ctx.agentId, {
-      reason: args.reason,
-      priority: args.priority ?? 'normal',
-    }, { orgId: ctx.orgId, skipDedupCheck: true });
     return { success: true, sandbox_mode: true };
   }
 
@@ -194,11 +211,6 @@ async function redirectToOperator(args: { reason: string; priority?: string }, c
     lead_id: ctx.leadId,
     note: `🔄 AI передал диалог оператору. Причина: ${args.reason}. Приоритет: ${args.priority ?? 'normal'}`,
   });
-
-  await enqueueNotification('operator_needed', ctx.leadId, ctx.agentId, {
-    reason: args.reason,
-    priority: args.priority ?? 'normal',
-  }, { orgId: ctx.orgId });
 
   return {
     success: true,

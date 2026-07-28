@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 const AUTH_HEADER = 'authorization';
-const BOT_TOKEN = process.env.TELEGRAM_NOTIFICATIONS_BOT_TOKEN ?? '';
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000';
 
 function escapeHtml(text: string): string {
@@ -187,11 +186,8 @@ async function getActiveTelegramSettings(admin: ReturnType<typeof createAdminCli
 
 async function getBotTokenForRow(admin: ReturnType<typeof createAdminClient>, row: any): Promise<string | null> {
   const settings = await getActiveTelegramSettings(admin, row.agent_id ?? null);
-  if (settings?.bot_token) {
-    return String(settings.bot_token);
-  }
-
-  return BOT_TOKEN || null;
+  const botToken = settings?.bot_token ?? null;
+  return botToken ? String(botToken) : null;
 }
 
 async function getAgentIdForRow(admin: ReturnType<typeof createAdminClient>, row: any): Promise<string | null> {
@@ -292,6 +288,7 @@ export async function GET(req: NextRequest) {
   }
 
   const results = [] as Array<{ id: string; status: string; error?: string }>;
+  const processedIds: string[] = [];
 
   for (const row of pendingRows ?? []) {
     try {
@@ -299,19 +296,22 @@ export async function GET(req: NextRequest) {
         const split = await splitPendingRow(admin, row);
         if (split) {
           results.push({ id: row.id, status: 'split' });
+          processedIds.push(row.id);
           continue;
         }
 
+        const nextAttempts = (row.attempts ?? 0) + 1;
         await admin
           .from('notification_log')
           .update({
             delivery_status: 'failed',
-            attempts: (row.attempts ?? 0) + 1,
+            attempts: nextAttempts,
             last_error: 'missing recipient_profile_id',
           })
           .eq('id', row.id);
 
         results.push({ id: row.id, status: 'failed', error: 'missing recipient_profile_id' });
+        processedIds.push(row.id);
         continue;
       }
 
@@ -323,31 +323,35 @@ export async function GET(req: NextRequest) {
 
       const chatId = String(profile?.telegram_chat_id || '');
       if (!chatId) {
+        const nextAttempts = (row.attempts ?? 0) + 1;
         await admin
           .from('notification_log')
           .update({
             delivery_status: 'failed',
-            attempts: (row.attempts ?? 0) + 1,
+            attempts: nextAttempts,
             last_error: 'recipient has no telegram chat id',
           })
           .eq('id', row.id);
 
         results.push({ id: row.id, status: 'failed', error: 'recipient has no telegram chat id' });
+        processedIds.push(row.id);
         continue;
       }
 
       const botToken = await getBotTokenForRow(admin, row);
       if (!botToken) {
+        const nextAttempts = (row.attempts ?? 0) + 1;
         await admin
           .from('notification_log')
           .update({
             delivery_status: 'failed',
-            attempts: (row.attempts ?? 0) + 1,
+            attempts: nextAttempts,
             last_error: 'telegram bot token is not configured',
           })
           .eq('id', row.id);
 
         results.push({ id: row.id, status: 'failed', error: 'telegram bot token is not configured' });
+        processedIds.push(row.id);
         continue;
       }
 
@@ -358,25 +362,31 @@ export async function GET(req: NextRequest) {
         .from('notification_log')
         .update({
           delivery_status: 'sent',
+          sent_at: new Date().toISOString(),
           attempts: (row.attempts ?? 0) + 1,
         })
         .eq('id', row.id);
 
       results.push({ id: row.id, status: 'sent' });
+      processedIds.push(row.id);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       console.error('[send-notifications] failed to send notification', { rowId: row.id, error: errorMessage });
+      const nextAttempts = (row.attempts ?? 0) + 1;
+      const deliveryStatus = nextAttempts >= 5 ? 'failed' : 'pending';
+
       await admin
         .from('notification_log')
         .update({
-          delivery_status: 'failed',
-          attempts: (row.attempts ?? 0) + 1,
+          delivery_status: deliveryStatus,
+          attempts: nextAttempts,
           last_error: errorMessage,
         })
         .eq('id', row.id);
-      results.push({ id: row.id, status: 'failed', error: errorMessage });
+      results.push({ id: row.id, status: deliveryStatus, error: errorMessage });
+      processedIds.push(row.id);
     }
   }
 
-  return NextResponse.json({ ok: true, processed: results.length, results });
+  return NextResponse.json({ ok: true, processed: processedIds.length, results: processedIds });
 }
