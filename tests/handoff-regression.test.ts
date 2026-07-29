@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test, describe } from 'node:test';
+import { buildRedirectToOperatorPayload } from '../lib/ai/tools/executor.ts';
 
 /**
  * Regression test: Phase B handoff mechanism
@@ -91,6 +92,30 @@ describe('Handoff Regression Tests', () => {
       'Response should contain client handoff message'
     );
     assert.ok(responseAfterHandoff.handoffTriggered, 'Response should indicate handoff was triggered');
+  });
+
+  test('should include reason, lead name, and channel in operator notification payload', () => {
+    const payload = buildRedirectToOperatorPayload(
+      {
+        conversationId: 'conversation-1',
+        leadId: 'lead-1',
+        agentId: 'agent-1',
+        orgId: 'org-1',
+        isSandbox: false,
+      },
+      { reason: 'customer asked for human support' },
+      { lead_name: 'Иван Иванов', channel: 'whatsapp' }
+    );
+
+    assert.deepEqual(payload, {
+      conversation_id: 'conversation-1',
+      channel: 'whatsapp',
+      lead_id: 'lead-1',
+      agent_id: 'agent-1',
+      text: 'Требуется оператор',
+      reason: 'customer asked for human support',
+      lead_name: 'Иван Иванов',
+    });
   });
 });
 

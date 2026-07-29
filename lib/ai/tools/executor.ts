@@ -177,14 +177,52 @@ async function searchKnowledgeBase(args: { query: string; top_k?: number }, ctx:
   };
 }
 
-async function redirectToOperator(args: { reason: string; priority?: string }, ctx: ToolContext) {
-  const payload = {
+export function buildRedirectToOperatorPayload(
+  ctx: Pick<ToolContext, 'conversationId' | 'leadId' | 'agentId'>,
+  args: { reason: string },
+  leadData: { lead_name?: string | null; channel?: string | null } = {},
+) {
+  return {
     conversation_id: ctx.conversationId,
-    channel: null,
+    channel: leadData.channel ?? '—',
     lead_id: ctx.leadId,
     agent_id: ctx.agentId,
     text: 'Требуется оператор',
+    reason: args.reason,
+    lead_name: leadData.lead_name ?? '—',
   };
+}
+
+async function redirectToOperator(args: { reason: string; priority?: string }, ctx: ToolContext) {
+  const supabase = createServiceClient();
+  const { data: lead, error: leadError } = await supabase
+    .from('leads')
+    .select('name, channel_id')
+    .eq('id', ctx.leadId)
+    .eq('org_id', ctx.orgId)
+    .maybeSingle();
+
+  let channelType = '—';
+  if (!leadError && lead?.channel_id) {
+    const { data: channel } = await supabase
+      .from('channels')
+      .select('type')
+      .eq('id', lead.channel_id)
+      .maybeSingle();
+
+    if (channel?.type) {
+      channelType = String(channel.type);
+    }
+  }
+
+  if (leadError) {
+    console.warn('[redirectToOperator] Failed to load lead details for payload', { leadId: ctx.leadId, error: leadError.message });
+  }
+
+  const payload = buildRedirectToOperatorPayload(ctx, args, {
+    lead_name: lead?.name ?? '—',
+    channel: channelType,
+  });
 
   try {
     const result = await enqueueNotification(
@@ -203,7 +241,6 @@ async function redirectToOperator(args: { reason: string; priority?: string }, c
     return { success: true, sandbox_mode: true };
   }
 
-  const supabase = createServiceClient();
   const { error } = await supabase.from('leads').update({ ai_enabled: false }).eq('id', ctx.leadId).eq('org_id', ctx.orgId);
   if (error) throw new Error(`Ошибка передачи оператору: ${error.message}`);
 
