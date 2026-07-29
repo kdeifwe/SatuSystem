@@ -4,7 +4,7 @@ import { randomUUID } from 'crypto';
 import { revalidatePath } from 'next/cache';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { registerTelegramNotificationsWebhook } from '@/lib/extensions/telegram-notify';
-import { getDefaultConfig } from '@/lib/telegram-extension-config';
+import { normalizeTelegramExtensionConfig } from '@/lib/telegram-extension-config';
 
 export type TelegramExtensionSettings = {
   bot_token?: string;
@@ -127,21 +127,9 @@ export async function getTelegramExtensionData(agentId: string): Promise<Telegra
       telegram_link_token_expires_at: profile.telegram_link_token_expires_at,
     })),
     recipients,
-    config: getDefaultConfig({
+    config: normalizeTelegramExtensionConfig({
+      ...config,
       recipients,
-      events: {
-        ...(config?.events ?? {}),
-        new_message: {
-          enabled: config?.events?.new_message?.enabled ?? true,
-          only_when_ai_paused: config?.events?.new_message?.only_when_ai_paused ?? false,
-        },
-        help_request: {
-          enabled: config?.events?.help_request?.enabled ?? true,
-        },
-        custom_conditions: Array.isArray(config?.events?.custom_conditions)
-          ? config.events.custom_conditions
-          : [],
-      },
     }),
     statuses,
   };

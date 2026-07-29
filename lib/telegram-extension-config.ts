@@ -52,3 +52,21 @@ export function getDefaultConfig(saved?: any) {
     },
   };
 }
+
+export function normalizeTelegramExtensionConfig(saved?: any) {
+  return getDefaultConfig({
+    ...(saved ?? {}),
+    recipients: Array.isArray(saved?.recipients) ? saved.recipients : [],
+    events: {
+      ...(saved?.events ?? {}),
+      new_message: {
+        enabled: saved?.events?.new_message?.enabled ?? true,
+        only_when_ai_paused: saved?.events?.new_message?.only_when_ai_paused ?? false,
+      },
+      help_request: {
+        enabled: saved?.events?.help_request?.enabled ?? true,
+      },
+      custom_conditions: Array.isArray(saved?.events?.custom_conditions) ? saved.events.custom_conditions : [],
+    },
+  });
+}
