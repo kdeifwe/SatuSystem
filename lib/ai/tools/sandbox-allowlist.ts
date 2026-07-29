@@ -3,6 +3,7 @@ const ALLOWED_IN_SANDBOX = new Set([
   'getCurrentDate',
   'advanceFunnelStep',
   'createKaspiInvoice',
+  'redirectToOperator',
 ]);
 
 export function isSandboxToolAllowed(toolName: string): boolean {

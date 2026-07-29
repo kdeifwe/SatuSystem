@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test, describe } from 'node:test';
 import { buildRedirectToOperatorPayload } from '../lib/ai/tools/executor.ts';
+import { isSandboxToolAllowed } from '../lib/ai/tools/sandbox-allowlist.ts';
 
 /**
  * Regression test: Phase B handoff mechanism
@@ -116,6 +117,10 @@ describe('Handoff Regression Tests', () => {
       reason: 'customer asked for human support',
       lead_name: 'Иван Иванов',
     });
+  });
+
+  test('should allow redirectToOperator in sandbox mode', () => {
+    assert.equal(isSandboxToolAllowed('redirectToOperator'), true);
   });
 });
 
