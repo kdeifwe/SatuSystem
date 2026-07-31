@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { formatDistanceToNow } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { Mic, Paperclip, Plus, Send } from 'lucide-react';
+import { getLeadToAutoOpen } from './lead-auto-selection';
 
 interface Lead {
   id: string;
@@ -37,8 +39,16 @@ export default function DialogsPage({ params }: { params: { agentId: string } })
   const [isSending, setIsSending] = useState(false);
   const [updatingAi, setUpdatingAi] = useState(false);
   const [creatingLead, setCreatingLead] = useState(false);
+  const searchParams = useSearchParams();
+  const leadIdFromUrl = searchParams.get('leadId');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const selectedLeadIdRef = useRef<string | null>(null);
+  const autoOpenedLeadIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    selectedLeadIdRef.current = selectedLeadId;
+  }, [selectedLeadId]);
 
   useEffect(() => {
     if (!params.agentId) {
@@ -50,7 +60,7 @@ export default function DialogsPage({ params }: { params: { agentId: string } })
     loadLeads();
     const interval = setInterval(loadLeads, 5000);
     return () => clearInterval(interval);
-  }, [params.agentId]);
+  }, [params.agentId, leadIdFromUrl]);
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -74,9 +84,23 @@ export default function DialogsPage({ params }: { params: { agentId: string } })
         const errorMsg = data?.error ?? `Ошибка ${res.status}: ${res.statusText}`;
         setError(errorMsg);
         setLeads([]);
-      } else {
-        setError(null);
-        setLeads(data.leads ?? []);
+        return;
+      }
+
+      const nextLeads = data.leads ?? [];
+      setError(null);
+      setLeads(nextLeads);
+
+      const shouldAutoOpenLead = getLeadToAutoOpen({
+        leadIdFromUrl,
+        selectedLeadId: selectedLeadIdRef.current,
+        leads: nextLeads,
+        autoOpenedLeadId: autoOpenedLeadIdRef.current,
+      });
+
+      if (shouldAutoOpenLead) {
+        autoOpenedLeadIdRef.current = shouldAutoOpenLead;
+        void loadMessages(shouldAutoOpenLead, nextLeads);
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Неизвестная ошибка';
@@ -87,8 +111,8 @@ export default function DialogsPage({ params }: { params: { agentId: string } })
     }
   }
 
-  async function loadMessages(leadId: string) {
-    const lead = leads.find((item) => item.id === leadId);
+  async function loadMessages(leadId: string, availableLeads: Lead[] = leads) {
+    const lead = availableLeads.find((item) => item.id === leadId);
     setSelectedLeadId(leadId);
     setInput('');
     setMessages([]);
