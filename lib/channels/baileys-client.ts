@@ -364,16 +364,6 @@ async function createBaileysClient(agentId: string, forceNewAuth = false) {
       clientEntry.lastDisconnectTime = Date.now();
       await syncChannelConnectionState(agentId, 'disconnected', false);
 
-      // Send immediate disconnect notification
-      try {
-        await enqueueNotification('whatsapp_disconnected', null, agentId, {
-          reason: clientEntry.lastError || 'Unknown',
-          timestamp: new Date().toISOString(),
-        });
-      } catch (notifyErr) {
-        logger.error({ agentId, error: notifyErr }, 'Failed to enqueue WhatsApp disconnect notification');
-      }
-
       if (clientEntry.reconnectTimer) {
         clearTimeout(clientEntry.reconnectTimer);
         clientEntry.reconnectTimer = undefined;

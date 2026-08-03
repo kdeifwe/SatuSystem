@@ -24,7 +24,7 @@ export async function GET(req: NextRequest) {
     // Get all agents to check their WhatsApp status
     const { data: agents, error: agentsError } = await admin
       .from('agents')
-      .select('id, org_id')
+      .select('id, name, org_id')
       .eq('is_active', true);
 
     if (agentsError || !agents) {
@@ -55,12 +55,12 @@ export async function GET(req: NextRequest) {
           continue;
         }
 
-        // Send notification (dedup will prevent double notification if sent <2min ago)
-        const notified = await enqueueNotification('whatsapp_disconnected', null, agent.id, {
-          reason: clientEntry.lastError || 'Connection down for extended period',
-          timestamp: new Date().toISOString(),
-          disconnectDurationSeconds: Math.floor(disconnectAge / 1000),
-          source: 'health_check_cron',
+        // Send notification after sustained disconnect
+        const notified = await enqueueNotification('channel_down', null, agent.id, {
+          channel_type: 'whatsapp',
+          channel_name: agent.name || 'WhatsApp',
+          error_message: clientEntry.lastError || 'Connection down for extended period',
+          time: new Date().toISOString(),
         });
 
         if (notified) {

@@ -18,7 +18,6 @@ export type NotificationEventType =
   | 'scheduled_failed'
   | 'ai_error'
   | 'worker_down'
-  | 'whatsapp_disconnected'
   | 'kaspi_auth_expired';
 
 interface NotificationPayload {
@@ -41,7 +40,6 @@ const DEDUP_CONFIG: Record<NotificationEventType, { window?: number; key: string
   scheduled_failed: { window: undefined, key: ['scheduled_message_id', 'event_type'] }, // once per message
   ai_error: { window: 15 * 60 * 1000, key: ['agent_id', 'event_type'] },
   worker_down: { window: 15 * 60 * 1000, key: ['org_id', 'event_type'] },
-  whatsapp_disconnected: { window: 2 * 60 * 1000, key: ['agent_id', 'event_type'] }, // notify once per 2 min per agent
   kaspi_auth_expired: { window: 60 * 60 * 1000, key: ['org_id', 'event_type'] }, // throttle repeated auth-expired alerts per org
 };
 

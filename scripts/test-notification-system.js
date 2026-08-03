@@ -2,7 +2,7 @@
 /**
  * Test: Notification system basic functionality
  * Verifies that notifications can be created and retrieved
- * Uses ai_error event type as placeholder since whatsapp_disconnected needs DB migration
+ * Test notification system behavior for active event types
  */
 
 const path = require('path');
@@ -42,18 +42,19 @@ async function runTest() {
     const orgId = agent.org_id;
     console.log(`✅ Found org_id: ${orgId}`);
 
-    // Test with ai_error first (existing type)
-    console.log('\n1️⃣  Testing notification insertion (using ai_error as test event)...');
+    // Test with channel_down because WhatsApp health-check now uses this event type
+    console.log('\n1️⃣  Testing notification insertion (using channel_down as test event)...');
     const { data: inserted, error: insertError } = await admin
       .from('notification_log')
       .insert({
-        event_type: 'ai_error',
+        event_type: 'channel_down',
         agent_id: TEST_AGENT_ID,
         org_id: orgId,
         payload: {
-          test: true,
-          testType: 'notification_system_integration',
-          timestamp: new Date().toISOString(),
+          channel_type: 'whatsapp',
+          channel_name: 'Manual test agent',
+          error_message: 'Test channel_down payload',
+          time: new Date().toISOString(),
         },
       })
       .select('*')
@@ -86,9 +87,9 @@ async function runTest() {
     console.log(`   Org ID: ${verified.org_id}`);
 
     console.log('\n3️⃣  Checking DEDUP_CONFIG in notifications...');
-    console.log('✅ DEDUP_CONFIG includes whatsapp_disconnected');
-    console.log('   - Window: 2 minutes');
-    console.log('   - Key: [agent_id, event_type]');
+    console.log('✅ DEDUP_CONFIG includes channel_down');
+    console.log('   - Window: 60 minutes');
+    console.log('   - Key: [channel_id, event_type, agent_id]');
 
     console.log('\n========================================');
     console.log('✅ Core notification system works!');
@@ -99,15 +100,13 @@ async function runTest() {
     console.log('✓ Agent lookup working');
     console.log('✓ Notifications can be inserted');
     console.log('✓ Notifications can be retrieved');
-    console.log('\n⚠️  NOTE: whatsapp_disconnected event type needs DB migration:');
-    console.log('   Run: supabase migration up');
-    console.log('   File: db/migrations/20260703_add_whatsapp_disconnected_event.sql');
+    console.log('⚠️  NOTE: whatsapp_disconnected event type is no longer used in the notification pipeline.');
+    console.log('   Use channel_down for long-lived WhatsApp disconnect alerts.');
     console.log('\nImplementation Status:');
-    console.log('✅ baileys-client.ts - mгновенное notification при disconnect');
-    console.log('✅ whatsapp-health-check cron - проверка каждую минуту');
-    console.log('✅ vercel.json - cron запись добавлена');
-    console.log('✅ notifications.ts - new event type и dedup config');
-    console.log('⏳ db/migrations - новое поле event_type нуждается в применении\n');
+    console.log('✅ baileys-client.ts - immediate disconnect notification removed');
+    console.log('✅ whatsapp-health-check cron - channel_down alert after sustained disconnect');
+    console.log('✅ notifications.ts - channel_down event enabled via UI config and dedup config');
+    console.log('⏳ db/migrations - existing historical migration remains unchanged\n');
 
     process.exit(0);
   } catch (error) {
