@@ -93,7 +93,7 @@ Rules:
 
     let criticism: Record<string, unknown>;
     try {
-      criticism = extractJsonPayload(criticResponse.text);
+      criticism = criticResponse.parsedJson ?? extractJsonPayload(criticResponse.text);
     } catch (parseError) {
       const message = parseError instanceof Error ? parseError.message : String(parseError);
       console.error('[improve] Critic JSON parse failed:', message);
@@ -165,7 +165,7 @@ Rules:
 
     let generated: Record<string, unknown>;
     try {
-      generated = extractJsonPayload(generatorResponse.text);
+      generated = generatorResponse.parsedJson ?? extractJsonPayload(generatorResponse.text);
     } catch (parseError) {
       const message = parseError instanceof Error ? parseError.message : String(parseError);
       console.error('[improve] Generator JSON parse failed:', message);
@@ -238,7 +238,7 @@ Rules:
           phase: 'validator',
         }
       );
-      const validation = extractJsonPayload(validatorResponse.text);
+      const validation = validatorResponse.parsedJson ?? extractJsonPayload(validatorResponse.text);
       isValid = validation.is_valid !== false;
       console.log('[improve] Validation:', validation.confidence, validation.validation_note);
     } catch (parseError) {

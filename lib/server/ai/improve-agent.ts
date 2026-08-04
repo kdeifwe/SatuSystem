@@ -13,6 +13,7 @@ type GeminiResponse = {
   text: string;
   metadata: Record<string, unknown>;
   rawResponse?: unknown;
+  parsedJson?: Record<string, unknown> | null;
 };
 
 type ImproveLogContext = {
@@ -259,6 +260,40 @@ export function repairJsonText(candidate: string): string {
   return repaired;
 }
 
+export function getGeminiCandidateText(candidate: any): { text: string; parsedJson: Record<string, unknown> | null } {
+  const parts = Array.isArray(candidate?.content?.parts) ? candidate.content.parts : [];
+  const textParts: string[] = [];
+  let parsedJson: Record<string, unknown> | null = null;
+
+  for (const part of parts) {
+    if (!part || typeof part !== 'object') {
+      continue;
+    }
+
+    if (parsedJson === null && part.json !== undefined && part.json !== null) {
+      if (typeof part.json === 'object' && !Array.isArray(part.json)) {
+        parsedJson = part.json as Record<string, unknown>;
+      } else if (typeof part.json === 'string') {
+        try {
+          const parsed = JSON.parse(part.json);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            parsedJson = parsed as Record<string, unknown>;
+          }
+        } catch {
+          // Ignore invalid JSON in part.json and continue with text fallback.
+        }
+      }
+    }
+
+    if (typeof part.text === 'string' && part.text.trim().length > 0) {
+      textParts.push(part.text.trim());
+    }
+  }
+
+  const text = parsedJson !== null ? JSON.stringify(parsedJson) : textParts.join('\n').trim();
+  return { text, parsedJson };
+}
+
 export function extractJsonPayload(rawText: string): Record<string, unknown> {
   try {
     const candidate = extractJsonCandidate(rawText);
@@ -375,7 +410,7 @@ export async function callGeminiForImprove(
     generationConfig: {
       temperature,
       topP: 0.2,
-      maxOutputTokens: 8192,
+      maxOutputTokens: 32768,
       responseMimeType: 'application/json',
       thinkingConfig: { thinkingBudget: 0 },
       ...(responseSchema ? { responseSchema } : {}),
@@ -403,7 +438,8 @@ export async function callGeminiForImprove(
         data = null;
       }
 
-      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+      const candidate = data?.candidates?.[0] ?? null;
+      const { text, parsedJson } = getGeminiCandidateText(candidate);
       const latencyMs = Date.now() - startedAt;
       const rawUsageMetadata = data?.usageMetadata && typeof data.usageMetadata === 'object' ? data.usageMetadata : {};
       const tokensInput = rawUsageMetadata?.promptTokenCount ?? 0;
@@ -446,7 +482,7 @@ export async function callGeminiForImprove(
         continue;
       }
 
-      if (text.trim().length > 0) {
+      if (text.trim().length > 0 || parsedJson !== null) {
         // CRITICAL: Log full response with usageMetadata on success
         await logImproveCall(options.admin ?? null, logContext);
         return {
@@ -459,6 +495,7 @@ export async function callGeminiForImprove(
             thoughtsTokenCount,
           },
           rawResponse: responsePayload,
+          parsedJson,
         };
       }
 
