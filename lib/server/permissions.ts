@@ -5,6 +5,10 @@ export type OrgMembership = {
   role: 'owner' | 'admin' | 'member';
 };
 
+export function isOwnerOrAdminRole(role: string | null | undefined): boolean {
+  return role === 'owner' || role === 'admin';
+}
+
 export async function getOrgMembership(
   supabase: SupabaseClient,
   userId: string,
@@ -40,7 +44,7 @@ export async function requireOwnerOrAdmin(
     throw new Error('Нет прав на изменение этой настройки');
   }
 
-  if (!['owner', 'admin'].includes(membership.role)) {
+  if (!isOwnerOrAdminRole(membership.role)) {
     throw new Error('Нет прав на изменение этой настройки');
   }
 

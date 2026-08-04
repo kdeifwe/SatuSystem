@@ -7,6 +7,7 @@ import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { Card } from '../../components/ui/card';
 import { EmptyState } from '../../components/ui/empty-state';
+import { isOwnerOrAdminRole } from '../../lib/server/permissions';
 
 type Agent = {
   id: string;
@@ -31,6 +32,14 @@ export default async function DashboardPage() {
     .from('agents')
     .select('id, name, role, is_active, created_at')
     .order('created_at', { ascending: false });
+
+  const { data: membershipData } = await supabase
+    .from('org_members')
+    .select('role')
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  const canDeleteAgents = isOwnerOrAdminRole(membershipData?.role);
 
   const agents: Agent[] = (data ?? []).map((agent: any) => ({
     id: agent.id,
@@ -64,7 +73,7 @@ export default async function DashboardPage() {
           {agents.length > 0 ? (
             <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
               {agents.map((agent) => (
-                <AgentCard key={agent.id} agent={agent} />
+                <AgentCard key={agent.id} agent={agent} canDelete={canDeleteAgents} />
               ))}
             </div>
           ) : (

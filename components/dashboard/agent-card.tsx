@@ -17,9 +17,10 @@ interface AgentCardProps {
     description: string | null;
     role?: string | null;
   };
+  canDelete?: boolean;
 }
 
-export function AgentCard({ agent }: AgentCardProps) {
+export function AgentCard({ agent, canDelete = false }: AgentCardProps) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -102,30 +103,32 @@ export function AgentCard({ agent }: AgentCardProps) {
             <button
               type="button"
               onClick={() => {
-                router.push(`/dashboard/${agent.id}`);
+                router.push(`/dashboard/${agent.id}/settings`);
                 setMenuOpen(false);
               }}
               className="flex w-full items-center gap-2 rounded-[var(--radius-cards)] px-3 py-2 text-left text-sm text-[color:var(--color-smoke)] hover:bg-[color:var(--color-obsidian)] hover:text-[color:var(--color-chalk)]"
             >
               <Settings size={16} /> Настройки
             </button>
-            <ConfirmDialog
-              title={`Удалить агента «${agent.name}»?`}
-              description="Это действие необратимо."
-              confirmLabel="Удалить"
-              onConfirm={handleDelete}
-            >
-              <button
-                type="button"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setMenuOpen(false);
-                }}
-                className="flex w-full items-center gap-2 rounded-[var(--radius-cards)] px-3 py-2 text-left text-sm text-[color:var(--color-smoke)] hover:bg-[color:var(--color-obsidian)] hover:text-[color:var(--color-chalk)]"
+            {canDelete ? (
+              <ConfirmDialog
+                title={`Удалить агента «${agent.name}»?`}
+                description="Это действие необратимо. Все диалоги, история, база знаний и логи этого агента будут удалены безвозвратно."
+                confirmLabel="Удалить"
+                onConfirm={handleDelete}
               >
-                <Trash2 size={16} /> Удалить
-              </button>
-            </ConfirmDialog>
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setMenuOpen(false);
+                  }}
+                  className="flex w-full items-center gap-2 rounded-[var(--radius-cards)] px-3 py-2 text-left text-sm text-[color:var(--color-smoke)] hover:bg-[color:var(--color-obsidian)] hover:text-[color:var(--color-chalk)]"
+                >
+                  <Trash2 size={16} /> Удалить
+                </button>
+              </ConfirmDialog>
+            ) : null}
           </div>
         ) : null}
       </div>

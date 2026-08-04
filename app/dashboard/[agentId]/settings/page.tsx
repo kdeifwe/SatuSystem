@@ -181,7 +181,7 @@ export default function SettingsPage({ params }: { params: { agentId: string } }
   }
 
   return (
-    <div className="flex h-full flex-col overflow-y-auto bg-[color:var(--color-obsidian)] text-[color:var(--color-chalk)]">
+    <div className="flex min-h-full flex-col bg-[color:var(--color-obsidian)] text-[color:var(--color-chalk)]">
       <div className="sticky top-0 z-10 flex items-center justify-between border-b border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] px-6 py-4">
         <div>
           <h1 className="text-base font-semibold text-[color:var(--color-chalk)]">Настройки агента</h1>
