@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient as createSupabaseServer } from '@/lib/supabase/server';
 import { createClient as createAdmin } from '@supabase/supabase-js';
 import { requireOwnerOrAdmin } from '@/lib/server/permissions';
+import { applyAgentVisibilityFilter } from '@/lib/agents/visibility';
 
 export async function DELETE(
   _req: NextRequest,
@@ -23,9 +24,9 @@ export async function DELETE(
 
     const membership = await requireOwnerOrAdmin(admin, user.id);
 
-    const { data: agent, error: agentError } = await admin
-      .from('agents')
-      .select('id, org_id')
+    const { data: agent, error: agentError } = await applyAgentVisibilityFilter(
+      admin.from('agents').select('id, org_id')
+    )
       .eq('id', params.agentId)
       .maybeSingle();
 
@@ -43,9 +44,13 @@ export async function DELETE(
 
     const { error: deleteError } = await admin
       .from('agents')
-      .delete()
+      .update({
+        deleted_at: new Date().toISOString(),
+        is_active: false,
+      })
       .eq('id', params.agentId)
-      .eq('org_id', membership.org_id);
+      .eq('org_id', membership.org_id)
+      .is('deleted_at', null);
 
     if (deleteError) {
       return NextResponse.json({ error: deleteError.message }, { status: 500 });

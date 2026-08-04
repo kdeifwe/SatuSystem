@@ -8,6 +8,7 @@ import { Button } from '../../components/ui/button';
 import { Card } from '../../components/ui/card';
 import { EmptyState } from '../../components/ui/empty-state';
 import { isOwnerOrAdminRole } from '../../lib/server/permissions';
+import { applyAgentVisibilityFilter } from '../../lib/agents/visibility';
 
 type Agent = {
   id: string;
@@ -17,7 +18,11 @@ type Agent = {
   is_active: boolean | null;
 };
 
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams?: { deleted?: string };
+}) {
   const supabase = createClient();
   const {
     data: { user },
@@ -28,9 +33,7 @@ export default async function DashboardPage() {
     redirect('/login');
   }
 
-  const { data } = await supabase
-    .from('agents')
-    .select('id, name, role, is_active, created_at')
+  const { data } = await applyAgentVisibilityFilter(supabase.from('agents').select('id, name, role, is_active, created_at'))
     .order('created_at', { ascending: false });
 
   const { data: membershipData } = await supabase
@@ -49,8 +52,15 @@ export default async function DashboardPage() {
     is_active: agent.is_active ?? null,
   }));
 
+  const showDeletedNotice = searchParams?.deleted === '1';
+
   return (
     <main className="min-h-screen bg-[color:var(--color-obsidian)] px-4 py-8 text-[color:var(--color-chalk)] sm:px-6 lg:px-8">
+      {showDeletedNotice ? (
+        <div className="fixed right-4 top-4 z-50 rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] px-4 py-3 text-sm text-[color:var(--color-chalk)] shadow-[0_12px_30px_rgba(0,0,0,0.28)]">
+          Агент удалён или не найден.
+        </div>
+      ) : null}
       <div className="mx-auto max-w-7xl">
         <Card className="flex flex-col gap-4 border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-6 sm:flex-row sm:items-center sm:justify-between sm:p-8">
           <div>

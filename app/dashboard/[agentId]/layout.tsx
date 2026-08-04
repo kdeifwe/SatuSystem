@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/server';
 import { Avatar } from '@/components/ui/avatar';
+import { applyAgentVisibilityFilter } from '@/lib/agents/visibility';
 
 const navSections = [
   {
@@ -72,11 +73,15 @@ export default async function AgentLayout({
     redirect('/login');
   }
 
-  const { data: agent } = await supabase
-    .from('agents')
-    .select('id, name, role')
+  const { data: agent } = await applyAgentVisibilityFilter(
+    supabase.from('agents').select('id, name, role, deleted_at')
+  )
     .eq('id', params.agentId)
-    .single();
+    .maybeSingle();
+
+  if (!agent) {
+    redirect('/dashboard?deleted=1');
+  }
 
   return (
     <div className="flex h-screen overflow-hidden bg-[color:var(--color-obsidian)] text-[color:var(--color-chalk)]">

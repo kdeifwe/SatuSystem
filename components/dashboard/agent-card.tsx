@@ -189,7 +189,7 @@ export function AgentCard({ agent, canDelete = false }: AgentCardProps) {
               {canDelete ? (
                 <ConfirmDialog
                   title={`Удалить агента «${agent.name}»?`}
-                  description="Это действие необратимо. Все диалоги, история, база знаний и логи этого агента будут удалены безвозвратно."
+                  description="Агент будет скрыт и деактивирован, история диалогов сохранится. Полное удаление данных можно сделать только вручную через админку / поддержку."
                   confirmLabel="Удалить"
                   onConfirm={handleDelete}
                 >
