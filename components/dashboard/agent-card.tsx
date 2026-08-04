@@ -1,14 +1,16 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useEffect, useRef, useState, useTransition, type CSSProperties } from 'react';
 import { useRouter } from 'next/navigation';
 import { MoreHorizontal, ExternalLink, Settings, Trash2 } from 'lucide-react';
+import { createPortal } from 'react-dom';
 import { Avatar } from '../ui/avatar';
 import AgentIcon from '../ui/agent-icon';
 import { Badge } from '../ui/badge';
 import { Card } from '../ui/card';
 import { ConfirmDialog } from '../ui/confirm-dialog';
 import DotMapGraphic from '../dot-map-graphic';
+import { getAgentMenuPosition } from '../../lib/agent-menu-position';
 
 interface AgentCardProps {
   agent: {
@@ -24,7 +26,68 @@ export function AgentCard({ agent, canDelete = false }: AgentCardProps) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [menuStyle, setMenuStyle] = useState<CSSProperties>({});
+  const [removed, setRemoved] = useState(false);
   const [, startTransition] = useTransition();
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) {
+      return;
+    }
+
+    const updateMenuPosition = () => {
+      if (!triggerRef.current) {
+        return;
+      }
+
+      const buttonRect = triggerRef.current.getBoundingClientRect();
+      const nextPosition = getAgentMenuPosition(
+        buttonRect,
+        { width: window.innerWidth, height: window.innerHeight },
+        { menuWidth: 208, menuHeight: 260 }
+      );
+
+      setMenuStyle({
+        position: 'fixed',
+        top: nextPosition.top,
+        left: nextPosition.left,
+        width: 208,
+        maxHeight: nextPosition.maxHeight,
+        zIndex: 60,
+      });
+    };
+
+    updateMenuPosition();
+    window.addEventListener('resize', updateMenuPosition);
+    window.addEventListener('scroll', updateMenuPosition, true);
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setMenuOpen(false);
+      }
+    };
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target;
+      if (target instanceof Node && (triggerRef.current?.contains(target) || menuRef.current?.contains(target))) {
+        return;
+      }
+
+      setMenuOpen(false);
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('mousedown', handlePointerDown);
+
+    return () => {
+      window.removeEventListener('resize', updateMenuPosition);
+      window.removeEventListener('scroll', updateMenuPosition, true);
+      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('mousedown', handlePointerDown);
+    };
+  }, [menuOpen]);
 
   const handleCardClick = () => {
     router.push(`/dashboard/${agent.id}`);
@@ -44,16 +107,22 @@ export function AgentCard({ agent, canDelete = false }: AgentCardProps) {
 
       setError(null);
       setMenuOpen(false);
+      setRemoved(true);
       startTransition(() => {
         router.refresh();
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось удалить агента');
+      throw err;
     }
   };
 
   const parsedVariant = Number.parseInt(agent.id.replace(/[^\d]/g, ''), 10);
   const patternVariant = Number.isNaN(parsedVariant) ? 0 : parsedVariant % 3;
+
+  if (removed) {
+    return null;
+  }
 
   return (
     <Card className="overflow-hidden border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-0 transition-colors hover:border-[color:var(--color-ash)]">
@@ -76,6 +145,7 @@ export function AgentCard({ agent, canDelete = false }: AgentCardProps) {
 
         <div className="absolute right-4 top-4">
           <button
+            ref={triggerRef}
             type="button"
             onClick={(event) => {
               event.stopPropagation();
@@ -87,51 +157,57 @@ export function AgentCard({ agent, canDelete = false }: AgentCardProps) {
             <MoreHorizontal size={18} />
           </button>
         </div>
-
-        {menuOpen ? (
-          <div className="absolute right-4 top-16 z-10 w-48 rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-2">
-            <button
-              type="button"
-              onClick={() => {
-                router.push(`/dashboard/${agent.id}`);
-                setMenuOpen(false);
-              }}
-              className="flex w-full items-center gap-2 rounded-[var(--radius-cards)] px-3 py-2 text-left text-sm text-[color:var(--color-smoke)] hover:bg-[color:var(--color-obsidian)] hover:text-[color:var(--color-chalk)]"
-            >
-              <ExternalLink size={16} /> Открыть
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                router.push(`/dashboard/${agent.id}/settings`);
-                setMenuOpen(false);
-              }}
-              className="flex w-full items-center gap-2 rounded-[var(--radius-cards)] px-3 py-2 text-left text-sm text-[color:var(--color-smoke)] hover:bg-[color:var(--color-obsidian)] hover:text-[color:var(--color-chalk)]"
-            >
-              <Settings size={16} /> Настройки
-            </button>
-            {canDelete ? (
-              <ConfirmDialog
-                title={`Удалить агента «${agent.name}»?`}
-                description="Это действие необратимо. Все диалоги, история, база знаний и логи этого агента будут удалены безвозвратно."
-                confirmLabel="Удалить"
-                onConfirm={handleDelete}
-              >
-                <button
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setMenuOpen(false);
-                  }}
-                  className="flex w-full items-center gap-2 rounded-[var(--radius-cards)] px-3 py-2 text-left text-sm text-[color:var(--color-smoke)] hover:bg-[color:var(--color-obsidian)] hover:text-[color:var(--color-chalk)]"
-                >
-                  <Trash2 size={16} /> Удалить
-                </button>
-              </ConfirmDialog>
-            ) : null}
-          </div>
-        ) : null}
       </div>
+
+      {menuOpen
+        ? createPortal(
+            <div
+              ref={menuRef}
+              style={menuStyle}
+              className="overflow-y-auto rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-2 shadow-[0_16px_38px_rgba(0,0,0,0.38)]"
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  router.push(`/dashboard/${agent.id}`);
+                  setMenuOpen(false);
+                }}
+                className="flex w-full items-center gap-2 rounded-[var(--radius-cards)] px-3 py-2 text-left text-sm text-[color:var(--color-smoke)] hover:bg-[color:var(--color-obsidian)] hover:text-[color:var(--color-chalk)]"
+              >
+                <ExternalLink size={16} /> Открыть
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  router.push(`/dashboard/${agent.id}/settings`);
+                  setMenuOpen(false);
+                }}
+                className="mt-1 flex w-full items-center gap-2 rounded-[var(--radius-cards)] px-3 py-2 text-left text-sm text-[color:var(--color-smoke)] hover:bg-[color:var(--color-obsidian)] hover:text-[color:var(--color-chalk)]"
+              >
+                <Settings size={16} /> Настройки
+              </button>
+              {canDelete ? (
+                <ConfirmDialog
+                  title={`Удалить агента «${agent.name}»?`}
+                  description="Это действие необратимо. Все диалоги, история, база знаний и логи этого агента будут удалены безвозвратно."
+                  confirmLabel="Удалить"
+                  onConfirm={handleDelete}
+                >
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                    }}
+                    className="mt-1 flex w-full items-center gap-2 rounded-[var(--radius-cards)] px-3 py-2 text-left text-sm text-[#ff7b72] hover:bg-[color:var(--color-obsidian)] hover:text-[#ff7b72]"
+                  >
+                    <Trash2 size={16} /> Удалить агента
+                  </button>
+                </ConfirmDialog>
+              ) : null}
+            </div>,
+            document.body
+          )
+        : null}
 
       <div className="cursor-pointer p-5" onClick={handleCardClick}>
         <div className="flex items-start justify-between gap-3">

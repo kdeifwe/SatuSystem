@@ -8,7 +8,7 @@ interface ConfirmDialogProps {
   description: string;
   confirmLabel?: string;
   cancelLabel?: string;
-  onConfirm: () => void;
+  onConfirm: () => void | Promise<void>;
   children: ReactNode;
 }
 
@@ -21,6 +21,15 @@ export function ConfirmDialog({
   children,
 }: ConfirmDialogProps) {
   const [open, setOpen] = useState(false);
+
+  const handleConfirm = async () => {
+    try {
+      await onConfirm();
+      setOpen(false);
+    } catch {
+      // Keep the dialog open if the action fails.
+    }
+  };
 
   return (
     <div>
@@ -46,13 +55,7 @@ export function ConfirmDialog({
               <Button variant="ghost" onClick={() => setOpen(false)}>
                 {cancelLabel}
               </Button>
-              <Button
-                variant="danger"
-                onClick={() => {
-                  onConfirm();
-                  setOpen(false);
-                }}
-              >
+              <Button variant="danger" onClick={handleConfirm}>
                 <Trash2 size={16} />
                 {confirmLabel}
               </Button>
