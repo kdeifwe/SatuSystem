@@ -50,6 +50,44 @@ export default function SandboxPage({ params }: { params: { agentId: string } })
   }, [params.agentId]);
 
   useEffect(() => {
+    let isCancelled = false;
+
+    async function loadSandboxHistory() {
+      try {
+        const response = await fetch(`/api/agents/${params.agentId}/sandbox`);
+        const data = await response.json();
+
+        if (!response.ok) {
+          console.error('[Sandbox] Failed loading history:', data?.error);
+          return;
+        }
+
+        if (!Array.isArray(data.messages)) {
+          return;
+        }
+
+        if (!isCancelled) {
+          setMessages(
+            data.messages.map((message: { sender: string; content: string; created_at: string }) => ({
+              role: message.sender === 'user' ? 'user' : message.sender === 'ai' ? 'assistant' : 'system',
+              content: String(message.content ?? ''),
+              timestamp: message.created_at ? new Date(message.created_at) : new Date(),
+            })),
+          );
+        }
+      } catch (err) {
+        console.error('[Sandbox] Error loading history:', err);
+      }
+    }
+
+    loadSandboxHistory();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [params.agentId]);
+
+  useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
