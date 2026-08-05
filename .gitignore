@@ -28,6 +28,7 @@ scripts/repro-*.js
 temp-*.js
 temp-*.ts
 *-output.json
+build-output.txt
 sandbox-*.json
 sandbox-server-log.txt
 diff-output.txt
