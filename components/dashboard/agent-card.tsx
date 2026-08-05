@@ -195,10 +195,6 @@ export function AgentCard({ agent, canDelete = false }: AgentCardProps) {
                 >
                   <button
                     type="button"
-                    onClick={(event) => {
-                      console.log('[agent-card] delete trigger clicked', { agentId: agent.id, agentName: agent.name });
-                      event.stopPropagation();
-                    }}
                     className="mt-1 flex w-full items-center gap-2 rounded-[var(--radius-cards)] px-3 py-2 text-left text-sm text-[#ff7b72] hover:bg-[color:var(--color-obsidian)] hover:text-[#ff7b72]"
                   >
                     <Trash2 size={16} /> Удалить агента

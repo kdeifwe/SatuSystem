@@ -37,8 +37,6 @@ export function ConfirmDialog({
     setOpen(true);
   };
 
-  console.log('[confirm-dialog] render', { open });
-
   return (
     <div>
       <div onClick={handleTriggerClick}>{children}</div>
