@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { formatDistanceToNow } from 'date-fns';
 import { ru } from 'date-fns/locale';
-import { Mic, Paperclip, Plus, Send } from 'lucide-react';
+import { Mic, Paperclip, Send } from 'lucide-react';
 import { getLeadToAutoOpen } from './lead-auto-selection';
 
 interface Lead {
@@ -38,7 +38,6 @@ export default function DialogsPage({ params }: { params: { agentId: string } })
   const [input, setInput] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [updatingAi, setUpdatingAi] = useState(false);
-  const [creatingLead, setCreatingLead] = useState(false);
   const searchParams = useSearchParams();
   const leadIdFromUrl = searchParams.get('leadId');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -201,42 +200,6 @@ export default function DialogsPage({ params }: { params: { agentId: string } })
     }
   }
 
-  async function handleCreateDialog() {
-    if (creatingLead) return;
-
-    setCreatingLead(true);
-    setError(null);
-    try {
-      const res = await fetch(`/api/agents/${params.agentId}/leads`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'Новый диалог' }),
-      });
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data?.error || 'Не удалось создать новый диалог');
-      }
-
-      if (data?.lead?.id) {
-        setLeads((current) => [{
-          ...data.lead,
-          conversation_id: data?.conversation?.id ?? null,
-          last_message: null,
-        }, ...current]);
-        setSelectedLeadId(data.lead.id);
-        setMessages([]);
-        setInput('');
-      } else {
-        await loadLeads();
-      }
-    } catch (error) {
-      setError(error instanceof Error ? error.message : 'Не удалось создать новый диалог');
-    } finally {
-      setCreatingLead(false);
-    }
-  }
-
   const selectedLead = leads.find((item) => item.id === selectedLeadId);
 
   return (
@@ -248,15 +211,6 @@ export default function DialogsPage({ params }: { params: { agentId: string } })
               <h2 className="text-sm font-semibold text-[color:var(--color-chalk)]">Диалоги</h2>
               <p className="text-xs text-[color:var(--color-smoke)]">{leads.length} контактов</p>
             </div>
-            <button
-              type="button"
-              onClick={handleCreateDialog}
-              disabled={creatingLead}
-              className="inline-flex items-center gap-1 rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] px-2.5 py-1.5 text-xs font-medium text-[color:var(--color-chalk)] transition-colors hover:border-[color:var(--color-ash)] disabled:cursor-not-allowed disabled:opacity-70"
-            >
-              <Plus size={14} />
-              <span>Новый диалог</span>
-            </button>
           </div>
         </div>
         <div className="flex-1 overflow-y-auto">
