@@ -1,4 +1,4 @@
-import { type ReactNode, useState } from 'react';
+import { type MouseEvent, type ReactNode, useState } from 'react';
 import { Button } from './button';
 import { Card } from './card';
 import { X, Trash2 } from 'lucide-react';
@@ -31,9 +31,17 @@ export function ConfirmDialog({
     }
   };
 
+  const handleTriggerClick = (event: MouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setOpen(true);
+  };
+
+  console.log('[confirm-dialog] render', { open });
+
   return (
     <div>
-      <div onClick={() => setOpen(true)}>{children}</div>
+      <div onClick={handleTriggerClick}>{children}</div>
 
       {open ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 py-6">
