@@ -30,6 +30,7 @@ type ImproveLogContext = {
   error?: string | null;
   parseError?: string | null;
   responseSchema?: boolean;
+  attempt?: number | null;
 };
 
 export function buildCriticSchema() {
@@ -361,6 +362,7 @@ async function logImproveCall(
         prompt: context.prompt,
         model: context.model,
         response_schema: context.responseSchema ?? false,
+        attempt: context.attempt ?? null,
       },
       response: {
         // Store FULL raw_response from Gemini (includes candidates, usageMetadata, etc)
@@ -380,6 +382,7 @@ async function logImproveCall(
           // CRITICAL: Duplicate usageMetadata here for redundancy/safety
           usage_metadata: usageMetadata,
         },
+        attempt: context.attempt ?? null,
       },
       tokens_input: context.tokensInput ?? null,
       tokens_output: context.tokensOutput ?? null,
@@ -401,6 +404,7 @@ export async function callGeminiForImprove(
     agentId?: string;
     feedback?: string;
     phase: ImprovePhase;
+    attempt?: number | null;
   }
 ): Promise<GeminiResponse> {
   const models = ['gemini-2.5-flash', 'gemini-2.5-pro'];
@@ -468,6 +472,7 @@ export async function callGeminiForImprove(
         latencyMs,
         tokensInput,
         tokensOutput,
+        attempt: options.attempt ?? null,
         rawText: text,
         rawResponse: responsePayload,
         responseSchema: Boolean(responseSchema),
@@ -523,6 +528,90 @@ export async function callGeminiForImprove(
   }
 
   throw new Error('Все модели Gemini недоступны');
+}
+
+export async function callGeminiForImproveWithRetry(
+  apiKey: string,
+  systemInstruction: string,
+  prompt: string,
+  temperature: number,
+  responseSchema: Record<string, unknown> | null,
+  options: {
+    admin?: SupabaseClient | null;
+    agentId?: string;
+    feedback?: string;
+    phase: ImprovePhase;
+  },
+  validateFn: (obj: unknown) => boolean,
+  maxAttempts = 3
+): Promise<{ parsedJson: Record<string, unknown>; geminiResponse: GeminiResponse; attempt: number }> {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const res = await callGeminiForImprove(apiKey, systemInstruction, prompt, temperature, responseSchema, {
+        admin: options.admin ?? null,
+        agentId: options.agentId,
+        feedback: options.feedback,
+        phase: options.phase,
+        attempt,
+      });
+
+      let parsed: Record<string, unknown> | null = null;
+      try {
+        parsed = (res.parsedJson ?? extractJsonPayload(res.text)) as Record<string, unknown>;
+      } catch (parseError) {
+        const message = parseError instanceof Error ? parseError.message : String(parseError);
+        await logFailedJsonParse(options.admin ?? null, {
+          agentId: options.agentId ?? 'unknown',
+          feedback: options.feedback ?? '',
+          phase: options.phase,
+          prompt,
+          model: 'gemini',
+          latencyMs: 0,
+          rawText: res.text,
+          rawResponse: res.rawResponse ?? null,
+          parseError: message,
+          attempt,
+        });
+
+        if (attempt < maxAttempts) continue;
+        throw parseError;
+      }
+
+      // structural validation
+      try {
+        const ok = validateFn(parsed);
+        if (!ok) {
+          const message = 'Schema validation failed';
+          await logFailedJsonParse(options.admin ?? null, {
+            agentId: options.agentId ?? 'unknown',
+            feedback: options.feedback ?? '',
+            phase: options.phase,
+            prompt,
+            model: 'gemini',
+            latencyMs: 0,
+            rawText: res.text,
+            rawResponse: res.rawResponse ?? null,
+            parseError: message,
+            attempt,
+          });
+
+          if (attempt < maxAttempts) continue;
+          throw new Error(message);
+        }
+      } catch (e) {
+        if (attempt < maxAttempts) continue;
+        throw e;
+      }
+
+      return { parsedJson: parsed as Record<string, unknown>, geminiResponse: res, attempt };
+    } catch (err) {
+      // If last attempt, rethrow
+      if (attempt >= maxAttempts) throw err;
+      // otherwise continue to retry
+    }
+  }
+
+  throw new Error('All Gemini attempts failed');
 }
 
 export async function logFailedJsonParse(

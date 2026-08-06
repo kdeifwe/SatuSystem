@@ -6,9 +6,7 @@ import {
   buildCriticSchema,
   buildGeneratorSchema,
   buildValidatorSchema,
-  callGeminiForImprove,
-  extractJsonPayload,
-  logFailedJsonParse,
+  callGeminiForImproveWithRetry,
   type PromptPatch,
 } from '@/lib/server/ai/improve-agent';
 
@@ -77,39 +75,33 @@ Rules:
 - Do not wrap the response in quotes or explanation.`;
 
     const criticSystemInstruction = 'You are an expert AI sales agent prompt critic. Return ONLY a single valid JSON object matching the requested schema. No markdown, no code fences, no commentary.';
-    const criticResponse = await callGeminiForImprove(
-      apiKey,
-      criticSystemInstruction,
-      criticPrompt,
-      0.3,
-      buildCriticSchema(),
-      {
-        admin,
-        agentId: params.agentId,
-        feedback,
-        phase: 'critic',
-      }
-    );
+      const criticValidate = (obj: unknown) => {
+        if (!obj || typeof obj !== 'object') return false;
+        const o = obj as Record<string, unknown>;
+        if (typeof o.root_cause !== 'string') return false;
+        if (!Array.isArray(o.weak_sections)) return false;
+        if (!Array.isArray(o.specific_fixes_needed)) return false;
+        if (typeof o.severity !== 'string') return false;
+        return true;
+      };
 
-    let criticism: Record<string, unknown>;
-    try {
-      criticism = criticResponse.parsedJson ?? extractJsonPayload(criticResponse.text);
-    } catch (parseError) {
-      const message = parseError instanceof Error ? parseError.message : String(parseError);
-      console.error('[improve] Critic JSON parse failed:', message);
-      await logFailedJsonParse(admin, {
-        agentId: params.agentId,
-        feedback,
-        phase: 'critic',
-        prompt: criticPrompt,
-        model: 'gemini',
-        latencyMs: 0,
-        rawText: criticResponse.text,
-        rawResponse: criticResponse.rawResponse ?? null,
-        parseError: message,
-      });
-      throw parseError;
-    }
+      const criticResult = await callGeminiForImproveWithRetry(
+        apiKey,
+        criticSystemInstruction,
+        criticPrompt,
+        0.3,
+        buildCriticSchema(),
+        {
+          admin,
+          agentId: params.agentId,
+          feedback,
+          phase: 'critic',
+        },
+        criticValidate,
+        3
+      );
+
+      const criticism = criticResult.parsedJson;
 
     console.log('[improve] Critic found:', criticism.root_cause);
 
@@ -149,7 +141,20 @@ Rules:
 - Do not wrap the response in quotes or explanation.`;
 
     const generatorSystemInstruction = 'You are an expert AI sales agent prompt engineer. Return ONLY a single valid JSON object matching the requested schema. No markdown, no code fences, no commentary.';
-    const generatorResponse = await callGeminiForImprove(
+    const generatorValidate = (obj: unknown) => {
+      if (!obj || typeof obj !== 'object') return false;
+      const o = obj as Record<string, unknown>;
+      if (!Array.isArray(o.patches)) return false;
+      const patches = o.patches as unknown[];
+      for (const p of patches) {
+        if (!p || typeof p !== 'object') return false;
+        const pp = p as Record<string, unknown>;
+        if (typeof pp.search !== 'string' || typeof pp.replace !== 'string' || typeof pp.reason !== 'string') return false;
+      }
+      return true;
+    };
+
+    const generatorResult = await callGeminiForImproveWithRetry(
       apiKey,
       generatorSystemInstruction,
       generatorPrompt,
@@ -160,28 +165,12 @@ Rules:
         agentId: params.agentId,
         feedback,
         phase: 'generator',
-      }
+      },
+      generatorValidate,
+      3
     );
 
-    let generated: Record<string, unknown>;
-    try {
-      generated = generatorResponse.parsedJson ?? extractJsonPayload(generatorResponse.text);
-    } catch (parseError) {
-      const message = parseError instanceof Error ? parseError.message : String(parseError);
-      console.error('[improve] Generator JSON parse failed:', message);
-      await logFailedJsonParse(admin, {
-        agentId: params.agentId,
-        feedback,
-        phase: 'generator',
-        prompt: generatorPrompt,
-        model: 'gemini',
-        latencyMs: 0,
-        rawText: generatorResponse.text,
-        rawResponse: generatorResponse.rawResponse ?? null,
-        parseError: message,
-      });
-      throw parseError;
-    }
+    const generated = generatorResult.parsedJson;
 
     const patches = Array.isArray(generated.patches)
       ? generated.patches.filter((value): value is PromptPatch => Boolean(value) && typeof value === 'object' && typeof (value as PromptPatch).search === 'string' && typeof (value as PromptPatch).replace === 'string' && typeof (value as PromptPatch).reason === 'string')
@@ -225,7 +214,16 @@ Rules:
     let isValid = true;
     try {
       const validatorSystemInstruction = 'You are a strict QA validator. Return ONLY a single valid JSON object matching the requested schema. No markdown, no code fences, no commentary.';
-      const validatorResponse = await callGeminiForImprove(
+      const validatorValidate = (obj: unknown) => {
+        if (!obj || typeof obj !== 'object') return false;
+        const o = obj as Record<string, unknown>;
+        if (typeof o.is_valid !== 'boolean') return false;
+        if (typeof o.confidence !== 'number') return false;
+        if (typeof o.validation_note !== 'string') return false;
+        return true;
+      };
+
+      const validatorResult = await callGeminiForImproveWithRetry(
         apiKey,
         validatorSystemInstruction,
         validatorPrompt,
@@ -236,25 +234,35 @@ Rules:
           agentId: params.agentId,
           feedback,
           phase: 'validator',
-        }
+        },
+        validatorValidate,
+        3
       );
-      const validation = validatorResponse.parsedJson ?? extractJsonPayload(validatorResponse.text);
+
+      const validation = validatorResult.parsedJson;
       isValid = validation.is_valid !== false;
       console.log('[improve] Validation:', validation.confidence, validation.validation_note);
     } catch (parseError) {
       const message = parseError instanceof Error ? parseError.message : String(parseError);
       console.warn('[improve] Validation step failed, proceeding anyway:', message);
-      await logFailedJsonParse(admin, {
-        agentId: params.agentId,
-        feedback,
-        phase: 'validator',
-        prompt: validatorPrompt,
-        model: 'gemini',
-        latencyMs: 0,
-        rawText: '',
-        rawResponse: null,
-        parseError: message,
-      });
+      // Log a failed parse for diagnostics if logFailedJsonParse exists
+      try {
+        // Importing logFailedJsonParse dynamically to avoid unused import errors earlier
+        const { logFailedJsonParse: _logFailed } = await import('@/lib/server/ai/improve-agent');
+        await _logFailed(admin, {
+          agentId: params.agentId,
+          feedback,
+          phase: 'validator',
+          prompt: validatorPrompt,
+          model: 'gemini',
+          latencyMs: 0,
+          rawText: '',
+          rawResponse: null,
+          parseError: message,
+        });
+      } catch {
+        // ignore logging failure
+      }
     }
 
     return NextResponse.json({
