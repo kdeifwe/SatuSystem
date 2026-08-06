@@ -27,6 +27,7 @@ export async function GET(req: NextRequest, { params }: { params: { agentId: str
     `)
     .eq('agent_id', params.agentId)
     .eq('leads.org_id', agent.org_id)
+    .eq('is_sandbox', false)
     .order('started_at', { ascending: false });
 
   const leadsMap = new Map<string, any>();

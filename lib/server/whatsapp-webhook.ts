@@ -301,6 +301,7 @@ export async function processIncomingWhatsAppMessage(body: any) {
       .from('conversations')
       .select('id')
       .eq('lead_id', lead.id)
+      .eq('agent_id', agent.id)
       .order('started_at', { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -308,7 +309,7 @@ export async function processIncomingWhatsAppMessage(body: any) {
     if (!conversation) {
       const { data: newConversation } = await admin
         .from('conversations')
-        .insert({ lead_id: lead.id, agent_id: agent.id })
+        .insert({ lead_id: lead.id, agent_id: agent.id, is_sandbox: false })
         .select('id')
         .single();
       conversation = newConversation;

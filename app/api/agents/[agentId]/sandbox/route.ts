@@ -70,6 +70,7 @@ export async function GET(
     .select('id')
     .eq('lead_id', lead.id)
     .eq('agent_id', agentId)
+    .eq('is_sandbox', true)
     .order('started_at', { ascending: false })
     .limit(1)
     .maybeSingle();

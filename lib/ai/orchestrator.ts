@@ -8,12 +8,8 @@ import { buildRetryContents } from './retry-context.ts';
 import { shouldBypassStyleValidation, shouldUseFallbackReply } from './response-policy';
 import { normalizeFunnelFlow } from '../funnel/normalize.ts';
 import { applyFunnelRouting, resolvePostRoutingReply } from '../funnel/routing.ts';
-import { buildSandboxLeadAttributes, isSandboxLeadAttributes } from './sandbox-context';
+import { buildSandboxLeadAttributes, isSandboxLeadAttributes, buildSandboxConversationInsertData } from './sandbox-context';
 import { calculateTypingDelay, splitAgentMessage } from '../server/ai/message-splitter.ts';
-import { classifyDialogStage } from '@/lib/sales/classifier';
-import { retrieveTechniques } from '@/lib/sales/technique-retriever';
-import { assemblePrompt } from '@/lib/sales/prompt-assembler';
-import type { DialogStageValue } from '@/lib/sales/classifier';
 
 export interface ChatMessage {
   role: 'user' | 'model';
@@ -136,7 +132,10 @@ async function ensureLeadContext(admin: ReturnType<typeof createAdminClient>, ag
   let { data: conversation } = await admin.from('conversations').select('id').eq('lead_id', lead.id).eq('agent_id', agentId).order('started_at', { ascending: false }).limit(1).maybeSingle();
 
   if (!conversation) {
-    const { data: createdConversation } = await admin.from('conversations').insert({ lead_id: lead.id, agent_id: agentId }).select('id').single();
+    const { data: createdConversation } = await admin.from('conversations').insert(buildSandboxConversationInsertData({
+      lead_id: lead.id,
+      agent_id: agentId,
+    })).select('id').single();
     conversation = createdConversation;
   }
 
@@ -370,60 +369,6 @@ async function resolveFallbackReply(
   };
 }
 
-interface StcMessageInput {
-  role?: string;
-  content?: string | null;
-  text?: string;
-}
-
-async function buildEnhancedSystemPrompt(params: {
-  agentId: string;
-  baseSystemPrompt: string;
-  messages: Array<StcMessageInput | string>;
-  channel?: string;
-}): Promise<{ systemPrompt: string; dialogStage: DialogStageValue | null; techniqueCount: number }> {
-  try {
-    const classification = classifyDialogStage(params.messages);
-    const dialogStage = classification.stage;
-
-    const lastUserMessage = params.messages
-      .filter((message): message is StcMessageInput => typeof message !== 'string' && Boolean(message?.role && message.role.toLowerCase() === 'user'))
-      .slice(-1)[0]?.content ?? '';
-
-    if (!lastUserMessage) {
-      return { systemPrompt: params.baseSystemPrompt, dialogStage, techniqueCount: 0 };
-    }
-
-    const { techniques, examples, nicheProfile } = await retrieveTechniques({
-      agentId: params.agentId,
-      queryText: lastUserMessage,
-      dialogStage,
-      matchThreshold: 0.7,
-      matchCount: 3,
-      channel: params.channel,
-    });
-
-    console.log('[STC] classified dialog stage', { agentId: params.agentId, dialogStage, techniqueCount: techniques.length });
-
-    if (techniques.length === 0) {
-      return { systemPrompt: params.baseSystemPrompt, dialogStage, techniqueCount: 0 };
-    }
-
-    const enhancedPrompt = assemblePrompt({
-      baseSystemPrompt: params.baseSystemPrompt,
-      nicheProfile,
-      techniques,
-      examples,
-      dialogStage,
-    });
-
-    return { systemPrompt: enhancedPrompt, dialogStage, techniqueCount: techniques.length };
-  } catch (error) {
-    console.log('[STC] fallback to base prompt', { agentId: params.agentId, error: error instanceof Error ? error.message : String(error) });
-    return { systemPrompt: params.baseSystemPrompt, dialogStage: null, techniqueCount: 0 };
-  }
-}
-
 export async function runAgentTurn(agentId: string, systemPrompt: string, userMessage: string, history: ChatMessage[]): Promise<AgentTurnResult> {
   const admin = createAdminClient();
   const startTime = Date.now();
@@ -434,24 +379,10 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
     throw new Error(`Агент не найден: ${agentId}`);
   }
 
-  let effectiveSystemPrompt = agent.system_prompt_compiled ?? systemPrompt;
-  if (!effectiveSystemPrompt?.trim()) {
-    effectiveSystemPrompt = await compileAndSaveSystemPrompt(agentId);
+  let compiledPrompt = agent.system_prompt_compiled ?? systemPrompt;
+  if (!compiledPrompt?.trim()) {
+    compiledPrompt = await compileAndSaveSystemPrompt(agentId);
   }
-
-  const stcMessages: Array<StcMessageInput | string> = [
-    ...history.map((message) => ({ role: message.role, content: message.text })),
-    { role: 'user', content: userMessage },
-  ];
-
-  const { systemPrompt: stcEnhancedPrompt, dialogStage, techniqueCount } = await buildEnhancedSystemPrompt({
-    agentId,
-    baseSystemPrompt: effectiveSystemPrompt,
-    messages: stcMessages,
-  });
-
-  effectiveSystemPrompt = stcEnhancedPrompt?.trim() ? stcEnhancedPrompt : effectiveSystemPrompt;
-  console.log('[STC] prompt selection', { agentId, dialogStage, techniqueCount, usedEnhancedPrompt: effectiveSystemPrompt !== agent.system_prompt_compiled && effectiveSystemPrompt !== systemPrompt });
 
   const generalCapabilities = (agent.general_capabilities as Record<string, unknown> | null) ?? {};
   const configuredAllowedTools = Array.isArray(generalCapabilities.allowed_tools)
@@ -559,7 +490,7 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
 
   let lastFinishReason: string | undefined = undefined;
 
-  let response = await callGemini(agent.model ?? GEMINI_CHAT_MODEL, effectiveSystemPrompt, baseContents, allowedToolDeclarations, undefined, generationConfig);
+  let response = await callGemini(agent.model ?? GEMINI_CHAT_MODEL, compiledPrompt, baseContents, allowedToolDeclarations, undefined, generationConfig);
   lastFinishReason = response.payload.finishReason as string | undefined;
   let parts = response.payload.parts;
   let toolsUsed: string[] = [];
@@ -632,7 +563,7 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
     }));
 
     retryContents = buildRetryContents(baseContents, parts as Array<Record<string, unknown>> | undefined, functionResponseParts);
-    response = await callGemini(agent.model ?? GEMINI_CHAT_MODEL, effectiveSystemPrompt, retryContents, allowedToolDeclarations, undefined, generationConfig);
+    response = await callGemini(agent.model ?? GEMINI_CHAT_MODEL, compiledPrompt, retryContents, allowedToolDeclarations, undefined, generationConfig);
     lastFinishReason = response.payload.finishReason as string | undefined;
     parts = response.payload.parts;
   }
@@ -676,7 +607,7 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
           ] },
         ];
 
-        const finalResponse = await callGemini(agent.model ?? GEMINI_CHAT_MODEL, effectiveSystemPrompt, finalContents, [], undefined, generationConfig);
+        const finalResponse = await callGemini(agent.model ?? GEMINI_CHAT_MODEL, compiledPrompt, finalContents, [], undefined, generationConfig);
         lastFinishReason = finalResponse.payload.finishReason as string | undefined;
         const finalParts = finalResponse.payload.parts;
         const finalText = (finalParts as Array<Record<string, unknown>>).filter((part) => typeof part?.text === 'string').map((part) => part.text).join('\n').trim();
@@ -712,7 +643,7 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
         ...baseContents,
         { role: 'user', parts: [{ text: `Ответь клиенту на его вопрос обычным текстом: "${userMessage}". Не вызывай никакие инструменты, просто ответь по существу на основе того, что тебе уже известно.` }] },
       ];
-      const noToolsResponse = await callGemini(agent.model ?? GEMINI_CHAT_MODEL, effectiveSystemPrompt, noToolsContents, [], undefined, generationConfig);
+      const noToolsResponse = await callGemini(agent.model ?? GEMINI_CHAT_MODEL, compiledPrompt, noToolsContents, [], undefined, generationConfig);
       const noToolsParts = noToolsResponse.payload.parts;
       const noToolsReply = (noToolsParts as Array<Record<string, unknown>>).filter((part) => typeof part?.text === 'string').map((part) => part.text).join('\n').trim();
       if (noToolsReply) {
@@ -731,7 +662,7 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
   if (!finalReply.trim() && !handoffTriggered) {
     console.warn('[AGENT] empty reply returned by Gemini, retrying once', { agentId, conversationId, userMessage });
     try {
-      const retryResponse = await callGemini(agent.model ?? GEMINI_CHAT_MODEL, effectiveSystemPrompt, retryContents, allowedToolDeclarations, undefined, generationConfig);
+      const retryResponse = await callGemini(agent.model ?? GEMINI_CHAT_MODEL, compiledPrompt, retryContents, allowedToolDeclarations, undefined, generationConfig);
       lastFinishReason = retryResponse.payload.finishReason as string | undefined;
       const retryParts = retryResponse.payload.parts;
       const retryReply = (retryParts as Array<Record<string, unknown>>).filter((part) => typeof part?.text === 'string').map((part) => part.text).join('\n').trim();
@@ -769,7 +700,7 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
   if (!validation.valid && !validationAttempted && !bypassStyleValidation && !shouldKeepCurrentReply) {
     validationAttempted = true;
     console.warn('[AGENT] validation failed, retrying once', { agentId, errors: validation.errors });
-    const retryResponse = await callGemini(agent.model ?? GEMINI_CHAT_MODEL, effectiveSystemPrompt, retryContents, allowedToolDeclarations, undefined, generationConfig);
+    const retryResponse = await callGemini(agent.model ?? GEMINI_CHAT_MODEL, compiledPrompt, retryContents, allowedToolDeclarations, undefined, generationConfig);
     lastFinishReason = retryResponse.payload.finishReason as string | undefined;
     const retryParts = retryResponse.payload.parts;
     const retryReply = (retryParts as Array<Record<string, unknown>>).filter((part) => typeof part?.text === 'string').map((part) => part.text).join('\n').trim();
@@ -824,8 +755,6 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
       validation_errors: validationErrors,
       attempt,
       routing: routingOutcome,
-      dialog_stage: dialogStage,
-      stc_technique_count: techniqueCount,
     },
     response: {
       raw: rawReply,
