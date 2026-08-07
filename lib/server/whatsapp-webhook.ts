@@ -341,7 +341,7 @@ export async function processIncomingWhatsAppMessage(body: any) {
         .select('sender, content')
         .eq('conversation_id', conversation.id)
         .order('created_at', { ascending: false })
-        .limit(20);
+        .limit(10);
 
       const historyFormatted = (history ?? [])
         .reverse()

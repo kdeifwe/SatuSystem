@@ -80,6 +80,26 @@ function normalizeResponseParts(parts: Array<Record<string, unknown>> | undefine
   return trimmedText === text ? (parts ?? []) : [{ text: trimmedText }];
 }
 
+const AGENT_CACHE_TTL_MS = 30_000;
+const agentCache = new Map<string, { expiresAt: number; data: Record<string, unknown> | null }>();
+
+async function getCachedAgent(
+  admin: ReturnType<typeof createAdminClient>,
+  agentId: string,
+  select: string,
+) {
+  const now = Date.now();
+  const cached = agentCache.get(agentId);
+  if (cached && cached.expiresAt > now) {
+    return cached.data;
+  }
+
+  const { data, error } = await admin.from('agents').select(select).eq('id', agentId).single();
+  const resolvedData = error ? null : (data as unknown as Record<string, unknown> | null);
+  agentCache.set(agentId, { expiresAt: now + AGENT_CACHE_TTL_MS, data: resolvedData });
+  return resolvedData;
+}
+
 function tryBuildDeterministicFactAnswerWithLogging(
   message: string,
   chunks: Array<{ content?: string; similarity?: number }> = [],
@@ -259,11 +279,7 @@ interface ToolCallRequest {
 }
 
 async function readAgentCapabilities(admin: ReturnType<typeof createAdminClient>, agentId: string) {
-  const { data: agentData } = await admin
-    .from('agents')
-    .select('general_capabilities')
-    .eq('id', agentId)
-    .single();
+  const agentData = await getCachedAgent(admin, agentId, 'general_capabilities') as { general_capabilities?: Record<string, unknown> | null } | null;
 
   return normalizeHandoffConfig((agentData?.general_capabilities as Record<string, unknown> | null)?.handoff_config);
 }
@@ -332,13 +348,9 @@ async function ensureLeadContext(
   existingUserMessageId?: string,
   options?: { preferRealLead?: boolean },
 ) {
-  const { data: agentData, error: agentError } = await admin
-    .from('agents')
-    .select('org_id, dialogue_flow')
-    .eq('id', agentId)
-    .single();
+  const agentData = await getCachedAgent(admin, agentId, 'org_id, dialogue_flow') as { org_id?: string | null; dialogue_flow?: unknown } | null;
 
-  if (agentError || !agentData?.org_id) {
+  if (!agentData?.org_id) {
     return {
       leadId: null,
       conversationId: null,
@@ -777,6 +789,8 @@ async function loadConversationMessages(
   return (data as Array<{ id: string; sender: string | null; content: string | null }> | null) ?? [];
 }
 
+const DEFAULT_MAX_OUTPUT_TOKENS = 512;
+
 async function callGemini(
   modelName: string,
   systemPrompt: string,
@@ -786,7 +800,7 @@ async function callGemini(
   generationConfig: Record<string, unknown> = {
     temperature: 0.7,
     topP: 0.9,
-    maxOutputTokens: 2048,
+    maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
     thinkingConfig: { thinkingBudget: 256 },
   },
   retryCount = 0,
@@ -1054,7 +1068,7 @@ export async function runAgentTurnWithLead(
         .maybeSingle();
 
       if (!conversation) {
-        const entryNodeId = getEntryNodeId(normalizeFunnelFlow((await admin.from('agents').select('dialogue_flow').eq('id', agentId).single()).data?.dialogue_flow));
+        const entryNodeId = getEntryNodeId(normalizeFunnelFlow(((await getCachedAgent(admin, agentId, 'dialogue_flow')) as { dialogue_flow?: unknown } | null)?.dialogue_flow));
         const { data: createdConversation } = await admin
           .from('conversations')
           .insert(buildConversationInsertData({
@@ -1097,11 +1111,7 @@ export async function runAgentTurn(
   const basePrompt = injectHandoffSection(systemPrompt, handoffConfig);
 
   // Читаем allowed_tools конкретного агента
-  const { data: agentData } = await admin
-    .from('agents')
-    .select('general_capabilities, dialogue_flow')
-    .eq('id', agentId)
-    .single();
+  const agentData = await getCachedAgent(admin, agentId, 'general_capabilities, dialogue_flow') as { general_capabilities?: Record<string, unknown> | null; dialogue_flow?: unknown } | null;
 
   const generalCapabilities = (agentData?.general_capabilities as Record<string, unknown> | null) ?? {};
   const configuredToolNames = Array.isArray(generalCapabilities.allowed_tools)
@@ -1167,25 +1177,22 @@ export async function runAgentTurn(
     }).eq('id', persistedUserMessageId);
   }
   const flow = normalizeFunnelFlow(agentData?.dialogue_flow);
-  const { data: conversationState } = conversationId
-    ? await admin.from('conversations').select('current_funnel_step').eq('id', conversationId).single()
-    : { data: null };
+  const [conversationStateResult, leadFunnelStateResult] = await Promise.all([
+    conversationId
+      ? admin.from('conversations').select('current_funnel_step').eq('id', conversationId).single()
+      : Promise.resolve({ data: null as { current_funnel_step?: string | null } | null }),
+    leadId
+      ? admin.from('lead_funnel_state').select('pending_script_node_id, pending_script_reply').eq('lead_id', leadId).eq('agent_id', agentId).maybeSingle()
+      : Promise.resolve({ data: null as { pending_script_node_id?: unknown; pending_script_reply?: unknown } | null }),
+  ]);
+  const conversationState = conversationStateResult.data;
 
   let currentFunnelStep = conversationState?.current_funnel_step ?? flow?.entryNodeId ?? null;
   if (conversationId && !conversationState?.current_funnel_step && flow?.entryNodeId) {
     await admin.from('conversations').update({ current_funnel_step: flow.entryNodeId }).eq('id', conversationId);
   }
 
-  let leadFunnelState: { pending_script_node_id?: unknown; pending_script_reply?: unknown } | null = null;
-  if (leadId) {
-    const { data } = await admin
-      .from('lead_funnel_state')
-      .select('pending_script_node_id, pending_script_reply')
-      .eq('lead_id', leadId)
-      .eq('agent_id', agentId)
-      .maybeSingle();
-    leadFunnelState = data as { pending_script_node_id?: unknown; pending_script_reply?: unknown } | null;
-  }
+  let leadFunnelState: { pending_script_node_id?: unknown; pending_script_reply?: unknown } | null = leadFunnelStateResult.data as { pending_script_node_id?: unknown; pending_script_reply?: unknown } | null;
 
   const pendingScriptNodeId = typeof leadFunnelState?.pending_script_node_id === 'string'
     ? leadFunnelState.pending_script_node_id
@@ -1432,7 +1439,7 @@ export async function runAgentTurn(
       await admin.from('ai_error_counters').upsert({ agent_id: agentId, consecutive_errors: next, last_error_at: new Date(), updated_at: new Date().toISOString() });
       if (next >= 3) {
         await admin.from('notification_log').insert({
-          org_id: (await admin.from('agents').select('org_id').eq('id', agentId).maybeSingle()).data?.org_id,
+          org_id: ((await getCachedAgent(admin, agentId, 'org_id')) as { org_id?: string | null } | null)?.org_id,
           agent_id: agentId,
           lead_id: null,
           event_type: 'ai_error',

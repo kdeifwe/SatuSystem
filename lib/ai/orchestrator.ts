@@ -71,6 +71,26 @@ function normalizeResponseParts(parts: Array<Record<string, unknown>> | undefine
   return trimmedText === text ? (parts ?? []) : [{ text: trimmedText }];
 }
 
+const AGENT_CACHE_TTL_MS = 30_000;
+const agentCache = new Map<string, { expiresAt: number; data: Record<string, unknown> | null }>();
+
+async function getCachedAgent(
+  admin: ReturnType<typeof createAdminClient>,
+  agentId: string,
+  select: string,
+) {
+  const now = Date.now();
+  const cached = agentCache.get(agentId);
+  if (cached && cached.expiresAt > now) {
+    return cached.data;
+  }
+
+  const { data, error } = await admin.from('agents').select(select).eq('id', agentId).single();
+  const resolvedData = error ? null : (data as unknown as Record<string, unknown> | null);
+  agentCache.set(agentId, { expiresAt: now + AGENT_CACHE_TTL_MS, data: resolvedData });
+  return resolvedData;
+}
+
 // === PHASE B SECTION 2.4: Script vs Dynamic split (Call A) ===
 // Helper: Find dialogue node by ID in funnel flow
 function getDialogueNode(flow: ReturnType<typeof normalizeFunnelFlow>, nodeId: string | null) {
@@ -102,7 +122,7 @@ function handleScriptMessageParts(
 // === End Script Path helpers ===
 
 async function ensureLeadContext(admin: ReturnType<typeof createAdminClient>, agentId: string, userMessage: string) {
-  const { data: agentData } = await admin.from('agents').select('org_id').eq('id', agentId).single();
+  const agentData = await getCachedAgent(admin, agentId, 'org_id') as { org_id?: string | null } | null;
   if (!agentData?.org_id) {
     return { leadId: null, conversationId: null, userMessageId: null };
   }
@@ -168,7 +188,7 @@ function extractToolCalls(parts: Array<Record<string, unknown>> | undefined): To
   }));
 }
 
-const DEFAULT_MAX_OUTPUT_TOKENS = 2048;
+const DEFAULT_MAX_OUTPUT_TOKENS = 512;
 
 async function callGemini(
   modelName: string,
@@ -372,8 +392,17 @@ async function resolveFallbackReply(
 export async function runAgentTurn(agentId: string, systemPrompt: string, userMessage: string, history: ChatMessage[]): Promise<AgentTurnResult> {
   const admin = createAdminClient();
   const startTime = Date.now();
-  const agentData = await admin.from('agents').select('id, name, model, temperature, top_p, org_id, system_prompt_compiled, general_capabilities, dialogue_flow').eq('id', agentId).single();
-  const agent = agentData.data;
+  const agent = (await getCachedAgent(admin, agentId, 'id, name, model, temperature, top_p, org_id, system_prompt_compiled, general_capabilities, dialogue_flow')) as {
+    id?: string;
+    name?: string | null;
+    model?: string | null;
+    temperature?: number | null;
+    top_p?: number | null;
+    org_id?: string | null;
+    system_prompt_compiled?: string | null;
+    general_capabilities?: Record<string, unknown> | null;
+    dialogue_flow?: unknown;
+  } | null;
 
   if (!agent) {
     throw new Error(`Агент не найден: ${agentId}`);
@@ -399,12 +428,16 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
     : [];
 
   const { leadId, conversationId, userMessageId } = await ensureLeadContext(admin, agentId, userMessage);
-  const { data: conversationState } = conversationId
-    ? await admin.from('conversations').select('current_funnel_step').eq('id', conversationId).maybeSingle()
-    : { data: null };
-  const { data: leadState } = leadId
-    ? await admin.from('leads').select('attributes').eq('id', leadId).maybeSingle()
-    : { data: null };
+  const [conversationStateResult, leadStateResult] = await Promise.all([
+    conversationId
+      ? admin.from('conversations').select('current_funnel_step').eq('id', conversationId).maybeSingle()
+      : Promise.resolve({ data: null as { current_funnel_step?: string | null } | null }),
+    leadId
+      ? admin.from('leads').select('attributes').eq('id', leadId).maybeSingle()
+      : Promise.resolve({ data: null as { attributes?: Record<string, unknown> | null } | null }),
+  ]);
+  const conversationState = conversationStateResult.data;
+  const leadState = leadStateResult.data;
   const persistedNodeId = typeof (leadState?.attributes as Record<string, unknown> | null)?.current_node_id === 'string'
     ? (leadState?.attributes as Record<string, unknown>).current_node_id
     : null;

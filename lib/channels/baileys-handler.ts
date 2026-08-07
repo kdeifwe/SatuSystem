@@ -126,7 +126,7 @@ export async function handleIncomingMessageWithDependencies(
       .select('sender, content')
       .eq('conversation_id', conversation.id)
       .order('created_at', { ascending: false })
-      .limit(20);
+      .limit(10);
 
     const historyFormatted = (history ?? [])
       .reverse()
@@ -163,8 +163,11 @@ export async function handleIncomingMessageWithDependencies(
 
     for (let i = 0; i < parts.length; i += 1) {
       const part = parts[i];
-      if (i > 0 && caps.typing_simulation !== false) {
-        const delay = calculateTypingDelay(part.text);
+      const delay = i > 0 && caps.typing_simulation !== false
+        ? Math.min(calculateTypingDelay(part.text), 1000)
+        : 0;
+
+      if (delay > 0) {
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
 
