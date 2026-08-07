@@ -18,7 +18,7 @@ export function buildConversationInsertData(existingData?: Record<string, unknow
 
   return {
     ...baseData,
-    ...(isSandbox ? { is_sandbox: true } : {}),
+    is_sandbox: isSandbox,
   };
 }
 
