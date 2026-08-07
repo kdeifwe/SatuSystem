@@ -90,6 +90,7 @@ export async function handleIncomingMessageWithDependencies(
       .from('conversations')
       .select('id')
       .eq('lead_id', lead.id)
+      .eq('agent_id', agentId)
       .order('started_at', { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -97,7 +98,7 @@ export async function handleIncomingMessageWithDependencies(
     if (!conversation) {
       const { data: newConversation, error: convError } = await admin
         .from('conversations')
-        .insert({ lead_id: lead.id, agent_id: agentId })
+        .insert({ lead_id: lead.id, agent_id: agentId, is_sandbox: false })
         .select('id')
         .single();
 
@@ -154,8 +155,7 @@ export async function handleIncomingMessageWithDependencies(
       text,
       historyFormatted,
       lead.id,
-      currentUserMessageId ?? undefined,
-      { preferRealLead: true }
+      currentUserMessageId ?? undefined
     );
 
     const caps = agent.general_capabilities ?? {};
@@ -169,12 +169,7 @@ export async function handleIncomingMessageWithDependencies(
       }
 
       await sock.sendMessage(remoteJid, { text: part.text });
-      await admin.from('messages').insert({
-        conversation_id: conversation.id,
-        sender: 'ai',
-        content: part.text,
-        external_message_id: `wa_ai_${message.key.id ?? Date.now()}_${i}`,
-      });
+      // Ответ агента уже сохранён в БД через runAgentTurnWithLead
     }
   } catch (error) {
     logger.error({ agentId, error }, 'Failed to process incoming WhatsApp message');
