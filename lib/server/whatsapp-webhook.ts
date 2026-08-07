@@ -4,6 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 import { runAgentTurnWithLead } from '@/lib/server/ai/orchestrator';
 import { splitAgentMessage, calculateTypingDelay } from '@/lib/server/ai/message-splitter';
 import { sendWhatsAppMessage } from '@/lib/channels/whatsapp';
+import { withLeadProcessingLock } from '@/lib/server/lead-processing-queue';
 
 // WhatsApp webhook callbacks run outside a user session, so we use a service-role
 // Supabase client here to bypass RLS while still keeping the webhook handling secure.
@@ -202,179 +203,177 @@ export async function processIncomingWhatsAppMessage(body: any) {
     }
 
     const admin = getAdmin();
-    const externalMessageId = `wa_${messageId}`;
-
-    const { data: existingMsg } = await admin
-      .from('messages')
-      .select('id')
-      .eq('external_message_id', externalMessageId)
-      .maybeSingle();
-
-    if (existingMsg) {
-      return;
-    }
-
     const webhookPhoneNumberId = value?.metadata?.phone_number_id;
-    const channel = await resolveWhatsAppChannelForPhoneNumber(admin, phoneNumber, webhookPhoneNumberId);
+    const normalizedPhoneNumber = String(phoneNumber).replace(/^\+/, '');
+    const processingLockKey = `whatsapp:${webhookPhoneNumberId ?? 'unknown'}:${normalizedPhoneNumber}`;
 
-    if (!channel) {
-      console.error('[whatsapp webhook] channel not found for phone_number_id', webhookPhoneNumberId);
-      return;
-    }
+    await withLeadProcessingLock(processingLockKey, async () => {
+      const externalMessageId = `wa_${messageId}`;
 
-    const { data: agent } = await admin
-      .from('agents')
-      .select('id, name, org_id, system_prompt_compiled, general_capabilities')
-      .eq('org_id', channel.org_id)
-      .eq('is_active', true)
-      .order('created_at', { ascending: true })
-      .limit(1)
-      .maybeSingle();
+      const { data: existingMsg } = await admin
+        .from('messages')
+        .select('id')
+        .eq('external_message_id', externalMessageId)
+        .maybeSingle();
 
-    if (!agent) {
-      console.error('[whatsapp webhook] agent not found');
-      return;
-    }
-
-    let { data: lead } = await admin
-      .from('leads')
-      .select('id, name, ai_enabled')
-      .eq('channel_id', channel.id)
-      .eq('external_id', phoneNumber)
-      .maybeSingle();
-
-    let leadErr: unknown = null;
-
-    if (!lead) {
-      const { data: newLead, error } = await admin
-        .from('leads')
-        .insert({
-          org_id: channel.org_id,
-          channel_id: channel.id,
-          external_id: phoneNumber,
-          name: phoneNumber,
-          status: 'new',
-          ai_enabled: true,
-        })
-        .select('id, name, ai_enabled')
-        .single();
-      leadErr = error;
-      lead = newLead;
-    }
-
-    if (!lead) {
-      if (leadErr) {
-        console.error('[whatsapp webhook] Failed to create lead:', leadErr);
-      } else {
-        console.error('[whatsapp webhook] failed to resolve lead', { phoneNumber });
+      if (existingMsg) {
+        return;
       }
-      return;
-    }
 
-    // Detect lead_returned: if we have a recorded last_inbound_at and it was long ago
-    try {
-      const { data: rts } = await admin.from('lead_repeat_touch_state').select('last_inbound_at').eq('lead_id', lead.id).maybeSingle();
-      const lastInbound = rts?.last_inbound_at ? new Date(rts.last_inbound_at) : null;
-      if (lastInbound) {
-        const ms = Date.now() - lastInbound.getTime();
-        const days = ms / (1000 * 60 * 60 * 24);
-        if (days >= 1) {
-          await admin.from('notification_log').insert({
+      const channel = await resolveWhatsAppChannelForPhoneNumber(admin, phoneNumber, webhookPhoneNumberId);
+
+      if (!channel) {
+        console.error('[whatsapp webhook] channel not found for phone_number_id', webhookPhoneNumberId);
+        return;
+      }
+
+      const { data: agent } = await admin
+        .from('agents')
+        .select('id, name, org_id, system_prompt_compiled, general_capabilities')
+        .eq('org_id', channel.org_id)
+        .eq('is_active', true)
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+
+      if (!agent) {
+        console.error('[whatsapp webhook] agent not found');
+        return;
+      }
+
+      let { data: lead } = await admin
+        .from('leads')
+        .select('id, name, ai_enabled')
+        .eq('channel_id', channel.id)
+        .eq('external_id', phoneNumber)
+        .maybeSingle();
+
+      let leadErr: unknown = null;
+
+      if (!lead) {
+        const { data: newLead, error } = await admin
+          .from('leads')
+          .insert({
             org_id: channel.org_id,
-            agent_id: agent.id,
-            lead_id: lead.id,
-            event_type: 'lead_returned',
-            payload: { lead_name: lead.name, days_silent: Math.floor(days), message_preview: String(text).slice(0, 200) },
-            delivery_status: 'pending',
+            channel_id: channel.id,
+            external_id: phoneNumber,
+            name: phoneNumber,
+            status: 'new',
+            ai_enabled: true,
+          })
+          .select('id, name, ai_enabled')
+          .single();
+        leadErr = error;
+        lead = newLead;
+      }
+
+      if (!lead) {
+        if (leadErr) {
+          console.error('[whatsapp webhook] Failed to create lead:', leadErr);
+        } else {
+          console.error('[whatsapp webhook] failed to resolve lead', { phoneNumber });
+        }
+        return;
+      }
+
+      // Detect lead_returned: if we have a recorded last_inbound_at and it was long ago
+      try {
+        const { data: rts } = await admin.from('lead_repeat_touch_state').select('last_inbound_at').eq('lead_id', lead.id).maybeSingle();
+        const lastInbound = rts?.last_inbound_at ? new Date(rts.last_inbound_at) : null;
+        if (lastInbound) {
+          const ms = Date.now() - lastInbound.getTime();
+          const days = ms / (1000 * 60 * 60 * 24);
+          if (days >= 1) {
+            await admin.from('notification_log').insert({
+              org_id: channel.org_id,
+              agent_id: agent.id,
+              lead_id: lead.id,
+              event_type: 'lead_returned',
+              payload: { lead_name: lead.name, days_silent: Math.floor(days), message_preview: String(text).slice(0, 200) },
+              delivery_status: 'pending',
+            });
+          }
+        }
+      } catch (e) {
+        console.error('[whatsapp webhook] failed to check lead_returned', e);
+      }
+
+      if (!lead) {
+        return;
+      }
+
+      let { data: conversation } = await admin
+        .from('conversations')
+        .select('id')
+        .eq('lead_id', lead.id)
+        .eq('agent_id', agent.id)
+        .order('started_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (!conversation) {
+        const { data: newConversation } = await admin
+          .from('conversations')
+          .insert({ lead_id: lead.id, agent_id: agent.id, is_sandbox: false })
+          .select('id')
+          .single();
+        conversation = newConversation;
+      }
+
+      if (!conversation) {
+        return;
+      }
+
+      const { data: insertedUserMessage } = await admin.from('messages').insert({
+        conversation_id: conversation.id,
+        sender: 'user',
+        content: text,
+        external_message_id: externalMessageId,
+      }).select('id').single();
+      const currentUserMessageId = insertedUserMessage?.id ?? null;
+
+      if (!lead.ai_enabled) {
+        return;
+      }
+
+      const { data: history } = await admin
+        .from('messages')
+        .select('sender, content')
+        .eq('conversation_id', conversation.id)
+        .order('created_at', { ascending: false })
+        .limit(20);
+
+      const historyFormatted = (history ?? [])
+        .reverse()
+        .slice(0, -1)
+        .map((message) => ({
+          role: (message.sender === 'user' ? 'user' : 'model') as 'user' | 'model',
+          text: message.content ?? '',
+        }))
+        .filter((message) => message.text.length > 0);
+
+      const systemPrompt = agent.system_prompt_compiled ?? `Ты ${agent.name}`;
+      const { answer } = await runAgentTurnWithLead(agent.id, systemPrompt, text, historyFormatted, lead.id, currentUserMessageId, { preferRealLead: true });
+
+      const capabilities = agent.general_capabilities ?? {};
+      const parts = splitAgentMessage(answer, capabilities.split_messages ?? true).slice(0, capabilities.split_max_parts ?? 2);
+      const credentials = (channel.credentials as Record<string, unknown> | null) ?? {};
+      const phoneNumberId = String(credentials.phone_number_id ?? '');
+      const accessToken = String(credentials.access_token ?? '');
+      const recipient = phoneNumber.replace(/^\+/, '');
+
+      for (let i = 0; i < parts.length; i += 1) {
+        if (i > 0 && capabilities.typing_simulation !== false) {
+          await new Promise((resolve) => setTimeout(resolve, calculateTypingDelay(parts[i].text)));
+        }
+
+        if (phoneNumberId && accessToken) {
+          await sendWhatsAppMessage(phoneNumberId, accessToken, recipient, parts[i].text).catch((error) => {
+            console.error('[whatsapp webhook] send error', error);
           });
         }
       }
-    } catch (e) {
-      console.error('[whatsapp webhook] failed to check lead_returned', e);
-    }
-
-    if (!lead) {
-      return;
-    }
-
-    let { data: conversation } = await admin
-      .from('conversations')
-      .select('id')
-      .eq('lead_id', lead.id)
-      .eq('agent_id', agent.id)
-      .order('started_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (!conversation) {
-      const { data: newConversation } = await admin
-        .from('conversations')
-        .insert({ lead_id: lead.id, agent_id: agent.id, is_sandbox: false })
-        .select('id')
-        .single();
-      conversation = newConversation;
-    }
-
-    if (!conversation) {
-      return;
-    }
-
-    const { data: insertedUserMessage } = await admin.from('messages').insert({
-      conversation_id: conversation.id,
-      sender: 'user',
-      content: text,
-      external_message_id: externalMessageId,
-    }).select('id').single();
-    const currentUserMessageId = insertedUserMessage?.id ?? null;
-
-    if (!lead.ai_enabled) {
-      return;
-    }
-
-    const { data: history } = await admin
-      .from('messages')
-      .select('sender, content')
-      .eq('conversation_id', conversation.id)
-      .order('created_at', { ascending: false })
-      .limit(20);
-
-    const historyFormatted = (history ?? [])
-      .reverse()
-      .slice(0, -1)
-      .map((message) => ({
-        role: (message.sender === 'user' ? 'user' : 'model') as 'user' | 'model',
-        text: message.content ?? '',
-      }))
-      .filter((message) => message.text.length > 0);
-
-    const systemPrompt = agent.system_prompt_compiled ?? `Ты ${agent.name}`;
-    const { answer } = await runAgentTurnWithLead(agent.id, systemPrompt, text, historyFormatted, lead.id, currentUserMessageId);
-
-    const capabilities = agent.general_capabilities ?? {};
-    const parts = splitAgentMessage(answer, capabilities.split_messages ?? true).slice(0, capabilities.split_max_parts ?? 2);
-    const credentials = (channel.credentials as Record<string, unknown> | null) ?? {};
-    const phoneNumberId = String(credentials.phone_number_id ?? '');
-    const accessToken = String(credentials.access_token ?? '');
-    const recipient = phoneNumber.replace(/^\+/, '');
-
-    for (let i = 0; i < parts.length; i += 1) {
-      if (i > 0 && capabilities.typing_simulation !== false) {
-        await new Promise((resolve) => setTimeout(resolve, calculateTypingDelay(parts[i].text)));
-      }
-
-      if (phoneNumberId && accessToken) {
-        await sendWhatsAppMessage(phoneNumberId, accessToken, recipient, parts[i].text).catch((error) => {
-          console.error('[whatsapp webhook] send error', error);
-        });
-      }
-
-      await admin.from('messages').insert({
-        conversation_id: conversation.id,
-        sender: 'ai',
-        content: parts[i].text,
-        external_message_id: `wa_ai_${messageId}_${i}`,
-      });
-    }
+    });
   } catch (error) {
     console.error('[whatsapp webhook]', error);
   }

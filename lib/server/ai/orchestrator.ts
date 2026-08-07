@@ -272,7 +272,66 @@ function getEntryNodeId(flow: ReturnType<typeof normalizeFunnelFlow>): string | 
   return flow?.entryNodeId ? flow.entryNodeId : null;
 }
 
-async function ensureLeadContext(admin: ReturnType<typeof createAdminClient>, agentId: string, userMessage: string, externalLeadId?: string, existingUserMessageId?: string) {
+async function alertLeadContextError(admin: ReturnType<typeof createAdminClient>, params: {
+  agentId: string;
+  orgId: string | null;
+  externalLeadId?: string | null;
+  preferRealLead?: boolean;
+  conversationId?: string | null;
+  leadId?: string | null;
+  userMessage?: string | null;
+  reason: string;
+}) {
+  const payload = {
+    event: 'lead_context_error',
+    agentId: params.agentId,
+    orgId: params.orgId,
+    externalLeadId: params.externalLeadId ?? null,
+    preferRealLead: params.preferRealLead ?? false,
+    conversationId: params.conversationId ?? null,
+    leadId: params.leadId ?? null,
+    userMessage: params.userMessage ?? null,
+    reason: params.reason,
+  };
+
+  console.error('[ORCHESTRATOR_ALERT] lead context error', payload);
+
+  try {
+    await admin.from('notification_log').insert({
+      org_id: params.orgId,
+      agent_id: params.agentId,
+      lead_id: params.leadId,
+      event_type: 'lead_context_error',
+      payload,
+      delivery_status: 'pending',
+    });
+  } catch (notificationError) {
+    console.error('[ORCHESTRATOR_ALERT] failed to persist lead context alert', { payload, notificationError });
+  }
+}
+
+export type LeadContextMode = 'real' | 'sandbox' | 'error';
+
+export function resolveLeadContextMode(externalLeadId: string | null | undefined, preferRealLead = false): LeadContextMode {
+  if (externalLeadId) {
+    return 'real';
+  }
+
+  if (preferRealLead) {
+    return 'error';
+  }
+
+  return 'sandbox';
+}
+
+async function ensureLeadContext(
+  admin: ReturnType<typeof createAdminClient>,
+  agentId: string,
+  userMessage: string,
+  externalLeadId?: string,
+  existingUserMessageId?: string,
+  options?: { preferRealLead?: boolean },
+) {
   const { data: agentData, error: agentError } = await admin
     .from('agents')
     .select('org_id, dialogue_flow')
@@ -315,7 +374,53 @@ async function ensureLeadContext(admin: ReturnType<typeof createAdminClient>, ag
       : null;
   };
 
-  if (externalLeadId) {
+  const leadContextMode = resolveLeadContextMode(externalLeadId, options?.preferRealLead);
+
+  if (leadContextMode === 'error') {
+    await alertLeadContextError(admin, {
+      agentId,
+      orgId: agentData.org_id,
+      externalLeadId,
+      preferRealLead: options?.preferRealLead,
+      conversationId: null,
+      leadId: null,
+      userMessage,
+      reason: 'missing_external_lead_id_for_real_context',
+    });
+    return {
+      leadId: null,
+      conversationId: null,
+      orgId: agentData.org_id,
+      leadAttributes: null,
+      previousConversationSummary: null,
+      userMessageId: null,
+      isSandbox: false,
+    };
+  }
+
+  if (leadContextMode === 'real') {
+    if (!externalLeadId) {
+      await alertLeadContextError(admin, {
+        agentId,
+        orgId: agentData.org_id,
+        externalLeadId,
+        preferRealLead: options?.preferRealLead,
+        conversationId: null,
+        leadId: null,
+        userMessage,
+        reason: 'missing_external_lead_id_for_real_context',
+      });
+      return {
+        leadId: null,
+        conversationId: null,
+        orgId: agentData.org_id,
+        leadAttributes: null,
+        previousConversationSummary: null,
+        userMessageId: null,
+        isSandbox: false,
+      };
+    }
+
     const { data: existingLead } = await admin
       .from('leads')
       .select('id')
@@ -929,8 +1034,52 @@ export async function runAgentTurnWithLead(
   history: ChatMessage[] = [],
   externalLeadId: string,
   userMessageId?: string,
+  options?: { preferRealLead?: boolean },
 ): Promise<AgentTurnResult> {
-  return runAgentTurn(agentId, systemPrompt, userMessage, history, externalLeadId, userMessageId);
+  const admin = createAdminClient();
+  let resolvedLeadId: string | null = externalLeadId ?? null;
+  let resolvedConversationId: string | null = null;
+  let resolvedUserMessageId: string | undefined = userMessageId;
+
+  if (resolvedLeadId) {
+    const { data: lead } = await admin.from('leads').select('id').eq('id', resolvedLeadId).maybeSingle();
+    if (lead?.id) {
+      let { data: conversation } = await admin
+        .from('conversations')
+        .select('id')
+        .eq('lead_id', lead.id)
+        .eq('agent_id', agentId)
+        .order('started_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (!conversation) {
+        const entryNodeId = getEntryNodeId(normalizeFunnelFlow((await admin.from('agents').select('dialogue_flow').eq('id', agentId).single()).data?.dialogue_flow));
+        const { data: createdConversation } = await admin
+          .from('conversations')
+          .insert(buildConversationInsertData({
+            lead_id: lead.id,
+            agent_id: agentId,
+            ...(entryNodeId ? { current_funnel_step: entryNodeId } : {}),
+          }))
+          .select('id')
+          .single();
+        conversation = createdConversation;
+      }
+
+      resolvedConversationId = conversation?.id ?? null;
+      if (!resolvedUserMessageId && resolvedConversationId) {
+        const { data: insertedMessage } = await admin.from('messages').insert({
+          conversation_id: resolvedConversationId,
+          sender: 'user',
+          content: userMessage,
+        }).select('id').single();
+        resolvedUserMessageId = insertedMessage?.id ?? undefined;
+      }
+    }
+  }
+
+  return runAgentTurn(agentId, systemPrompt, userMessage, history, resolvedLeadId ?? undefined, resolvedConversationId ?? undefined, resolvedUserMessageId);
 }
 
 export async function runAgentTurn(
@@ -938,8 +1087,9 @@ export async function runAgentTurn(
   systemPrompt: string,
   userMessage: string,
   history: ChatMessage[] = [],
-  externalLeadId?: string, // Optional: for Telegram/webhook-identified leads
-  existingUserMessageId?: string,
+  leadId?: string,
+  conversationId?: string,
+  userMessageId?: string,
 ): Promise<AgentTurnResult> {
   const admin = createAdminClient();
   const startTime = Date.now();
@@ -966,7 +1116,28 @@ export async function runAgentTurn(
   const toolPayload = toolDeclarations.length > 0 ? [{ functionDeclarations: toolDeclarations }] : [];
   console.log(`[AGENT_TOOLS] Agent ${agentId}: allowed tools: [${allowedToolNames.join(', ')}], declarations: [${toolDeclarations.map((d) => d.name).join(', ')}]`);
 
-  const { leadId, conversationId, orgId, leadAttributes, previousConversationSummary, userMessageId: persistedUserMessageId, isSandbox } = await ensureLeadContext(admin, agentId, userMessage, externalLeadId, existingUserMessageId);
+  let resolvedLeadId: string | null = leadId ?? null;
+  let resolvedConversationId: string | null = conversationId ?? null;
+  let resolvedUserMessageId: string | null = userMessageId ?? null;
+
+  let contextData: Awaited<ReturnType<typeof ensureLeadContext>> | null = null;
+  if (!resolvedLeadId || !resolvedConversationId) {
+    contextData = await ensureLeadContext(admin, agentId, userMessage);
+    resolvedLeadId = contextData.leadId;
+    resolvedConversationId = contextData.conversationId;
+    resolvedUserMessageId = contextData.userMessageId;
+  }
+
+  leadId = resolvedLeadId ?? undefined;
+  conversationId = resolvedConversationId ?? undefined;
+  userMessageId = resolvedUserMessageId ?? undefined;
+
+  const leadContextMode = resolveLeadContextMode(resolvedLeadId ?? undefined, false);
+  const orgId = contextData?.orgId ?? null;
+  const leadAttributes = contextData?.leadAttributes ?? null;
+  const previousConversationSummary = contextData?.previousConversationSummary ?? null;
+  const isSandbox = contextData?.isSandbox ?? false;
+  const persistedUserMessageId = userMessageId ?? null;
   const leadGrade = (leadAttributes && typeof leadAttributes === 'object')
     ? (leadAttributes.grade as string | number | null | undefined)
     : null;
@@ -1026,8 +1197,8 @@ export async function runAgentTurn(
   const scriptTurnResolution = await handleScriptNodeTurn({
     admin,
     agentId,
-    leadId,
-    conversationId,
+    leadId: leadId ?? null,
+    conversationId: conversationId ?? null,
     flow,
     currentFunnelStep,
     pendingScriptNodeId,
@@ -1106,17 +1277,19 @@ export async function runAgentTurn(
     const messageParts = nodeExecution.messageParts;
     const finalAnswer = nodeExecution.finalAnswer;
 
-    await upsertLeadFunnelState(admin, leadId, agentId, {
-      currentNodeId: currentFunnelStep,
-      status: 'active',
-      isNoMatch: false,
-      lastTransitionAt: new Date().toISOString(),
-      pendingScriptNodeId: currentFunnelStep,
-      pendingScriptReply: finalAnswer,
-    });
+    if (leadId) {
+      await upsertLeadFunnelState(admin, leadId, agentId, {
+        currentNodeId: currentFunnelStep,
+        status: 'active',
+        isNoMatch: false,
+        lastTransitionAt: new Date().toISOString(),
+        pendingScriptNodeId: currentFunnelStep,
+        pendingScriptReply: finalAnswer,
+      });
+    }
 
     // Save script message
-    const assistantMessageId = await appendMessage(admin, conversationId, 'ai', finalAnswer);
+    const assistantMessageId = await appendMessage(admin, conversationId ?? null, 'ai', finalAnswer);
 
     // Log the script call (non-blocking)
     try {
@@ -1327,8 +1500,8 @@ export async function runAgentTurn(
         const redirectOutcome = await executeRedirectToOperator(
           admin,
           agentId,
-          leadId,
-          conversationId,
+          leadId ?? null,
+          conversationId ?? null,
           typeof toolCall.args?.reason === 'string' ? toolCall.args.reason : 'Передача оператору',
           handoffConfig,
         );
@@ -1442,8 +1615,8 @@ export async function runAgentTurn(
   const routingResult = await applyRoutingAndFinalizeReply({
     admin,
     agentId,
-    leadId,
-    conversationId,
+    leadId: leadId ?? null,
+    conversationId: conversationId ?? null,
     flow,
     currentFunnelStep,
     userMessage,
@@ -1482,6 +1655,14 @@ export async function runAgentTurn(
           linked_chunk_types: linkedChunks.map((chunk) => ({ id: chunk.id, link_type: chunk.link_type, similarity: chunk.similarity })),
         },
         routing: routingResult.routingOutcome,
+        lead_context: {
+          mode: leadContextMode,
+          externalLeadId: null,
+          preferRealLead: false,
+          leadId: leadId ?? null,
+          conversationId: conversationId ?? null,
+          isSandbox,
+        },
       },
       response: {
         raw: rawReply,
