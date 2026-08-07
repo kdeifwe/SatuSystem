@@ -11,7 +11,8 @@ import {
   WAMessage,
 } from '@whiskeysockets/baileys';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { runAgentTurn } from '@/lib/server/ai/orchestrator';
+import { runAgentTurnWithLead } from '@/lib/server/ai/orchestrator';
+import { handleIncomingMessageWithDependencies } from './baileys-handler';
 import { splitAgentMessage, calculateTypingDelay } from '@/lib/server/ai/message-splitter';
 import { enqueueNotification } from '@/lib/notifications';
 
@@ -155,140 +156,13 @@ function extractText(message: any): string | null {
   return null;
 }
 
-async function handleIncomingMessage(agentId: string, sock: ReturnType<typeof makeWASocket>, message: WAMessage) {
-  try {
-    if (message.key?.fromMe) return;
-    const remoteJid = String(message.key?.remoteJid ?? '');
-    if (!remoteJid) return;
-
-    const text = extractText(message.message);
-    if (!text || text.trim().length === 0) return;
-
-    const admin = createAdminClient();
-    const channel = await ensureWhatsAppChannel(agentId);
-
-    const externalMessageId = `wa_${message.key.id ?? Date.now()}`;
-    const { data: existingMsg } = await admin
-      .from('messages')
-      .select('id')
-      .eq('external_message_id', externalMessageId)
-      .maybeSingle();
-
-    if (existingMsg) return;
-
-    const userName = message.pushName ?? remoteJid;
-    let { data: lead } = await admin
-      .from('leads')
-      .select('id, ai_enabled')
-      .eq('channel_id', channel.id)
-      .eq('external_id', remoteJid)
-      .maybeSingle();
-
-    if (!lead) {
-      const { data: newLead, error: leadError } = await admin
-        .from('leads')
-        .insert({
-          org_id: channel.org_id,
-          channel_id: channel.id,
-          external_id: remoteJid,
-          name: userName,
-          status: 'new',
-          ai_enabled: true,
-        })
-        .select('id, ai_enabled')
-        .single();
-
-      if (!newLead || leadError) {
-        logger.error({ agentId, error: leadError }, 'Failed to create WhatsApp lead');
-        return;
-      }
-      lead = newLead;
-    }
-
-    let { data: conversation } = await admin
-      .from('conversations')
-      .select('id')
-      .eq('lead_id', lead.id)
-      .order('started_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (!conversation) {
-      const { data: newConversation, error: convError } = await admin
-        .from('conversations')
-        .insert({ lead_id: lead.id, agent_id: agentId })
-        .select('id')
-        .single();
-
-      if (!newConversation || convError) {
-        logger.error({ agentId, error: convError }, 'Failed to create WhatsApp conversation');
-        return;
-      }
-      conversation = newConversation;
-    }
-
-    await admin.from('messages').insert({
-      conversation_id: conversation.id,
-      sender: 'user',
-      content: text,
-      external_message_id: externalMessageId,
-    });
-
-    if (!lead.ai_enabled) {
-      return;
-    }
-
-    const { data: history } = await admin
-      .from('messages')
-      .select('sender, content')
-      .eq('conversation_id', conversation.id)
-      .order('created_at', { ascending: false })
-      .limit(20);
-
-    const historyFormatted = (history ?? [])
-      .reverse()
-      .slice(0, -1)
-      .map((messageItem) => ({
-        role: messageItem.sender === 'user' ? 'user' : 'model' as 'user' | 'model',
-        text: messageItem.content ?? '',
-      }))
-      .filter((item) => item.text.length > 0);
-
-    const { data: agent } = await admin
-      .from('agents')
-      .select('name, system_prompt_compiled, general_capabilities')
-      .eq('id', agentId)
-      .single();
-
-    if (!agent) {
-      logger.error({ agentId }, 'Agent record not found for WhatsApp message');
-      return;
-    }
-
-    const systemPrompt = agent.system_prompt_compiled ?? `Ты ${agent.name}. Отвечай кратко и по-человечески.`;
-    const { answer } = await runAgentTurn(agentId, systemPrompt, text, [], undefined);
-
-    const caps = agent.general_capabilities ?? {};
-    const parts = splitAgentMessage(answer, caps.split_messages ?? true, caps.split_max_parts ?? 2);
-
-    for (let i = 0; i < parts.length; i += 1) {
-      const part = parts[i];
-      if (i > 0 && caps.typing_simulation !== false) {
-        const delay = calculateTypingDelay(part.text);
-        await new Promise((resolve) => setTimeout(resolve, delay));
-      }
-
-      await sock.sendMessage(remoteJid, { text: part.text });
-      await admin.from('messages').insert({
-        conversation_id: conversation.id,
-        sender: 'ai',
-        content: part.text,
-        external_message_id: `wa_ai_${message.key.id ?? Date.now()}_${i}`,
-      });
-    }
-  } catch (error) {
-    logger.error({ agentId, error }, 'Failed to process incoming WhatsApp message');
-  }
+export async function handleIncomingMessage(agentId: string, sock: ReturnType<typeof makeWASocket>, message: WAMessage) {
+  return handleIncomingMessageWithDependencies(agentId, sock, message, {
+    createAdminClient,
+    ensureWhatsAppChannel,
+    runAgentTurnWithLead,
+    logger,
+  });
 }
 
 async function createBaileysClient(agentId: string, forceNewAuth = false) {
