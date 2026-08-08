@@ -429,6 +429,7 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
     ? mergeAllowedToolNames(configuredAllowedTools, [])
     : mergeAllowedToolNames(availableToolNames, []))
     .filter((name) => availableToolNames.includes(name));
+
   const allowedToolDeclarations = allowedToolNames.length > 0
     ? [{ functionDeclarations: AGENT_TOOLS[0].functionDeclarations.filter((f) => allowedToolNames.includes(f.name)) }]
     : [];

@@ -1,5 +1,6 @@
 import { geminiFetch } from '../gemini-client';
-import type { LLMMessage, LLMRequest, LLMResponse, LLMProvider } from '../llm-client';
+import type { LLMRequest, LLMResponse, LLMProvider, LLMResponseToolCall } from '../llm-client';
+import { parseFinishReasonFromResponse } from '../llm-client';
 
 const DEFAULT_MAX_OUTPUT_TOKENS = 512;
 const GEMINI_FALLBACK_MODEL = 'gemini-2.5-flash';
@@ -44,6 +45,72 @@ function extractText(data: any): string {
     .map((part: any) => part.text)
     .join('\n')
     .trim();
+}
+
+function normalizeToolCallArgs(args: any): Record<string, unknown> {
+  if (typeof args === 'string') {
+    try {
+      return JSON.parse(args);
+    } catch {
+      return { raw: args };
+    }
+  }
+
+  if (typeof args === 'object' && args !== null) {
+    return args;
+  }
+
+  return {};
+}
+
+function normalizeFunctionCall(call: any): LLMResponseToolCall | null {
+  if (!call || typeof call?.name !== 'string') return null;
+  return {
+    name: call.name,
+    args: normalizeToolCallArgs(call.args),
+  };
+}
+
+function collectToolCallsFromParts(parts: any[], accumulator: LLMResponseToolCall[]) {
+  for (const part of parts) {
+    if (!part || typeof part !== 'object') continue;
+    if (part.functionCall) {
+      const normalized = normalizeFunctionCall(part.functionCall);
+      if (normalized) accumulator.push(normalized);
+    }
+    if (Array.isArray(part.parts)) {
+      collectToolCallsFromParts(part.parts, accumulator);
+    }
+  }
+}
+
+function parseGeminiToolCalls(data: any): LLMResponseToolCall[] {
+  const candidate = Array.isArray(data?.candidates) ? data.candidates[0] : data?.candidate;
+  if (!candidate) return [];
+
+  const toolCalls: LLMResponseToolCall[] = [];
+  const directCalls = candidate?.toolCalls ?? candidate?.tool_calls ?? candidate?.functionCalls ?? candidate?.function_calls;
+  if (Array.isArray(directCalls)) {
+    for (const directCall of directCalls) {
+      const normalized = normalizeFunctionCall(directCall);
+      if (normalized) toolCalls.push(normalized);
+    }
+  }
+
+  if (candidate?.functionCall) {
+    const normalized = normalizeFunctionCall(candidate.functionCall);
+    if (normalized) toolCalls.push(normalized);
+  }
+
+  if (Array.isArray(candidate?.content)) {
+    collectToolCallsFromParts(candidate.content, toolCalls);
+  }
+
+  if (Array.isArray(candidate?.content?.parts)) {
+    collectToolCallsFromParts(candidate.content.parts, toolCalls);
+  }
+
+  return toolCalls;
 }
 
 function buildUsage(data: any): { promptTokens: number; completionTokens: number; totalTokens: number } {
@@ -103,6 +170,9 @@ export class GeminiProvider implements LLMProvider {
       text,
       usage,
       provider: this.name,
+      toolCalls: parseGeminiToolCalls(data),
+      finishReason: parseFinishReasonFromResponse(data),
+      rawResponse: data,
     };
   }
 }
