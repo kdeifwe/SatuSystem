@@ -1,4 +1,5 @@
 import type { LLMRequest, LLMResponse, LLMProvider } from '../llm-client';
+import { parseFinishReasonFromResponse, parseToolCallsFromResponse } from '../llm-client';
 
 const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
 
@@ -132,6 +133,8 @@ export class OpenAIProvider implements LLMProvider {
       text,
       usage: parseUsage(data),
       provider: this.name,
+      toolCalls: parseToolCallsFromResponse(data),
+      finishReason: parseFinishReasonFromResponse(data),
     };
   }
 }

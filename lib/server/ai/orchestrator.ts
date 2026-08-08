@@ -825,9 +825,17 @@ async function callGemini(
       tools: Array.isArray(tools) && tools.length > 0 ? tools : undefined,
     });
 
-    const parts = llmResponse.text ? [{ text: llmResponse.text }] : [];
+    const parts: Array<Record<string, unknown>> = [];
+    if (typeof llmResponse.text === 'string' && llmResponse.text.trim().length > 0) {
+      parts.push({ text: llmResponse.text });
+    }
+    if (Array.isArray(llmResponse.toolCalls) && llmResponse.toolCalls.length > 0) {
+      for (const toolCall of llmResponse.toolCalls) {
+        parts.push({ functionCall: { name: toolCall.name, args: toolCall.args } });
+      }
+    }
     const usageMetadata = llmResponse.usage ?? ({ } as Record<string, unknown>);
-    const finishReason = undefined;
+    const finishReason = llmResponse.finishReason;
     const normalizedParts = normalizeResponseParts(parts, finishReason);
 
     if (finishReason === 'MAX_TOKENS' && retryCount === 0) {

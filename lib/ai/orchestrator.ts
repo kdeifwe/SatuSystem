@@ -246,11 +246,21 @@ async function callGemini(
       tools: Array.isArray(tools) && tools.length > 0 ? tools : undefined,
     });
 
+    const contentParts: Array<Record<string, unknown>> = [];
+    if (typeof llmResponse.text === 'string' && llmResponse.text.trim().length > 0) {
+      contentParts.push({ text: llmResponse.text });
+    }
+    if (Array.isArray(llmResponse.toolCalls) && llmResponse.toolCalls.length > 0) {
+      for (const toolCall of llmResponse.toolCalls) {
+        contentParts.push({ functionCall: { name: toolCall.name, args: toolCall.args } });
+      }
+    }
+
     const data = {
       candidates: [
         {
           content: {
-            parts: [{ text: llmResponse.text }],
+            parts: contentParts,
           },
         },
       ],
@@ -265,7 +275,7 @@ async function callGemini(
     }
     const candidate = data.candidates?.[0];
     const parts = (candidate?.content?.parts as Array<Record<string, unknown>> | undefined) ?? [];
-    const finishReason = undefined;
+    const finishReason = llmResponse.finishReason;
     const normalizedParts = normalizeResponseParts(parts, finishReason);
 
     if (finishReason === 'MAX_TOKENS' && retryCount === 0) {
@@ -281,8 +291,8 @@ async function callGemini(
           parts: normalizedParts,
           finishReason,
           usageMetadata: {
-            promptTokenCount: 0,
-            candidatesTokenCount: 0,
+            promptTokenCount: Number((llmResponse.usage as any)?.promptTokens ?? 0),
+            candidatesTokenCount: Number((llmResponse.usage as any)?.completionTokens ?? 0),
           },
         },
         usedModel: activeModel,
@@ -294,8 +304,8 @@ async function callGemini(
         parts: normalizedParts,
         finishReason,
         usageMetadata: {
-          promptTokenCount: 0,
-          candidatesTokenCount: 0,
+          promptTokenCount: Number((llmResponse.usage as any)?.promptTokens ?? 0),
+          candidatesTokenCount: Number((llmResponse.usage as any)?.completionTokens ?? 0),
         },
       },
       usedModel: activeModel,

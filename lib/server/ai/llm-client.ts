@@ -16,16 +16,49 @@ export interface LLMRequest {
   tools?: any[];
 }
 
+export interface LLMResponseToolCall {
+  name: string;
+  args: Record<string, unknown>;
+}
+
 export interface LLMResponse {
   text: string;
   usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
   provider: string;
+  toolCalls?: LLMResponseToolCall[];
+  finishReason?: string;
 }
 
 export interface LLMProvider {
   name: string;
   generate(request: LLMRequest): Promise<LLMResponse>;
   isAvailable(): boolean;
+}
+
+export function parseToolCallsFromResponse(data: any): LLMResponseToolCall[] {
+  const choice = Array.isArray(data?.choices) ? data.choices[0] : undefined;
+  const functionCall = choice?.message?.function_call ?? choice?.function_call;
+  if (!functionCall || typeof functionCall?.name !== 'string') return [];
+
+  let args: Record<string, unknown> = {};
+  if (functionCall.args) {
+    if (typeof functionCall.args === 'string') {
+      try {
+        args = JSON.parse(functionCall.args);
+      } catch {
+        args = { raw: functionCall.args };
+      }
+    } else if (typeof functionCall.args === 'object' && functionCall.args !== null) {
+      args = functionCall.args;
+    }
+  }
+
+  return [{ name: functionCall.name, args }];
+}
+
+export function parseFinishReasonFromResponse(data: any): string | undefined {
+  const choice = Array.isArray(data?.choices) ? data.choices[0] : undefined;
+  return choice?.finish_reason ?? data?.finish_reason;
 }
 
 export class UnifiedLLMClient {

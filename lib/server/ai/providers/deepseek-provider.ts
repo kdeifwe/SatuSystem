@@ -1,4 +1,5 @@
 import type { LLMRequest, LLMResponse, LLMProvider } from '../llm-client';
+import { parseFinishReasonFromResponse, parseToolCallsFromResponse } from '../llm-client';
 
 const DEEPSEEK_CHAT_URL = 'https://api.deepseek.com/v1/chat/completions';
 
@@ -132,6 +133,8 @@ export class DeepSeekProvider implements LLMProvider {
       text,
       usage: parseUsage(data),
       provider: this.name,
+      toolCalls: parseToolCallsFromResponse(data),
+      finishReason: parseFinishReasonFromResponse(data),
     };
   }
 }
