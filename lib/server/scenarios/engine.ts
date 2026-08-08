@@ -1,5 +1,5 @@
 import { createAdminClient } from '@/lib/supabase/admin';
-import { llmClient } from '@/lib/server/ai/llm-client';
+import { llmClient, type LLMMessage } from '@/lib/server/ai/llm-client';
 import { GEMINI_CHAT_MODEL } from '@/lib/server/ai/gemini-client';
 
 export type ScenarioTrigger =
@@ -335,18 +335,20 @@ async function runAiWrite(
 
   const prompt = `Выполни задачу: ${instruction}. Используй только историю диалога ниже и составь ответ от лица AI.`;
 
-  const llmResponse = await llmClient.generate({
-    model: GEMINI_CHAT_MODEL,
-    messages: [
+    const messages: LLMMessage[] = [
       { role: 'system', content: prompt },
-      ...contents.map((item) => ({
+      ...(contents.map((item) => ({
         role: item.role === 'user' ? 'user' : 'assistant',
         content: item.parts?.[0]?.text ?? '',
-      })),
+      })) as LLMMessage[]),
       { role: 'user', content: instruction },
-    ],
-    temperature: 0.7,
-  });
+    ];
+
+    const llmResponse = await llmClient.generate({
+      model: GEMINI_CHAT_MODEL,
+      messages,
+      temperature: 0.7,
+    });
 
   const answer = llmResponse.text.trim();
   return answer || 'AI-сообщение создано, но текст пустой';
