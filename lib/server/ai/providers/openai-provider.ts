@@ -73,7 +73,14 @@ function buildOpenAIBody(request: LLMRequest): Record<string, unknown> {
   }
 
   if (typeof request.maxTokens === 'number') {
-    body.max_tokens = request.maxTokens;
+    // Some newer OpenAI models (gpt-5 family) expect `max_completion_tokens`
+    // instead of `max_tokens`. Use the appropriate field depending on model.
+    const modelName = String(request.model ?? '').toLowerCase();
+    if (modelName.startsWith('gpt-5')) {
+      body.max_completion_tokens = request.maxTokens;
+    } else {
+      body.max_tokens = request.maxTokens;
+    }
   }
 
   if (Array.isArray(request.tools) && request.tools.length > 0) {
