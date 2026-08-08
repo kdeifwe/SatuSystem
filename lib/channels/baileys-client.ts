@@ -15,6 +15,7 @@ import { runAgentTurnWithLead } from '@/lib/server/ai/orchestrator';
 import { handleIncomingMessageWithDependencies } from './baileys-handler';
 import { splitAgentMessage, calculateTypingDelay } from '@/lib/server/ai/message-splitter';
 import { enqueueNotification } from '@/lib/notifications';
+import { discoverPersistedAuthAgentIds } from './baileys-cold-start';
 
 const { normalizeConnectionStatus, buildChannelStatusUpdate } = require('@/lib/channels/status-utils');
 
@@ -55,6 +56,49 @@ export async function resetStaleChannelStatuses() {
       .eq('type', 'whatsapp');
   } catch (error) {
     logger.warn({ error }, 'Failed to reset WhatsApp channel statuses on cold start');
+  }
+}
+
+async function logSessionRestoreFailure(agentId: string, reason: string, error?: unknown) {
+  const admin = createAdminClient();
+  const payload = {
+    event: 'whatsapp_session_restore_failed',
+    agentId,
+    reason,
+    errorMessage: error instanceof Error ? error.message : String(error ?? 'unknown'),
+  };
+
+  logger.warn({ agentId, reason, error }, 'Failed to restore persisted WhatsApp session on cold start');
+
+  try {
+    await admin.from('notification_log').insert({
+      agent_id: agentId,
+      event_type: 'whatsapp_session_restore_failed',
+      payload,
+      delivery_status: 'pending',
+    });
+  } catch (notificationError) {
+    logger.error({ agentId, notificationError }, 'Failed to persist WhatsApp session restore failure notification');
+  }
+}
+
+async function restorePersistedWhatsAppSessions() {
+  await resetStaleChannelStatuses();
+
+  const agentIds = await discoverPersistedAuthAgentIds(authRoot);
+  if (agentIds.length === 0) {
+    logger.info('No persisted WhatsApp auth sessions found for cold-start restore');
+    return;
+  }
+
+  logger.info({ count: agentIds.length, agentIds }, 'Restoring persisted WhatsApp sessions from disk');
+
+  for (const agentId of agentIds) {
+    try {
+      await createBaileysClient(agentId);
+    } catch (error) {
+      await logSessionRestoreFailure(agentId, 'createBaileysClient_failed', error);
+    }
   }
 }
 
@@ -245,6 +289,7 @@ async function createBaileysClient(agentId: string, forceNewAuth = false) {
 
       if (isLoggedOut) {
         await clearAuthState(agentId);
+        await logSessionRestoreFailure(agentId, 'logged_out', update.lastDisconnect?.error?.message);
         return;
       }
 
@@ -350,4 +395,4 @@ export async function getBaileysStatus(agentId: string): Promise<BaileysClientIn
   }
 }
 
-await resetStaleChannelStatuses();
+void restorePersistedWhatsAppSessions();
