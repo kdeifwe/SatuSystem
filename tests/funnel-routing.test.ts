@@ -191,6 +191,25 @@ test('persists retry state through rpc and uses the same rpc response for duplic
   assert.equal(secondResult.duplicateHandoffSkipped, true);
 });
 
+test('routing prompt includes previous agent answer and explicit name-answer instruction', async () => {
+  const { buildRoutingPrompt } = await import('../lib/funnel/routing.ts');
+
+  const prompt = buildRoutingPrompt(
+    {
+      id: 'greeting',
+      title: 'Greeting',
+      content: 'Привет! Как вас зовут?',
+      transitions: [{ condition: 'answers_received', target: 'discovery' }],
+    } as any,
+    'Кыдырали',
+    'Привет! Как вас зовут?',
+  );
+
+  assert.match(prompt, /Последний ответ агента: Привет! Как вас зовут\?/);
+  assert.match(prompt, /Если текущий шаг содержит вопрос об имени, классе, предмете, ЕНТ, контакте, цене или желании учиться/);
+  assert.match(prompt, /Текст узла: Привет! Как вас зовут\?/);
+});
+
 test('resolves post-routing reply so handoff notice is sent while the original reply is suppressed', async () => {
   const { resolvePostRoutingReply } = await import('../lib/funnel/routing.ts');
 

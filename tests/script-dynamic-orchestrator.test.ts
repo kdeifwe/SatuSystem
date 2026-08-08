@@ -62,6 +62,43 @@ test('script node on second turn routes with saved reply instead of resending sc
   assert.equal(result.shouldRoutePendingReply, true);
 });
 
+test('pending script reply for name answer preserves previous agent question and can advance to discovery', async () => {
+  const routeCalls: Array<{ assistantReply: string; currentNodeId: string | null }> = [];
+  const { handleScriptNodeTurn } = await import('../lib/server/ai/orchestrator.ts');
+
+  const result = await handleScriptNodeTurn({
+    admin: {} as any,
+    agentId: 'agent-1',
+    leadId: 'lead-1',
+    conversationId: 'conversation-1',
+    flow: flow as any,
+    currentFunnelStep: 'node-1',
+    pendingScriptNodeId: 'node-1',
+    pendingScriptReply: 'Привет! Как вас зовут?',
+    userMessage: 'Кыдырали',
+    routeExecutor: async (args) => {
+      routeCalls.push({ assistantReply: args.assistantReply, currentNodeId: args.currentNodeId });
+      return {
+        skippedClassifier: false,
+        condition: 'answers_received',
+        targetNodeId: 'node-2',
+        shouldHandoff: false,
+        classifierResult: { condition: 'answers_received', confidence: 0.9 },
+        handoffExecuted: false,
+      };
+    },
+    sendScriptImpl: async () => undefined,
+    persistPendingScriptState: async () => undefined,
+  });
+
+  assert.equal(routeCalls.length, 1);
+  assert.equal(routeCalls[0].currentNodeId, 'node-1');
+  assert.equal(routeCalls[0].assistantReply, 'Привет! Как вас зовут?');
+  assert.equal(result.shouldSendScript, false);
+  assert.equal(result.shouldRoutePendingReply, true);
+  assert.equal(result.currentFunnelStep, 'node-2');
+});
+
 test('first script turn should not be treated as a pending-reply routing turn', async () => {
   const { shouldRenderScriptMessage } = await import('../lib/server/ai/orchestrator.ts');
 

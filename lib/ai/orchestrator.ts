@@ -8,7 +8,8 @@ import { compileAndSaveSystemPrompt } from './compile-system-prompt.ts';
 import { buildRetryContents } from './retry-context.ts';
 import { shouldBypassStyleValidation, shouldUseFallbackReply } from './response-policy';
 import { normalizeFunnelFlow } from '../funnel/normalize.ts';
-import { applyFunnelRouting, resolvePostRoutingReply } from '../funnel/routing.ts';
+import { applyFunnelRouting, resolvePostRoutingReply, upsertLeadFunnelState } from '../funnel/routing.ts';
+import { handleScriptNodeTurn, shouldRenderScriptMessage } from '../server/ai/orchestrator.ts';
 import { buildSandboxLeadAttributes, isSandboxLeadAttributes, buildSandboxConversationInsertData } from './sandbox-context';
 import { calculateTypingDelay, splitAgentMessage } from '../server/ai/message-splitter.ts';
 
@@ -434,23 +435,35 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
     ? [{ functionDeclarations: AGENT_TOOLS[0].functionDeclarations.filter((f) => allowedToolNames.includes(f.name)) }]
     : [];
 
+  const typingSimulation = Boolean((generalCapabilities?.typing_simulation) ?? true);
+
   const { leadId, conversationId, userMessageId } = await ensureLeadContext(admin, agentId, userMessage);
-  const [conversationStateResult, leadStateResult] = await Promise.all([
+  const [conversationStateResult, leadStateResult, leadFunnelStateResult] = await Promise.all([
     conversationId
       ? admin.from('conversations').select('current_funnel_step').eq('id', conversationId).maybeSingle()
       : Promise.resolve({ data: null as { current_funnel_step?: string | null } | null }),
     leadId
       ? admin.from('leads').select('attributes').eq('id', leadId).maybeSingle()
       : Promise.resolve({ data: null as { attributes?: Record<string, unknown> | null } | null }),
+    leadId
+      ? admin.from('lead_funnel_state').select('pending_script_node_id, pending_script_reply').eq('lead_id', leadId).eq('agent_id', agentId).maybeSingle()
+      : Promise.resolve({ data: null as { pending_script_node_id?: unknown; pending_script_reply?: unknown } | null }),
   ]);
   const conversationState = conversationStateResult.data;
   const leadState = leadStateResult.data;
+  const leadFunnelState = leadFunnelStateResult.data as { pending_script_node_id?: unknown; pending_script_reply?: unknown } | null;
   const persistedNodeId = typeof (leadState?.attributes as Record<string, unknown> | null)?.current_node_id === 'string'
     ? (leadState?.attributes as Record<string, unknown>).current_node_id
     : null;
+  const pendingScriptNodeId = typeof leadFunnelState?.pending_script_node_id === 'string'
+    ? leadFunnelState.pending_script_node_id
+    : null;
+  const pendingScriptReply = typeof leadFunnelState?.pending_script_reply === 'string'
+    ? leadFunnelState.pending_script_reply
+    : null;
   const flow = normalizeFunnelFlow(agent.dialogue_flow);
   const entryNodeId = flow?.entryNodeId ?? null;
-  const currentNodeId = conversationState?.current_funnel_step ?? persistedNodeId ?? entryNodeId ?? null;
+  let currentNodeId = conversationState?.current_funnel_step ?? persistedNodeId ?? entryNodeId ?? null;
   const bypassStyleValidation = shouldBypassStyleValidation(agent.dialogue_flow, currentNodeId);
 
   if (conversationId && !conversationState?.current_funnel_step && entryNodeId) {
@@ -464,6 +477,24 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
     conversationId: conversationId ?? '',
     isSandbox: true,
   };
+
+  const scriptTurnResolution = await handleScriptNodeTurn({
+    admin,
+    agentId,
+    leadId: leadId ?? null,
+    conversationId: conversationId ?? null,
+    flow,
+    currentFunnelStep: currentNodeId,
+    pendingScriptNodeId,
+    pendingScriptReply,
+    userMessage,
+    routeExecutor: applyFunnelRouting,
+    sendScriptImpl: async () => undefined,
+  });
+
+  if (scriptTurnResolution.shouldRoutePendingReply) {
+    currentNodeId = scriptTurnResolution.currentFunnelStep ?? currentNodeId;
+  }
 
   const baseContents: Array<Record<string, unknown>> = [
     ...buildChatHistory(history),
@@ -492,6 +523,18 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
 
     // Save script message
     const assistantMessageId = await appendMessage(admin, conversationId, 'ai', finalAnswer, []);
+
+    // Persist pending script state so следующий клиентский ответ может быть правильно маршрутизирован.
+    if (leadId) {
+      await upsertLeadFunnelState(admin, leadId, agentId, {
+        currentNodeId: currentNodeId,
+        status: 'active',
+        isNoMatch: false,
+        lastTransitionAt: new Date().toISOString(),
+        pendingScriptNodeId: currentNodeId,
+        pendingScriptReply: finalAnswer,
+      });
+    }
 
     // Log the script call (non-blocking)
     try {
@@ -811,12 +854,19 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
     latency_ms: Date.now() - startTime,
   });
 
+  const splitMessages = Boolean((generalCapabilities?.split_messages) ?? true);
+  const splitMaxParts = Math.min(3, Math.max(1, Number(generalCapabilities?.split_max_parts ?? 3)));
+  const messageParts = splitAgentMessage(finalReply, splitMessages, splitMaxParts).map((part) => ({
+    text: part.text,
+    delayMs: typingSimulation ? calculateTypingDelay(part.text) + part.delayMs : part.delayMs,
+  }));
+
   return {
     answer: finalReply,
     usedChunks: [],
-    messageParts: [{ text: finalReply, delayMs: 0 }],
-    splitMessages: false,
-    typingSimulation: false,
+    messageParts,
+    splitMessages,
+    typingSimulation,
     toolsUsed,
     tokensInput: response.payload.usageMetadata?.promptTokenCount ?? 0,
     tokensOutput: response.payload.usageMetadata?.candidatesTokenCount ?? 0,

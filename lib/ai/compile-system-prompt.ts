@@ -251,6 +251,7 @@ export function buildSystemPrompt(
   const humanCommunicationItems = [
     ...(humanCommunicationDefaults.length > 0 ? ['Базовые правила платформы:', ...humanCommunicationDefaults] : []),
     ...(humanCommunicationAgent.length > 0 ? ['Дополнительно для этого агента:', ...humanCommunicationAgent] : []),
+    'Инструкции шагов воронки — это цель и смысл, а не готовый текст для копирования. Формулируй их своими словами, избегай буквального повторения фраз из прошлых сообщений и узлов, но соблюдай бизнес-логику, тон и ограничения инструментов.',
   ];
 
   const knowledgeBaseDefaults = normalizeStringList(defaults.knowledge_base_principles);

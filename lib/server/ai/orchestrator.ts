@@ -166,13 +166,12 @@ export async function resolveDialogueNodeExecution(
   const currentDialogueNode = getDialogueNode(flow, nodeId);
   const legacyScriptText = extractLegacyScriptText(currentDialogueNode);
   const hasScriptParts = Array.isArray(currentDialogueNode?.script_parts) && currentDialogueNode.script_parts.length > 0;
-  const instructionText = getNodeInstructionText(currentDialogueNode);
   const isScriptLikeNode = currentDialogueNode?.message_type === 'script' || hasScriptParts || Boolean(legacyScriptText);
 
   if (isScriptLikeNode) {
     const scriptParts = hasScriptParts
       ? currentDialogueNode!.script_parts!
-      : (legacyScriptText ? [legacyScriptText] : (instructionText ? [instructionText] : []));
+      : (legacyScriptText ? [legacyScriptText] : []);
 
     if (scriptParts.length > 0) {
       const messageParts = handleScriptMessageParts(scriptParts, typingSimulationEnabled);

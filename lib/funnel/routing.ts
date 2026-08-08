@@ -1,6 +1,7 @@
 import { llmClient } from '../server/ai/llm-client';
 import { GEMINI_CHAT_MODEL } from '../server/ai/gemini-client.ts';
 import { buildGeminiObjectSchema } from '../server/ai/gemini-response-schema.ts';
+import { getNodeInstructionText } from './compile.ts';
 import { executeTool } from '../ai/tools/executor.ts';
 import { isSandboxLeadAttributes } from '../ai/sandbox-context.ts';
 import type { FunnelFlow, FunnelNode } from './types.ts';
@@ -105,7 +106,7 @@ function buildRoutingSchema(transitions: FunnelTransitionLike[]): Record<string,
   }, ['condition']);
 }
 
-function buildRoutingPrompt(node: FunnelNodeWithRouting, userMessage: string, assistantReply: string): string {
+export function buildRoutingPrompt(node: FunnelNodeWithRouting, userMessage: string, assistantReply: string): string {
   const transitions = Array.isArray(node.transitions) ? node.transitions : [];
   const transitionSummary = transitions.length > 0
     ? transitions.map((transition) => `${normalizeCondition(transition.condition) ?? 'unknown'} -> ${transition.target ?? 'unknown'}`).join('; ')
@@ -116,18 +117,22 @@ function buildRoutingPrompt(node: FunnelNodeWithRouting, userMessage: string, as
   const fieldHints = Array.isArray(node.extract_fields) && node.extract_fields.length > 0
     ? `Поля узла, которые нужно получить: ${node.extract_fields.join(', ')}`
     : 'Поля узла: не заданы';
+  const nodeText = getNodeInstructionText(node);
+  const agentReplyText = assistantReply.trim().length > 0 ? assistantReply : '[нет предыдущего ответа агента]';
 
   return [
     'Ты — routing-классификатор для FSM-воронки продаж.',
-    'На основе последнего сообщения клиента и текущего состояния узла определи, какой переход выбрать.',
+    'На основе последнего сообщения клиента и предыдущего ответа агента определи, какой переход выбрать.',
     `Текущий узел: ${node.id} (${node.title ?? 'без названия'})`,
-    `Текст узла: ${node.content ?? ''}`,
+    `Текст узла: ${nodeText}`,
     fieldHints,
     `Доступные переходы: ${transitionSummary}`,
     `Fallback: ${fallbackSummary}`,
     `Последнее сообщение клиента: ${userMessage}`,
-    `Последний ответ агента: ${assistantReply}`,
-    'Ключевое правило: если клиент дал явный ответ на вопросы текущего шага (имя, класс, предметы, желание учиться, ЕНТ, контакт, цену и т.п.), выбирай condition: "answers_received" и НЕ "no_match".',
+    `Последний ответ агента: ${agentReplyText}`,
+    'Важно: последний ответ агента чаще всего содержит вопрос или уточнение, на который клиент отвечает. Используй именно этот контекст для понимания, что означает короткое имя или одно слово.',
+    'Если текущий шаг содержит вопрос об имени, классе, предмете, ЕНТ, контакте, цене или желании учиться, а клиент ответил коротко или одним словом, считай это явным ответом.',
+    'Если клиент отвечает прямо на вопрос текущего шага (например, даёт имя, класс, предмет, дату, контакт, решение или желание), выбирай condition: "answers_received", а не "no_match".',
     'Пример: "Аня, 10 класс, хочу на ЕНТ" -> answers_received.',
     'Если клиент лишь задаёт вопрос, не даёт нужных данных или не отвечает по сути текущего шага, верни "no_match".',
     'Ответ только валидным JSON без комментариев.',

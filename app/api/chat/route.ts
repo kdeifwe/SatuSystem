@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { runAgentTurn } from '@/lib/ai/orchestrator';
+import { splitAgentMessage, calculateTypingDelay } from '@/lib/server/ai/message-splitter';
 
 export async function POST(req: NextRequest) {
   const supabase = createClient();
@@ -35,7 +36,16 @@ export async function POST(req: NextRequest) {
       message,
       history ?? [],
     );
-    return NextResponse.json(result);
+
+    const splitEnabled = Boolean(result.splitMessages ?? true);
+    const messageParts = Array.isArray(result.messageParts) && result.messageParts.length > 0
+      ? result.messageParts
+      : splitAgentMessage(result.answer, splitEnabled, 3).map((part) => ({
+        text: part.text,
+        delayMs: calculateTypingDelay(part.text),
+      }));
+
+    return NextResponse.json({ ...result, messageParts });
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });
   }
