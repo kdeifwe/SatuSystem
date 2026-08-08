@@ -436,6 +436,21 @@ export async function upsertLeadFunnelState(
   return Array.isArray(data) ? data[0] : data ?? null;
 }
 
+function inferTransitionCondition(label: string | null | undefined): string {
+  const normalized = typeof label === 'string' ? label.trim().toLowerCase() : '';
+  if (!normalized) {
+    return 'default';
+  }
+
+  const answerPhrases = [
+    /ответ|ответил|ответила|ответили|назвал|назвала|назвали|имя|представил|представилась|представился|сообщил|сообщила|сообщили/,
+    /клиент представил|клиент представился|client introduced|presented himself|presented herself/i,
+    /continue|next|next step|следующий шаг|дал ответ|дал информацию|дал данные/i,
+  ];
+
+  return answerPhrases.some((pattern) => pattern.test(normalized)) ? 'answers_received' : 'default';
+}
+
 function getNodeTransitions(node: FunnelNodeWithRouting, flow: FunnelFlow | null | undefined): FunnelTransitionLike[] {
   if (Array.isArray(node.transitions) && node.transitions.length > 0) {
     return node.transitions;
@@ -450,7 +465,7 @@ function getNodeTransitions(node: FunnelNodeWithRouting, flow: FunnelFlow | null
   }
 
   return outgoingEdges.map((edge) => ({
-    condition: /ответ|continue|next/i.test(edge.label ?? '') ? 'answers_received' : 'default',
+    condition: inferTransitionCondition(edge.label ?? ''),
     target: edge.to,
   }));
 }

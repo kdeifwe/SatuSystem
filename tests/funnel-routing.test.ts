@@ -210,6 +210,46 @@ test('routing prompt includes previous agent answer and explicit name-answer ins
   assert.match(prompt, /Текст узла: Привет! Как вас зовут\?/);
 });
 
+test('maps greeting edge label "Клиент представился" to answers_received and routes to discovery', async () => {
+  const { applyFunnelRouting } = await import('../lib/funnel/routing.ts');
+
+  const admin = {
+    rpc: async (_name: string, _params: Record<string, unknown>) => ({ data: [{ id: 'row-1', lead_id: 'lead-1', agent_id: 'agent-1', current_node_id: 'greeting', status: 'active', retry_count: 0, was_already_paused: false, last_transition_at: null, created_at: null, updated_at: null }], error: null }),
+    from: (_table: string) => ({
+      insert: async () => ({ data: null, error: null }),
+      update: () => ({ eq: async () => ({ data: null, error: null }) }),
+      select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { org_id: null, attributes: {} }, error: null }) }) }),
+    }),
+  };
+
+  const flow = {
+    entryNodeId: 'greeting',
+    nodes: [
+      { id: 'greeting', title: 'Greeting', content: 'Привет! Как вас зовут?' },
+      { id: 'discovery', title: 'Discovery', content: 'Расскажите про ваши текущие процессы.' },
+    ],
+    edges: [
+      { id: 'edge-1', from: 'greeting', to: 'discovery', label: 'Клиент представился' },
+    ],
+  };
+
+  const result = await applyFunnelRouting({
+    admin,
+    agentId: 'agent-1',
+    leadId: 'lead-1',
+    conversationId: 'conversation-1',
+    flow: flow as any,
+    currentNodeId: 'greeting',
+    userMessage: 'кыдырали',
+    assistantReply: 'Сәлеметсізбе! Есімім Самат, SatuSystem компаниясынанмын. Есіміңіз кім болады?',
+    classifier: async () => ({ condition: 'answers_received' }),
+  });
+
+  assert.equal(result.condition, 'answers_received');
+  assert.equal(result.targetNodeId, 'discovery');
+  assert.equal(result.shouldHandoff, false);
+});
+
 test('resolves post-routing reply so handoff notice is sent while the original reply is suppressed', async () => {
   const { resolvePostRoutingReply } = await import('../lib/funnel/routing.ts');
 
