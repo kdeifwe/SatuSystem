@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { supabase } from '@/lib/supabase-browser';
 
 type IntegrationType = 'telegram_bot' | 'telegram_userbot' | 'whatsapp' | 'instagram' | 'kaspi';
@@ -209,7 +210,7 @@ function IntegrationDetail({ type, agentId, connectedStatus, onBack, onStatusCha
           />
         )}
         {type === 'telegram_userbot' && <TelegramUserbotForm agentId={agentId} />}
-        {type === 'whatsapp' && <WhatsAppForm agentId={agentId} />}
+        {type === 'whatsapp' && <WhatsAppForm agentId={agentId} onStatusChanged={onStatusChanged} />}
         {type === 'instagram' && <InstagramForm agentId={agentId} />}
         {type === 'kaspi' && <KaspiPlaceholder />}
       </div>
@@ -547,7 +548,7 @@ function TelegramUserbotForm({ agentId }: { agentId: string }) {
   );
 }
 
-function WhatsAppForm({ agentId }: { agentId: string }) {
+function WhatsAppForm({ agentId, onStatusChanged }: { agentId: string; onStatusChanged: () => Promise<void> }) {
   const [status, setStatus] = useState<'connected' | 'qr' | 'disconnected' | 'error'>('disconnected');
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [jid, setJid] = useState<string | null>(null);
@@ -596,9 +597,36 @@ function WhatsAppForm({ agentId }: { agentId: string }) {
       }
 
       syncStatus(data);
+      await onStatusChanged();
     } catch (error) {
       setStatus('error');
       setLastError(error instanceof Error ? error.message : 'Ошибка подключения');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const disconnect = async () => {
+    setLoading(true);
+    setLastError(null);
+
+    try {
+      const response = await fetch('/api/whatsapp/disconnect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentId }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.error ?? 'Ошибка отключения');
+      }
+
+      syncStatus(data);
+      await onStatusChanged();
+    } catch (error) {
+      setStatus('error');
+      setLastError(error instanceof Error ? error.message : 'Ошибка отключения');
     } finally {
       setLoading(false);
     }
@@ -665,6 +693,21 @@ function WhatsAppForm({ agentId }: { agentId: string }) {
         <div className="rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-4 mb-4">
           <p className="text-sm font-medium text-[color:var(--color-chalk)]">WhatsApp подключен</p>
           {jid && <p className="text-sm text-[color:var(--color-smoke)]">JID: {jid}</p>}
+          <div className="mt-4">
+            <ConfirmDialog
+              title="Отключить WhatsApp?"
+              description="Агент перестанет отвечать на сообщения до повторного подключения."
+              confirmLabel="Отключить"
+              onConfirm={disconnect}
+            >
+              <button
+                disabled={loading}
+                className="px-4 py-2 rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] text-[color:var(--color-chalk)] text-sm hover:border-[color:var(--color-ash)] disabled:opacity-50"
+              >
+                {loading ? 'Отключаю...' : 'Отключить'}
+              </button>
+            </ConfirmDialog>
+          </div>
         </div>
       )}
 

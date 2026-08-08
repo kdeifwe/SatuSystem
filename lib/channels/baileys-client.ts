@@ -39,10 +39,14 @@ interface BaileysClientEntry extends BaileysClientInfo {
 declare global {
   // eslint-disable-next-line no-var
   var __baileysClients: Map<string, BaileysClientEntry> | undefined;
+  // eslint-disable-next-line no-var
+  var __baileysClientInitLocks: Map<string, Promise<BaileysClientEntry>> | undefined;
 }
 
 const clientStore = globalThis.__baileysClients ?? new Map<string, BaileysClientEntry>();
 globalThis.__baileysClients = clientStore;
+const clientInitLocks = globalThis.__baileysClientInitLocks ?? new Map<string, Promise<BaileysClientEntry>>();
+globalThis.__baileysClientInitLocks = clientInitLocks;
 
 const authRoot = path.join(process.cwd(), 'baileys-auth');
 const logger = pino({ level: process.env.NODE_ENV === 'development' ? 'info' : 'warn' });
@@ -115,6 +119,38 @@ async function clearAuthState(agentId: string) {
   } catch (error) {
     logger.warn({ agentId, error }, 'Failed to clear Baileys auth state');
   }
+}
+
+export async function disconnectBaileysClient(agentId: string): Promise<BaileysClientInfo> {
+  const inFlightInit = clientInitLocks.get(agentId);
+  if (inFlightInit) {
+    await inFlightInit.catch(() => undefined);
+  }
+
+  const existing = clientStore.get(agentId);
+  if (existing?.reconnectTimer) {
+    clearTimeout(existing.reconnectTimer);
+    existing.reconnectTimer = undefined;
+  }
+
+  if (existing?.sock) {
+    try {
+      const logoutHandler = (existing.sock as typeof existing.sock & { logout?: () => Promise<void> }).logout;
+      if (typeof logoutHandler === 'function') {
+        await logoutHandler.call(existing.sock);
+      }
+    } catch (error) {
+      logger.warn({ agentId, error }, 'Failed to logout Baileys socket');
+    }
+  }
+
+  clientStore.delete(agentId);
+  clientInitLocks.delete(agentId);
+
+  await clearAuthState(agentId);
+  await syncChannelConnectionState(agentId, 'disconnected', false);
+
+  return { status: 'disconnected' };
 }
 
 async function ensureWhatsAppChannel(agentId: string) {
@@ -214,123 +250,138 @@ async function createBaileysClient(agentId: string, forceNewAuth = false) {
     return clientStore.get(agentId)!;
   }
 
+  const existingLock = clientInitLocks.get(agentId);
+  if (existingLock && !forceNewAuth) {
+    return existingLock;
+  }
+
   if (forceNewAuth) {
     await clearAuthState(agentId);
   }
 
-  await ensureAuthDir(agentId);
-  await ensureWhatsAppChannel(agentId);
+  const initializationPromise = (async () => {
+    await ensureAuthDir(agentId);
+    await ensureWhatsAppChannel(agentId);
 
-  const authDir = path.join(authRoot, agentId);
-  const { state, saveCreds } = await useMultiFileAuthState(authDir);
-  const { version } = await fetchLatestBaileysVersion();
+    const authDir = path.join(authRoot, agentId);
+    const { state, saveCreds } = await useMultiFileAuthState(authDir);
+    const { version } = await fetchLatestBaileysVersion();
 
-  const sock = makeWASocket({
-    logger,
-    printQRInTerminal: false,
-    auth: state,
-    version,
-    browser: ['SatuSystem', 'Baileys', '1.0.0'],
-  });
+    const sock = makeWASocket({
+      logger,
+      printQRInTerminal: false,
+      auth: state,
+      version,
+      browser: ['SatuSystem', 'Baileys', '1.0.0'],
+    });
 
-  sock.ev.on('creds.update', saveCreds);
+    sock.ev.on('creds.update', saveCreds);
 
-  const clientEntry: BaileysClientEntry = {
-    sock,
-    status: 'disconnected',
-    reconnectAttempts: 0,
-  };
+    const clientEntry: BaileysClientEntry = {
+      sock,
+      status: 'disconnected',
+      reconnectAttempts: 0,
+    };
 
-  clientStore.set(agentId, clientEntry);
+    clientStore.set(agentId, clientEntry);
 
-  sock.ev.on('connection.update', async (update) => {
-    if (update.qr) {
-      if (clientEntry.reconnectTimer) {
-        clearTimeout(clientEntry.reconnectTimer);
-        clientEntry.reconnectTimer = undefined;
-      }
-      clientEntry.status = 'qr';
-      clientEntry.qrDataUrl = await qrcode.toDataURL(update.qr);
-      clientEntry.lastError = undefined;
-      await syncChannelConnectionState(agentId, 'qr', false);
-      return;
-    }
-
-    if (update.connection === 'open') {
-      if (clientEntry.reconnectTimer) {
-        clearTimeout(clientEntry.reconnectTimer);
-        clientEntry.reconnectTimer = undefined;
-      }
-      clientEntry.status = 'connected';
-      clientEntry.jid = sock.user?.id;
-      clientEntry.qrDataUrl = undefined;
-      clientEntry.lastError = undefined;
-      clientEntry.reconnectAttempts = 0;
-      clientEntry.lastReconnectAt = undefined;
-      clientEntry.lastDisconnectTime = undefined;
-      await syncChannelConnectionState(agentId, 'connected', true);
-      return;
-    }
-
-    if (update.connection === 'close') {
-      const statusCode = (update.lastDisconnect?.error as any)?.output?.statusCode;
-      const isLoggedOut = statusCode === DisconnectReason.loggedOut;
-
-      clientEntry.status = 'disconnected';
-      clientEntry.qrDataUrl = undefined;
-      clientEntry.lastError = update.lastDisconnect?.error?.message;
-      clientEntry.lastDisconnectTime = Date.now();
-      await syncChannelConnectionState(agentId, 'disconnected', false);
-
-      if (clientEntry.reconnectTimer) {
-        clearTimeout(clientEntry.reconnectTimer);
-        clientEntry.reconnectTimer = undefined;
-      }
-
-      if (isLoggedOut) {
-        await clearAuthState(agentId);
-        await logSessionRestoreFailure(agentId, 'logged_out', update.lastDisconnect?.error?.message);
-        return;
-      }
-
-      const now = Date.now();
-      if (clientEntry.lastReconnectAt && now - clientEntry.lastReconnectAt > 60_000) {
-        clientEntry.reconnectAttempts = 0;
-      }
-
-      clientEntry.reconnectAttempts += 1;
-      clientEntry.lastReconnectAt = now;
-
-      if (clientEntry.reconnectAttempts > 5) {
-        clientEntry.status = 'error';
-        clientEntry.lastError = 'Слишком много попыток переподключения, подключите заново вручную';
-        await syncChannelConnectionState(agentId, 'error', false);
-        logger.error({ agentId, attempts: clientEntry.reconnectAttempts }, 'Baileys reconnect limit exceeded');
-        return;
-      }
-
-      logger.warn({ agentId, statusCode, attempt: clientEntry.reconnectAttempts }, 'Соединение разорвано, переподключение через 5с');
-
-      clientEntry.reconnectTimer = setTimeout(async () => {
-        clientStore.delete(agentId);
-        try {
-          await createBaileysClient(agentId);
-        } catch (err) {
-          logger.error({ agentId, err }, 'Реконнект для Baileys не удался');
+    sock.ev.on('connection.update', async (update) => {
+      if (update.qr) {
+        if (clientEntry.reconnectTimer) {
+          clearTimeout(clientEntry.reconnectTimer);
+          clientEntry.reconnectTimer = undefined;
         }
-      }, 5000);
-    }
-  });
+        clientEntry.status = 'qr';
+        clientEntry.qrDataUrl = await qrcode.toDataURL(update.qr);
+        clientEntry.lastError = undefined;
+        await syncChannelConnectionState(agentId, 'qr', false);
+        return;
+      }
 
-  sock.ev.on('messages.upsert', async (upsert) => {
-    if (!Array.isArray(upsert.messages)) return;
+      if (update.connection === 'open') {
+        if (clientEntry.reconnectTimer) {
+          clearTimeout(clientEntry.reconnectTimer);
+          clientEntry.reconnectTimer = undefined;
+        }
+        clientEntry.status = 'connected';
+        clientEntry.jid = sock.user?.id;
+        clientEntry.qrDataUrl = undefined;
+        clientEntry.lastError = undefined;
+        clientEntry.reconnectAttempts = 0;
+        clientEntry.lastReconnectAt = undefined;
+        clientEntry.lastDisconnectTime = undefined;
+        await syncChannelConnectionState(agentId, 'connected', true);
+        return;
+      }
 
-    for (const message of upsert.messages) {
-      await handleIncomingMessage(agentId, sock, message as WAMessage);
-    }
-  });
+      if (update.connection === 'close') {
+        const statusCode = (update.lastDisconnect?.error as any)?.output?.statusCode;
+        const isLoggedOut = statusCode === DisconnectReason.loggedOut;
 
-  return clientEntry;
+        clientEntry.status = 'disconnected';
+        clientEntry.qrDataUrl = undefined;
+        clientEntry.lastError = update.lastDisconnect?.error?.message;
+        clientEntry.lastDisconnectTime = Date.now();
+        await syncChannelConnectionState(agentId, 'disconnected', false);
+
+        if (clientEntry.reconnectTimer) {
+          clearTimeout(clientEntry.reconnectTimer);
+          clientEntry.reconnectTimer = undefined;
+        }
+
+        if (isLoggedOut) {
+          await clearAuthState(agentId);
+          await logSessionRestoreFailure(agentId, 'logged_out', update.lastDisconnect?.error?.message);
+          return;
+        }
+
+        const now = Date.now();
+        if (clientEntry.lastReconnectAt && now - clientEntry.lastReconnectAt > 60_000) {
+          clientEntry.reconnectAttempts = 0;
+        }
+
+        clientEntry.reconnectAttempts += 1;
+        clientEntry.lastReconnectAt = now;
+
+        if (clientEntry.reconnectAttempts > 5) {
+          clientEntry.status = 'error';
+          clientEntry.lastError = 'Слишком много попыток переподключения, подключите заново вручную';
+          await syncChannelConnectionState(agentId, 'error', false);
+          logger.error({ agentId, attempts: clientEntry.reconnectAttempts }, 'Baileys reconnect limit exceeded');
+          return;
+        }
+
+        logger.warn({ agentId, statusCode, attempt: clientEntry.reconnectAttempts }, 'Соединение разорвано, переподключение через 5с');
+
+        clientEntry.reconnectTimer = setTimeout(async () => {
+          clientStore.delete(agentId);
+          try {
+            await createBaileysClient(agentId);
+          } catch (err) {
+            logger.error({ agentId, err }, 'Реконнект для Baileys не удался');
+          }
+        }, 5000);
+      }
+    });
+
+    sock.ev.on('messages.upsert', async (upsert) => {
+      if (!Array.isArray(upsert.messages)) return;
+
+      for (const message of upsert.messages) {
+        await handleIncomingMessage(agentId, sock, message as WAMessage);
+      }
+    });
+
+    return clientEntry;
+  })();
+
+  clientInitLocks.set(agentId, initializationPromise);
+
+  try {
+    return await initializationPromise;
+  } finally {
+    clientInitLocks.delete(agentId);
+  }
 }
 
 export async function getBaileysClient(agentId: string, options?: { forceNewAuth?: boolean }) {
