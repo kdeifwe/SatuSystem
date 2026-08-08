@@ -37,6 +37,30 @@ export interface LLMProvider {
 
 export function parseToolCallsFromResponse(data: any): LLMResponseToolCall[] {
   const choice = Array.isArray(data?.choices) ? data.choices[0] : undefined;
+  const toolCalls = choice?.message?.tool_calls;
+
+  if (Array.isArray(toolCalls)) {
+    return toolCalls
+      .filter((tc: any) => tc?.type === 'function' && typeof tc?.function?.name === 'string')
+      .map((tc: any) => {
+        let args: Record<string, unknown> = {};
+        if (typeof tc.function?.arguments === 'string') {
+          try {
+            args = JSON.parse(tc.function.arguments);
+          } catch {
+            args = {};
+          }
+        } else if (typeof tc.function?.arguments === 'object' && tc.function.arguments !== null) {
+          args = tc.function.arguments;
+        }
+
+        return {
+          name: tc.function.name,
+          args,
+        };
+      });
+  }
+
   const functionCall = choice?.message?.function_call ?? choice?.function_call;
   if (!functionCall || typeof functionCall?.name !== 'string') return [];
 

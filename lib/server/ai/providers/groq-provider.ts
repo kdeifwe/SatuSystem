@@ -77,7 +77,11 @@ function buildGroqBody(request: LLMRequest): Record<string, unknown> {
   }
 
   if (Array.isArray(request.tools) && request.tools.length > 0) {
-    body.functions = convertToolsForProvider(request.tools);
+    body.tools = convertToolsForProvider(request.tools).map((fn: any) => ({
+      type: 'function',
+      function: fn,
+    }));
+    body.tool_choice = 'auto';
   }
 
   return body;
