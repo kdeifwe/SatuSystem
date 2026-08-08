@@ -44,6 +44,7 @@ const clientStore = globalThis.__baileysClients ?? new Map<string, BaileysClient
 globalThis.__baileysClients = clientStore;
 
 const authRoot = path.join(process.cwd(), 'baileys-auth');
+console.log('[baileys] cwd check:', process.cwd(), 'authRoot:', authRoot);
 const logger = pino({ level: process.env.NODE_ENV === 'development' ? 'info' : 'warn' });
 
 (async () => {
