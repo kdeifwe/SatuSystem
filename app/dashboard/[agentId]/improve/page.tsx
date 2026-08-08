@@ -3,7 +3,8 @@
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Sparkles, FileText, AlertCircle, CheckCircle2, AlertTriangle, AlertOctagon, Workflow } from 'lucide-react';
+import { Sparkles, FileText, AlertCircle, CheckCircle2, AlertTriangle, AlertOctagon } from 'lucide-react';
+import { ImproveTabs } from './tabs';
 
 type CriticismData = {
   root_cause: string;
@@ -118,10 +119,7 @@ export default function ImprovePage({ params }: { params: { agentId: string } })
   return (
     <div className="hyper-dashboard-shell flex h-full flex-col">
       <div className="border-b border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] px-6 py-4">
-        <div className="flex flex-wrap items-center gap-2 text-sm font-medium text-[color:var(--color-smoke)]">
-          <span className="rounded-full border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] px-3 py-1 text-[color:var(--color-chalk)]">Улучшение</span>
-          <span className="rounded-full border border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] px-3 py-1 text-[color:var(--color-smoke)]">Скрипт продаж</span>
-        </div>
+        <ImproveTabs agentId={params.agentId} />
       </div>
 
       <div className="flex-1 overflow-y-auto px-6 py-8">
@@ -154,15 +152,6 @@ export default function ImprovePage({ params }: { params: { agentId: string } })
                   className="hyper-primary-btn w-full px-6 py-3 text-sm disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {loading ? 'Анализирую...' : 'Отправить'}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => router.push(`/dashboard/${params.agentId}/improve/flow`)}
-                  className="mt-3 flex w-full items-center justify-center gap-2 rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] px-6 py-3 text-sm font-semibold text-[color:var(--color-chalk)] transition hover:border-[color:var(--color-ash)]"
-                >
-                  <Workflow className="h-4 w-4" />
-                  Открыть конструктор воронки
                 </button>
               </div>
             </div>

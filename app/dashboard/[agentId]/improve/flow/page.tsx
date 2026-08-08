@@ -6,6 +6,7 @@ import { Background, Controls, MarkerType, MiniMap, ReactFlow, ReactFlowProvider
 import 'reactflow/dist/style.css';
 import { Loader2, MessageSquareText, Save, Sparkles, X } from 'lucide-react';
 import type { FunnelFlow } from '@/lib/funnel/types';
+import { ImproveTabs } from '../tabs';
 
 interface FunnelNodeData {
   title: string;
@@ -413,11 +414,8 @@ function FlowCanvas({ agentId }: { agentId: string }) {
   return (
     <div className="hyper-dashboard-shell flex h-full flex-col">
       <div className="border-b border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] px-6 py-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="text-sm font-semibold text-[color:var(--color-chalk)]">Конструктор воронки продаж</div>
-            <div className="text-sm text-[color:var(--color-smoke)]">Пишите сценарий в чате, а диаграмма будет обновляться автоматически</div>
-          </div>
+        <div className="flex items-center justify-between gap-4">
+          <ImproveTabs agentId={agentId} />
           <button
             type="button"
             onClick={saveFlow}
