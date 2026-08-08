@@ -1,5 +1,5 @@
 import { buildCategoriesSummary, buildCategorizationPrompt, normalizeCategory, type KBCategory } from './categories.ts';
-import { llmClient } from '../../server/ai/llm-client.ts';
+import { llmClient, type LLMMessage } from '../../server/ai/llm-client.ts';
 import { createAdminClient } from '../../supabase/admin.ts';
 
 const BATCH_SIZE = 10;
@@ -106,7 +106,7 @@ async function categorizeBatchDetailed(chunks: string[], options: CategorizeChun
   };
 
   try {
-    const messages = [
+    const messages: LLMMessage[] = [
       { role: 'user', content: buildCategorizationPrompt(chunks) },
     ];
 
