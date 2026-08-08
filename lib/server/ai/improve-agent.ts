@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { buildGeminiObjectSchema } from '@/lib/server/ai/gemini-response-schema';
+import { llmClient } from '@/lib/server/ai/llm-client';
 
 type ImprovePhase = 'critic' | 'generator' | 'validator';
 
@@ -30,6 +31,7 @@ type ImproveLogContext = {
   error?: string | null;
   parseError?: string | null;
   responseSchema?: boolean;
+  provider?: string | null;
   attempt?: number | null;
 };
 
@@ -357,6 +359,7 @@ async function logImproveCall(
       request: {
         type: 'improve_agent',
         phase: context.phase,
+        provider: context.provider ?? 'openai',
         agent_id: context.agentId,
         feedback: context.feedback,
         prompt: context.prompt,
@@ -365,7 +368,8 @@ async function logImproveCall(
         attempt: context.attempt ?? null,
       },
       response: {
-        // Store FULL raw_response from Gemini (includes candidates, usageMetadata, etc)
+        provider: context.provider ?? 'openai',
+        // Store FULL raw_response from OpenAI or Gemini (includes usage tokens, function call data, etc)
         raw: context.rawResponse ?? null,
         raw_response: context.rawResponse ?? null,
         response_preview: responsePreview,
@@ -393,8 +397,7 @@ async function logImproveCall(
   }
 }
 
-export async function callGeminiForImprove(
-  apiKey: string,
+export async function callOpenAIForImprove(
   systemInstruction: string,
   prompt: string,
   temperature: number,
@@ -407,131 +410,85 @@ export async function callGeminiForImprove(
     attempt?: number | null;
   }
 ): Promise<GeminiResponse> {
-  const models = ['gemini-2.5-flash', 'gemini-2.5-pro'];
-  const requestBody = {
-    system_instruction: { parts: [{ text: systemInstruction }] },
-    contents: [{ role: 'user', parts: [{ text: prompt }] }],
-    generationConfig: {
+  const startedAt = Date.now();
+  let fullRawResponse: any = null;
+
+  try {
+    const llmResponse = await llmClient.generate({
+      model: 'gpt-5.4',
+      messages: [
+        { role: 'system', content: systemInstruction },
+        { role: 'user', content: prompt },
+      ],
       temperature,
-      topP: 0.2,
-      maxOutputTokens: 32768,
-      responseMimeType: 'application/json',
-      thinkingConfig: { thinkingBudget: 0 },
-      ...(responseSchema ? { responseSchema } : {}),
-    },
-  };
+      maxTokens: 32768,
+      jsonSchema: responseSchema ?? undefined,
+    });
 
-  for (const model of models) {
-    const startedAt = Date.now();
-    let fullRawResponse: any = null;  // Capture raw response for logging even on error
-    try {
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(requestBody),
-        }
-      );
+    fullRawResponse = llmResponse.rawResponse ?? llmResponse;
+    const text = llmResponse.text ?? '';
+    const latencyMs = Date.now() - startedAt;
+    const tokensInput = llmResponse.usage?.promptTokens ?? 0;
+    const tokensOutput = llmResponse.usage?.completionTokens ?? 0;
+    const model = 'gpt-5.4';
+    const provider = llmResponse.provider ?? 'openai';
 
-      const rawText = await res.text();
-      let data: any = null;
-      try {
-        data = rawText ? JSON.parse(rawText) : null;
-      } catch {
-        data = null;
-      }
+    const logContext: ImproveLogContext = {
+      agentId: options.agentId ?? 'unknown',
+      feedback: options.feedback ?? '',
+      phase: options.phase,
+      prompt,
+      model,
+      provider,
+      latencyMs,
+      tokensInput,
+      tokensOutput,
+      attempt: options.attempt ?? null,
+      rawText: text,
+      rawResponse: fullRawResponse,
+      responseSchema: Boolean(responseSchema),
+    };
 
-      const candidate = data?.candidates?.[0] ?? null;
-      const { text, parsedJson } = getGeminiCandidateText(candidate);
-      const latencyMs = Date.now() - startedAt;
-      const rawUsageMetadata = data?.usageMetadata && typeof data.usageMetadata === 'object' ? data.usageMetadata : {};
-      const tokensInput = rawUsageMetadata?.promptTokenCount ?? 0;
-      const tokensOutput = rawUsageMetadata?.candidatesTokenCount ?? 0;
-      const thoughtsTokenCount = rawUsageMetadata?.thoughtsTokenCount ?? 0;
-      const normalizedUsageMetadata = {
-        ...(rawUsageMetadata ?? {}),
-        promptTokenCount: rawUsageMetadata?.promptTokenCount ?? 0,
-        candidatesTokenCount: rawUsageMetadata?.candidatesTokenCount ?? 0,
-        totalTokenCount: rawUsageMetadata?.totalTokenCount ?? 0,
-        thoughtsTokenCount,
-      };
-      const responsePayload = data && typeof data === 'object'
-        ? { ...data, usageMetadata: normalizedUsageMetadata }
-        : data;
-
-      // Save for error logging
-      fullRawResponse = responsePayload;
-
-      const logContext: ImproveLogContext = {
-        agentId: options.agentId ?? 'unknown',
-        feedback: options.feedback ?? '',
-        phase: options.phase,
-        prompt,
-        model,
-        latencyMs,
-        tokensInput,
-        tokensOutput,
-        attempt: options.attempt ?? null,
-        rawText: text,
-        rawResponse: responsePayload,
-        responseSchema: Boolean(responseSchema),
-      };
-
-      if (!res.ok) {
-        const errorText = rawText.slice(0, 1000);
-        logContext.error = `Gemini returned ${res.status}: ${errorText}`;
-        // CRITICAL: Log full response with usageMetadata even on HTTP error
-        await logImproveCall(options.admin ?? null, logContext);
-        console.error(`[improve] ${model} returned ${res.status}:`, errorText);
-        continue;
-      }
-
-      if (text.trim().length > 0 || parsedJson !== null) {
-        // CRITICAL: Log full response with usageMetadata on success
-        await logImproveCall(options.admin ?? null, logContext);
-        return {
-          text,
-          metadata: {
-            model,
-            finishReason: data?.candidates?.[0]?.finishReason,
-            promptTokenCount: tokensInput,
-            candidatesTokenCount: tokensOutput,
-            thoughtsTokenCount,
-          },
-          rawResponse: responsePayload,
-          parsedJson,
-        };
-      }
-
-      logContext.error = 'Gemini returned empty text';
-      // CRITICAL: Log full response with usageMetadata even on empty text
+    if (text.trim().length > 0) {
       await logImproveCall(options.admin ?? null, logContext);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(`[improve] ${model} error:`, message);
-      // CRITICAL: Log exception but include rawResponse if we have it
-      await logImproveCall(options.admin ?? null, {
-        agentId: options.agentId ?? 'unknown',
-        feedback: options.feedback ?? '',
-        phase: options.phase,
-        prompt,
-        model,
-        latencyMs: Date.now() - startedAt,
-        rawText: '',
-        // Pass rawResponse even on exception if available (for usageMetadata logging)
+      return {
+        text,
+        metadata: {
+          model,
+          finishReason: llmResponse.finishReason,
+          promptTokenCount: tokensInput,
+          candidatesTokenCount: tokensOutput,
+        },
         rawResponse: fullRawResponse,
-        error: message,
-        responseSchema: Boolean(responseSchema),
-      });
+        parsedJson: null,
+      };
     }
+
+    logContext.error = 'OpenAI returned empty text';
+    await logImproveCall(options.admin ?? null, logContext);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('[improve] OpenAI error:', message);
+    await logImproveCall(options.admin ?? null, {
+      agentId: options.agentId ?? 'unknown',
+      feedback: options.feedback ?? '',
+      phase: options.phase,
+      prompt,
+      model: 'gpt-5.4',
+      provider: 'openai',
+      latencyMs: Date.now() - startedAt,
+      rawText: '',
+      rawResponse: fullRawResponse,
+      error: message,
+      responseSchema: Boolean(responseSchema),
+      attempt: options.attempt ?? null,
+    });
   }
 
-  throw new Error('Все модели Gemini недоступны');
+  throw new Error('OpenAI did not return a valid response');
 }
 
-export async function callGeminiForImproveWithRetry(
-  apiKey: string,
+export async function callOpenAIForImproveWithRetry(
   systemInstruction: string,
   prompt: string,
   temperature: number,
@@ -547,7 +504,7 @@ export async function callGeminiForImproveWithRetry(
 ): Promise<{ parsedJson: Record<string, unknown>; geminiResponse: GeminiResponse; attempt: number }> {
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      const res = await callGeminiForImprove(apiKey, systemInstruction, prompt, temperature, responseSchema, {
+      const res = await callOpenAIForImprove(systemInstruction, prompt, temperature, responseSchema, {
         admin: options.admin ?? null,
         agentId: options.agentId,
         feedback: options.feedback,
@@ -565,7 +522,7 @@ export async function callGeminiForImproveWithRetry(
           feedback: options.feedback ?? '',
           phase: options.phase,
           prompt,
-          model: 'gemini',
+          model: 'gpt-5.4',
           latencyMs: 0,
           rawText: res.text,
           rawResponse: res.rawResponse ?? null,
@@ -587,7 +544,7 @@ export async function callGeminiForImproveWithRetry(
             feedback: options.feedback ?? '',
             phase: options.phase,
             prompt,
-            model: 'gemini',
+            model: 'gpt-5.4',
             latencyMs: 0,
             rawText: res.text,
             rawResponse: res.rawResponse ?? null,
@@ -611,7 +568,7 @@ export async function callGeminiForImproveWithRetry(
     }
   }
 
-  throw new Error('All Gemini attempts failed');
+  throw new Error('All OpenAI attempts failed');
 }
 
 export async function logFailedJsonParse(

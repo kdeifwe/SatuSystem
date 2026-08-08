@@ -48,6 +48,7 @@ export interface DialogueNodeExecutionResult {
 }
 
 interface GeminiClientResponse {
+  provider?: string;
   payload: {
     parts: Array<Record<string, unknown>>;
     finishReason?: string;
@@ -847,6 +848,7 @@ async function callGemini(
         return callGemini(modelName, systemPrompt, contents, tools, previousToolCalls, newGen, 1);
       }
       return {
+        provider: llmResponse.provider ?? 'gemini',
         payload: {
           parts: normalizedParts,
           finishReason,
@@ -859,6 +861,7 @@ async function callGemini(
     }
 
     return {
+      provider: llmResponse.provider ?? 'gemini',
       payload: {
         parts: normalizedParts,
         finishReason,
@@ -1654,6 +1657,7 @@ export async function runAgentTurn(
       response: {
         raw: rawReply,
         final: finalAnswer,
+        provider: response.provider ?? 'gemini',
         finish_reason: response.payload.finishReason ?? null,
         usage_metadata: response.payload.usageMetadata ?? null,
       },

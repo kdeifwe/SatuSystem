@@ -14,6 +14,7 @@ export interface LLMRequest {
   temperature?: number;
   maxTokens?: number;
   tools?: any[];
+  jsonSchema?: Record<string, unknown>;
 }
 
 export interface LLMResponseToolCall {
@@ -27,6 +28,7 @@ export interface LLMResponse {
   provider: string;
   toolCalls?: LLMResponseToolCall[];
   finishReason?: string;
+  rawResponse?: unknown;
 }
 
 export interface LLMProvider {

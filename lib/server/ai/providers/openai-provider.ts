@@ -73,7 +73,7 @@ function buildOpenAIBody(request: LLMRequest): Record<string, unknown> {
   }
 
   if (typeof request.maxTokens === 'number') {
-    body.max_completion_tokens = request.maxTokens;
+    body.max_tokens = request.maxTokens;
   }
 
   if (Array.isArray(request.tools) && request.tools.length > 0) {
@@ -82,6 +82,17 @@ function buildOpenAIBody(request: LLMRequest): Record<string, unknown> {
       function: fn,
     }));
     body.tool_choice = 'auto';
+  }
+
+  if (request.jsonSchema && typeof request.jsonSchema === 'object') {
+    body.functions = [
+      {
+        name: 'response',
+        description: 'Structured JSON response',
+        parameters: convertSchemaForProvider(request.jsonSchema),
+      },
+    ];
+    body.function_call = { name: 'response' };
   }
 
   return body;
@@ -98,6 +109,11 @@ function parseUsage(data: any) {
 
 function parseText(data: any): string {
   const choice = Array.isArray(data?.choices) ? data.choices[0] : undefined;
+  const functionArgs = choice?.message?.function_call?.arguments ?? choice?.function_call?.arguments;
+  if (typeof functionArgs === 'string' && functionArgs.trim().length > 0) {
+    return functionArgs.trim();
+  }
+
   const content = choice?.message?.content ?? choice?.text ?? '';
   return typeof content === 'string' ? content.trim() : '';
 }
@@ -139,6 +155,7 @@ export class OpenAIProvider implements LLMProvider {
       provider: this.name,
       toolCalls: parseToolCallsFromResponse(data),
       finishReason: parseFinishReasonFromResponse(data),
+      rawResponse: data,
     };
   }
 }

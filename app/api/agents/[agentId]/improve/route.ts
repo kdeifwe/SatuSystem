@@ -6,7 +6,7 @@ import {
   buildCriticSchema,
   buildGeneratorSchema,
   buildValidatorSchema,
-  callGeminiForImproveWithRetry,
+  callOpenAIForImproveWithRetry,
   type PromptPatch,
 } from '@/lib/server/ai/improve-agent';
 
@@ -33,8 +33,8 @@ export async function POST(
   }
 
   const admin = getAdmin();
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return NextResponse.json({ error: 'GEMINI_API_KEY не задан' }, { status: 500 });
+  const openaiApiKey = process.env.OPENAI_API_KEY;
+  if (!openaiApiKey) return NextResponse.json({ error: 'OPENAI_API_KEY не задан' }, { status: 500 });
 
   const { data: agent, error: agentError } = await admin
     .from('agents')
@@ -85,8 +85,7 @@ Rules:
         return true;
       };
 
-      const criticResult = await callGeminiForImproveWithRetry(
-        apiKey,
+const criticResult = await callOpenAIForImproveWithRetry(
         criticSystemInstruction,
         criticPrompt,
         0.3,
@@ -154,8 +153,7 @@ Rules:
       return true;
     };
 
-    const generatorResult = await callGeminiForImproveWithRetry(
-      apiKey,
+    const generatorResult = await callOpenAIForImproveWithRetry(
       generatorSystemInstruction,
       generatorPrompt,
       0.5,
@@ -223,8 +221,7 @@ Rules:
         return true;
       };
 
-      const validatorResult = await callGeminiForImproveWithRetry(
-        apiKey,
+      const validatorResult = await callOpenAIForImproveWithRetry(
         validatorSystemInstruction,
         validatorPrompt,
         0.1,
