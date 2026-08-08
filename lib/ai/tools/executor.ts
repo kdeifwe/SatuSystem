@@ -4,7 +4,7 @@ import { enqueueNotification } from '../../notifications.ts';
 import { sendTelegramNotification } from '../../extensions/telegram-notify.ts';
 import { type ToolCall, type ToolResult } from './registry.ts';
 import { isSandboxToolAllowed } from './sandbox-allowlist';
-import { getLinkedKBChunks } from '../../knowledge-base/search.ts';
+import { getLinkedKBChunks, searchKnowledgeBaseBilingual } from '../../knowledge-base/search.ts';
 import { normalizeFunnelFlow } from '../../funnel/normalize.ts';
 import type { FunnelFlow } from '../../funnel/types.ts';
 
@@ -51,8 +51,37 @@ async function dispatch(call: ToolCall, ctx: ToolContext): Promise<unknown> {
   }
 
   switch (call.name) {
-    case 'searchKnowledgeBase':
-      return searchKnowledgeBase(call.args as { query: string; top_k?: number }, ctx);
+    case 'searchKnowledgeBase': {
+      const argsTyped = call.args as { query: string; top_k?: number };
+      const topK = Math.min(argsTyped.top_k ?? 5, 10);
+      const searchResults = await searchKnowledgeBaseBilingual(ctx.agentId, argsTyped.query, topK, 0.3);
+      if (!searchResults || searchResults.length === 0) {
+        return {
+          found: false,
+          message: 'В базе знаний не найдено релевантной информации по запросу. Попробуйте переформулировать вопрос.',
+          query: argsTyped.query,
+        };
+      }
+
+      const linkedChunks = await getLinkedKBChunks(searchResults.map((chunk) => chunk.chunk_id));
+      return {
+        found: true,
+        count: searchResults.length,
+        results: searchResults.map((chunk) => ({
+          content: chunk.content,
+          metadata: chunk.metadata,
+          relevance: Math.round(chunk.similarity * 100),
+          priority: chunk.priority,
+        })),
+        linked_chunks: linkedChunks.map((chunk) => ({
+          id: chunk.id,
+          content: chunk.content,
+          relevance: Math.round(chunk.similarity * 100),
+          link_type: chunk.link_type,
+          priority: chunk.priority,
+        })),
+      };
+    }
     case 'redirectToOperator':
       return redirectToOperator(call.args as { reason: string; priority?: string }, ctx);
     case 'advanceFunnelStep':

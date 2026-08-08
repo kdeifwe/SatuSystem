@@ -643,11 +643,15 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
           { role: 'user', parts: [
             { text: `Клиент спрашивает: ${userMessage}` },
             ...summarizedToolParts,
-            { text: 'Сформулируй ответ клиенту на основе уже найденной информации выше, в human-tone, без упоминания поиска, лимитов или инструментов. Не используй списки и отвечай одним коротким сообщением.' },
+            { text: 'Сформулируй ответ клиенту на основе уже найденной информации выше, в human-tone, без упоминания поиска, лимитов или инструментов. Убедись, что ответ законченный и не обрывается на середине предложения. Не используй списки и отвечай одним коротким сообщением.' },
           ] },
         ];
 
-        const finalResponse = await callGemini(agent.model ?? GEMINI_CHAT_MODEL, compiledPrompt, finalContents, [], undefined, generationConfig);
+        const finalGenerationConfig = {
+          ...(generationConfig as any),
+          maxOutputTokens: Math.max((generationConfig as any)?.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS, 1024),
+        };
+        const finalResponse = await callGemini(agent.model ?? GEMINI_CHAT_MODEL, compiledPrompt, finalContents, [], undefined, finalGenerationConfig);
         lastFinishReason = finalResponse.payload.finishReason as string | undefined;
         const finalParts = finalResponse.payload.parts;
         const finalText = (finalParts as Array<Record<string, unknown>>).filter((part) => typeof part?.text === 'string').map((part) => part.text).join('\n').trim();
