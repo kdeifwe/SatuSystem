@@ -222,23 +222,29 @@ async function handleUpdate(update: any, agentId: string) {
     const systemPrompt = agent.system_prompt_compiled ?? 
       `Ты ${agent.name}. Отвечай кратко и по-человечески.`;
 
-    const { answer } = await runAgentTurnWithLead(agentId, systemPrompt, text, [], lead.id, currentUserMessageId);
+    const { answer, messageParts, splitMessages, typingSimulation } = await runAgentTurnWithLead(agentId, systemPrompt, text, [], lead.id, currentUserMessageId);
 
     console.log('[TG webhook] AI answer:', answer.slice(0, 100));
 
     // 10. Разделяем на части если включено
     const caps = agent.general_capabilities ?? {};
-    const splitEnabled = caps.split_messages ?? true;
-    const maxParts = caps.split_max_parts ?? 2;
-    const typingSimulation = caps.typing_simulation ?? true;
+    const splitEnabled = typeof splitMessages === 'boolean' ? splitMessages : (caps.split_messages ?? true);
+    const maxParts = Math.min(3, Math.max(1, Number(caps.split_max_parts ?? 2)));
+    const effectiveTypingSimulation = typeof typingSimulation === 'boolean' ? typingSimulation : (caps.typing_simulation ?? true);
 
-    const parts = splitAgentMessage(answer, splitEnabled).slice(0, maxParts);
+    const fallbackParts = splitAgentMessage(answer, splitEnabled, maxParts).map((part) => ({
+      text: part.text,
+      delayMs: effectiveTypingSimulation ? calculateTypingDelay(part.text) + part.delayMs : part.delayMs,
+    }));
+    const parts = (Array.isArray(messageParts) && messageParts.length > 0
+      ? messageParts
+      : fallbackParts).slice(0, maxParts);
 
     // 11. Отправляем каждую часть с задержкой
     for (let i = 0; i < parts.length; i++) {
       const part = parts[i];
       
-      if (i > 0 && typingSimulation) {
+      if (i > 0 && effectiveTypingSimulation) {
         // Имитируем "печатает..."
         await fetch(`https://api.telegram.org/bot${botToken}/sendChatAction`, {
           method: 'POST',
@@ -246,7 +252,7 @@ async function handleUpdate(update: any, agentId: string) {
           body: JSON.stringify({ chat_id: chatId, action: 'typing' }),
         });
         
-        const delay = calculateTypingDelay(part.text);
+        const delay = Math.max(0, part.delayMs);
         await new Promise(r => setTimeout(r, Math.min(delay, 3000)));
       }
 

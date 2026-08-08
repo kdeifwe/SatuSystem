@@ -341,7 +341,7 @@ async function appendMessage(admin: ReturnType<typeof createAdminClient>, conver
 export function buildFunnelStepInstruction(currentFunnelStep: string | null | undefined): string {
   if (!currentFunnelStep) return '';
 
-  return `\n\nТы сейчас на шаге "${currentFunnelStep}". После ответа система автоматически определит следующий шаг воронки по текущему контексту. Не пытайся вручную переключать шаги через инструменты — просто продолжай диалог в рамках текущего шага.`;
+  return `\n\nТы сейчас на шаге "${currentFunnelStep}". После ответа система автоматически определит следующий шаг воронки по текущему контексту. Не пытайся вручную переключать шаги через инструменты — просто продолжай диалог в рамках текущего шага. Для перехода к следующему шагу используй advanceFunnelStep.`;
 }
 
 async function logErrorIncident(admin: ReturnType<typeof createAdminClient>, agentId: string, details: Record<string, unknown>) {

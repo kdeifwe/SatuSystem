@@ -8,10 +8,11 @@ import { sendTelegramNotification } from '@/lib/extensions/telegram-notify';
 import { PRODUCTION_TOOL_DECLARATIONS, buildToolDeclarationsForAgent, mergeAllowedToolNames, type ToolCall } from '@/lib/ai/tools/registry';
 import { executeTool, type ToolContext } from '@/lib/ai/tools/executor';
 import { normalizeFunnelFlow } from '@/lib/funnel/normalize';
-import { compileFlowToPrompt } from '@/lib/funnel/compile';
+import { compileFlowToPrompt, getNodeInstructionText } from '@/lib/funnel/compile';
 import { applyFunnelRouting, resolvePostRoutingReply, upsertLeadFunnelState } from '@/lib/funnel/routing';
 import { buildConversationInsertData, buildSandboxConversationInsertData, buildSandboxLeadAttributes, isSandboxLeadAttributes } from '@/lib/ai/sandbox-context';
 import { tryBuildDeterministicFactAnswer } from '@/lib/server/ai/deterministic-facts';
+import { isValidLeadName } from '@/lib/server/lead-name';
 
 export interface ChatMessage {
   role: 'user' | 'model';
@@ -165,11 +166,13 @@ export async function resolveDialogueNodeExecution(
   const currentDialogueNode = getDialogueNode(flow, nodeId);
   const legacyScriptText = extractLegacyScriptText(currentDialogueNode);
   const hasScriptParts = Array.isArray(currentDialogueNode?.script_parts) && currentDialogueNode.script_parts.length > 0;
+  const instructionText = getNodeInstructionText(currentDialogueNode);
+  const isScriptLikeNode = currentDialogueNode?.message_type === 'script' || hasScriptParts || Boolean(legacyScriptText);
 
-  if (currentDialogueNode?.message_type === 'script' || hasScriptParts || legacyScriptText) {
+  if (isScriptLikeNode) {
     const scriptParts = hasScriptParts
       ? currentDialogueNode!.script_parts!
-      : (legacyScriptText ? [legacyScriptText] : []);
+      : (legacyScriptText ? [legacyScriptText] : (instructionText ? [instructionText] : []));
 
     if (scriptParts.length > 0) {
       const messageParts = handleScriptMessageParts(scriptParts, typingSimulationEnabled);
@@ -590,7 +593,7 @@ async function appendMessage(admin: ReturnType<typeof createAdminClient>, conver
 export function buildFunnelStepInstruction(currentFunnelStep: string | null | undefined): string {
   if (!currentFunnelStep) return '';
 
-  return `\n\nТы сейчас на шаге "${currentFunnelStep}". После ответа система автоматически определит следующий шаг воронки по текущему контексту. Не пытайся вручную переключать шаги через инструменты — просто продолжай диалог в рамках текущего шага.`;
+  return `\n\nТы сейчас на шаге "${currentFunnelStep}". После ответа система автоматически определит следующий шаг воронки по текущему контексту. Не пытайся вручную переключать шаги через инструменты — просто продолжай диалог в рамках текущего шага. Для перехода к следующему шагу используй advanceFunnelStep.`;
 }
 
 export async function applyRoutingAndFinalizeReply({
@@ -1264,8 +1267,10 @@ export async function runAgentTurn(
     // Call A (Script path): Send script_parts directly without Gemini
     console.log(`[SCRIPT_PATH] Agent ${agentId}: sending pre-written script parts from node ${currentFunnelStep}`);
 
-    const messageParts = nodeExecution.messageParts;
-    const finalAnswer = nodeExecution.finalAnswer;
+    let messageParts = nodeExecution.messageParts;
+    let finalAnswer = nodeExecution.finalAnswer;
+
+    // No hardcoded greeting override here — use the dialogue_flow script node as-is.
 
     if (leadId) {
       await upsertLeadFunnelState(admin, leadId, agentId, {
@@ -1407,8 +1412,15 @@ export async function runAgentTurn(
   let tokensOutput = 0;
 
   try {
+    const extraUserContextMessages: Array<{ role: string; parts: Array<{ text: string }> }> = [];
+    const knownName = leadAttributes && typeof leadAttributes === 'object' ? (leadAttributes as any).whatsapp_push_name : null;
+    if (typeof knownName === 'string' && isValidLeadName(knownName)) {
+      extraUserContextMessages.push({ role: 'user', parts: [{ text: `Известное имя клиента: ${knownName}` }] });
+    }
+
     response = await callGemini(GEMINI_CHAT_MODEL, fullSystemPrompt, [
       ...conversationContents,
+      ...extraUserContextMessages,
       { role: 'user', parts: [{ text: userMessage }] },
     ], toolPayload);
     tokensInput += response.payload.usageMetadata?.promptTokenCount ?? 0;

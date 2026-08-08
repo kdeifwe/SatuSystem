@@ -1,5 +1,6 @@
 import type { WAMessage } from '@whiskeysockets/baileys';
 import { splitAgentMessage, calculateTypingDelay } from '@/lib/server/ai/message-splitter';
+import { isValidLeadName } from '@/lib/server/lead-name';
 
 export interface BaileysHandlerDeps {
   createAdminClient: () => any;
@@ -12,7 +13,7 @@ export interface BaileysHandlerDeps {
     leadId: string,
     currentUserMessageId?: string,
     options?: { preferRealLead?: boolean }
-  ) => Promise<{ answer: string }>;
+  ) => Promise<{ answer: string; messageParts?: Array<{ text: string; delayMs: number }>; splitMessages?: boolean; typingSimulation?: boolean }>;
   logger?: { error: (meta: any, message: string) => void };
 }
 
@@ -57,25 +58,33 @@ export async function handleIncomingMessageWithDependencies(
 
     if (existingMsg) return;
 
-    const userName = message.pushName ?? remoteJid;
+    const rawPushName = message.pushName ?? null;
+    const userName = typeof rawPushName === 'string' && rawPushName.trim().length > 0 ? rawPushName.trim() : remoteJid;
+
     let { data: lead } = await admin
       .from('leads')
-      .select('id, ai_enabled')
+      .select('id, ai_enabled, attributes, name')
       .eq('channel_id', channel.id)
       .eq('external_id', remoteJid)
       .maybeSingle();
 
     if (!lead) {
+      const attrs = rawPushName ? { whatsapp_push_name: rawPushName } : null;
+      const insertPayload: any = {
+        org_id: channel.org_id,
+        channel_id: channel.id,
+        external_id: remoteJid,
+        status: 'new',
+        ai_enabled: true,
+      };
+
+      if (attrs) insertPayload.attributes = attrs;
+      if (rawPushName && isValidLeadName(rawPushName)) insertPayload.name = rawPushName;
+      // if name invalid, leave DB default (e.g. "Новый лид")
+
       const { data: newLead, error: leadError } = await admin
         .from('leads')
-        .insert({
-          org_id: channel.org_id,
-          channel_id: channel.id,
-          external_id: remoteJid,
-          name: userName,
-          status: 'new',
-          ai_enabled: true,
-        })
+        .insert(insertPayload)
         .select('id, ai_enabled')
         .single();
 
@@ -84,6 +93,21 @@ export async function handleIncomingMessageWithDependencies(
         return;
       }
       lead = newLead;
+    } else {
+      // Existing lead: persist raw pushName in attributes for audit/history
+      if (rawPushName) {
+        const existingAttrs = (lead.attributes as Record<string, unknown> | null) ?? {};
+        const mergedAttrs = { ...existingAttrs, whatsapp_push_name: rawPushName };
+        const updatePayload: any = { attributes: mergedAttrs };
+        if (isValidLeadName(rawPushName)) {
+          updatePayload.name = rawPushName;
+        }
+        try {
+          await admin.from('leads').update(updatePayload).eq('id', lead.id);
+        } catch (e) {
+          logger.error({ agentId, error: e }, 'Failed to update lead attributes with whatsapp pushName');
+        }
+      }
     }
 
     let { data: conversation } = await admin
@@ -149,7 +173,7 @@ export async function handleIncomingMessageWithDependencies(
     }
 
     const systemPrompt = agent.system_prompt_compiled ?? `Ты ${agent.name}. Отвечай кратко и по-человечески.`;
-    const { answer } = await deps.runAgentTurnWithLead(
+    const { answer, messageParts, splitMessages, typingSimulation } = await deps.runAgentTurnWithLead(
       agentId,
       systemPrompt,
       text,
@@ -159,12 +183,19 @@ export async function handleIncomingMessageWithDependencies(
     );
 
     const caps = agent.general_capabilities ?? {};
-    const parts = splitAgentMessage(answer, caps.split_messages ?? true, caps.split_max_parts ?? 2);
+    const maxParts = Math.min(3, Math.max(1, Number(caps.split_max_parts ?? 2)));
+    const fallbackParts = splitAgentMessage(answer, caps.split_messages ?? true, maxParts).map((part) => ({
+      text: part.text,
+      delayMs: typingSimulation ? calculateTypingDelay(part.text) + part.delayMs : part.delayMs,
+    }));
+    const parts = (Array.isArray(messageParts) && messageParts.length > 0
+      ? messageParts
+      : fallbackParts).slice(0, maxParts);
 
     for (let i = 0; i < parts.length; i += 1) {
       const part = parts[i];
-      const delay = i > 0 && caps.typing_simulation !== false
-        ? Math.min(calculateTypingDelay(part.text), 1000)
+      const delay = i > 0 && typingSimulation !== false
+        ? Math.max(0, part.delayMs)
         : 0;
 
       if (delay > 0) {

@@ -353,22 +353,30 @@ export async function processIncomingWhatsAppMessage(body: any) {
         .filter((message) => message.text.length > 0);
 
       const systemPrompt = agent.system_prompt_compiled ?? `Ты ${agent.name}`;
-      const { answer } = await runAgentTurnWithLead(agent.id, systemPrompt, text, historyFormatted, lead.id, currentUserMessageId, { preferRealLead: true });
+      const { answer, messageParts, splitMessages, typingSimulation } = await runAgentTurnWithLead(agent.id, systemPrompt, text, historyFormatted, lead.id, currentUserMessageId, { preferRealLead: true });
 
       const capabilities = agent.general_capabilities ?? {};
-      const parts = splitAgentMessage(answer, capabilities.split_messages ?? true).slice(0, capabilities.split_max_parts ?? 2);
+      const maxParts = Math.min(3, Math.max(1, Number(capabilities.split_max_parts ?? 2)));
+      const fallbackParts = splitAgentMessage(answer, capabilities.split_messages ?? true, maxParts).map((part) => ({
+        text: part.text,
+        delayMs: typingSimulation ? calculateTypingDelay(part.text) + part.delayMs : part.delayMs,
+      }));
+      const parts = (Array.isArray(messageParts) && messageParts.length > 0
+        ? messageParts
+        : fallbackParts).slice(0, maxParts);
       const credentials = (channel.credentials as Record<string, unknown> | null) ?? {};
       const phoneNumberId = String(credentials.phone_number_id ?? '');
       const accessToken = String(credentials.access_token ?? '');
       const recipient = phoneNumber.replace(/^\+/, '');
 
       for (let i = 0; i < parts.length; i += 1) {
-        if (i > 0 && capabilities.typing_simulation !== false) {
-          await new Promise((resolve) => setTimeout(resolve, calculateTypingDelay(parts[i].text)));
+        const part = parts[i];
+        if (i > 0 && typingSimulation !== false) {
+          await new Promise((resolve) => setTimeout(resolve, Math.max(0, part.delayMs)));
         }
 
         if (phoneNumberId && accessToken) {
-          await sendWhatsAppMessage(phoneNumberId, accessToken, recipient, parts[i].text).catch((error) => {
+          await sendWhatsAppMessage(phoneNumberId, accessToken, recipient, part.text).catch((error) => {
             console.error('[whatsapp webhook] send error', error);
           });
         }
