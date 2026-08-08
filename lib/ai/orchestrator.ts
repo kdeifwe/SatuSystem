@@ -463,8 +463,8 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
     : null;
   const flow = normalizeFunnelFlow(agent.dialogue_flow);
   const entryNodeId = flow?.entryNodeId ?? null;
-  let currentNodeId = conversationState?.current_funnel_step ?? persistedNodeId ?? entryNodeId ?? null;
-  const bypassStyleValidation = shouldBypassStyleValidation(agent.dialogue_flow, currentNodeId);
+  let currentNodeId = conversationState?.current_funnel_step ?? persistedNodeId ?? entryNodeId ?? null;  const stepInstruction = buildFunnelStepInstruction(currentNodeId);
+  const promptWithCurrentStep = `${compiledPrompt}${stepInstruction}`;  const bypassStyleValidation = shouldBypassStyleValidation(agent.dialogue_flow, currentNodeId);
 
   if (conversationId && !conversationState?.current_funnel_step && entryNodeId) {
     await admin.from('conversations').update({ current_funnel_step: entryNodeId }).eq('id', conversationId);
@@ -573,7 +573,7 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
 
   let lastFinishReason: string | undefined = undefined;
 
-  let response = await callGemini(agent.model ?? GEMINI_CHAT_MODEL, compiledPrompt, baseContents, allowedToolDeclarations, undefined, generationConfig);
+  let response = await callGemini(agent.model ?? GEMINI_CHAT_MODEL, promptWithCurrentStep, baseContents, allowedToolDeclarations, undefined, generationConfig);
   lastFinishReason = response.payload.finishReason as string | undefined;
   let parts = response.payload.parts;
   let toolsUsed: string[] = [];
@@ -646,7 +646,7 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
     }));
 
     retryContents = buildRetryContents(baseContents, parts as Array<Record<string, unknown>> | undefined, functionResponseParts);
-    response = await callGemini(agent.model ?? GEMINI_CHAT_MODEL, compiledPrompt, retryContents, allowedToolDeclarations, undefined, generationConfig);
+    response = await callGemini(agent.model ?? GEMINI_CHAT_MODEL, promptWithCurrentStep, retryContents, allowedToolDeclarations, undefined, generationConfig);
     lastFinishReason = response.payload.finishReason as string | undefined;
     parts = response.payload.parts;
   }
@@ -694,7 +694,7 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
           ...(generationConfig as any),
           maxOutputTokens: Math.max((generationConfig as any)?.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS, 1024),
         };
-        const finalResponse = await callGemini(agent.model ?? GEMINI_CHAT_MODEL, compiledPrompt, finalContents, [], undefined, finalGenerationConfig);
+        const finalResponse = await callGemini(agent.model ?? GEMINI_CHAT_MODEL, promptWithCurrentStep, finalContents, [], undefined, finalGenerationConfig);
         lastFinishReason = finalResponse.payload.finishReason as string | undefined;
         const finalParts = finalResponse.payload.parts;
         const finalText = (finalParts as Array<Record<string, unknown>>).filter((part) => typeof part?.text === 'string').map((part) => part.text).join('\n').trim();
@@ -730,7 +730,7 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
         ...baseContents,
         { role: 'user', parts: [{ text: `Ответь клиенту на его вопрос обычным текстом: "${userMessage}". Не вызывай никакие инструменты, просто ответь по существу на основе того, что тебе уже известно.` }] },
       ];
-      const noToolsResponse = await callGemini(agent.model ?? GEMINI_CHAT_MODEL, compiledPrompt, noToolsContents, [], undefined, generationConfig);
+      const noToolsResponse = await callGemini(agent.model ?? GEMINI_CHAT_MODEL, promptWithCurrentStep, noToolsContents, [], undefined, generationConfig);
       const noToolsParts = noToolsResponse.payload.parts;
       const noToolsReply = (noToolsParts as Array<Record<string, unknown>>).filter((part) => typeof part?.text === 'string').map((part) => part.text).join('\n').trim();
       if (noToolsReply) {
@@ -749,7 +749,7 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
   if (!finalReply.trim() && !handoffTriggered) {
     console.warn('[AGENT] empty reply returned by Gemini, retrying once', { agentId, conversationId, userMessage });
     try {
-      const retryResponse = await callGemini(agent.model ?? GEMINI_CHAT_MODEL, compiledPrompt, retryContents, allowedToolDeclarations, undefined, generationConfig);
+      const retryResponse = await callGemini(agent.model ?? GEMINI_CHAT_MODEL, promptWithCurrentStep, retryContents, allowedToolDeclarations, undefined, generationConfig);
       lastFinishReason = retryResponse.payload.finishReason as string | undefined;
       const retryParts = retryResponse.payload.parts;
       const retryReply = (retryParts as Array<Record<string, unknown>>).filter((part) => typeof part?.text === 'string').map((part) => part.text).join('\n').trim();
@@ -787,7 +787,7 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
   if (!validation.valid && !validationAttempted && !bypassStyleValidation && !shouldKeepCurrentReply) {
     validationAttempted = true;
     console.warn('[AGENT] validation failed, retrying once', { agentId, errors: validation.errors });
-    const retryResponse = await callGemini(agent.model ?? GEMINI_CHAT_MODEL, compiledPrompt, retryContents, allowedToolDeclarations, undefined, generationConfig);
+    const retryResponse = await callGemini(agent.model ?? GEMINI_CHAT_MODEL, promptWithCurrentStep, retryContents, allowedToolDeclarations, undefined, generationConfig);
     lastFinishReason = retryResponse.payload.finishReason as string | undefined;
     const retryParts = retryResponse.payload.parts;
     const retryReply = (retryParts as Array<Record<string, unknown>>).filter((part) => typeof part?.text === 'string').map((part) => part.text).join('\n').trim();
