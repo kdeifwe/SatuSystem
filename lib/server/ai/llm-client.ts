@@ -62,36 +62,17 @@ export class UnifiedLLMClient {
     const isGemini = normalized.startsWith('gemini-');
     const isDeepSeek = normalized.startsWith('deepseek-');
     const isOpenAI = normalized.startsWith('gpt-') || normalized.startsWith('gpt4');
-    const isGroq = normalized.startsWith('groq-') || normalized.startsWith('gpt-') || normalized.startsWith('gpt4');
+    const isGroqModel = normalized.startsWith('llama-') || normalized.startsWith('mixtral-');
 
-    if (providerName === 'gemini') {
-      return isGemini ? requestedModel : process.env.GEMINI_CHAT_MODEL ?? requestedModel;
-    }
+    if (providerName === 'gemini' && isGemini) return requestedModel;
+    if (providerName === 'deepseek' && isDeepSeek) return requestedModel;
+    if (providerName === 'openai' && isOpenAI) return requestedModel;
+    if (providerName === 'groq' && (isGroqModel || isOpenAI)) return requestedModel;
 
-    const primaryProvider = (process.env.PRIMARY_LLM_PROVIDER ?? 'gemini').toLowerCase();
-    const fallbackProvider = (process.env.FALLBACK_LLM_PROVIDER ?? 'openai').toLowerCase();
-    const primaryModel = process.env.PRIMARY_LLM_MODEL;
-    const fallbackModel = process.env.FALLBACK_LLM_MODEL;
-
-    if (providerName === primaryProvider && primaryModel) {
-      return primaryModel;
-    }
-
-    if (providerName === fallbackProvider && fallbackModel) {
-      return fallbackModel;
-    }
-
-    if (providerName === 'deepseek') {
-      return isDeepSeek ? requestedModel : primaryModel ?? fallbackModel ?? requestedModel;
-    }
-
-    if (providerName === 'openai') {
-      return isOpenAI ? requestedModel : primaryModel ?? fallbackModel ?? requestedModel;
-    }
-
-    if (providerName === 'groq') {
-      return isGroq ? requestedModel : primaryModel ?? fallbackModel ?? requestedModel;
-    }
+    if (providerName === 'gemini') return process.env.GEMINI_CHAT_MODEL ?? 'gemini-2.5-flash';
+    if (providerName === 'deepseek') return process.env.PRIMARY_LLM_MODEL ?? 'deepseek-v4-flash';
+    if (providerName === 'openai') return process.env.FALLBACK_LLM_MODEL ?? 'gpt-5.4-mini';
+    if (providerName === 'groq') return 'llama-3.3-70b-versatile';
 
     return requestedModel;
   }
@@ -99,7 +80,33 @@ export class UnifiedLLMClient {
   async generate(request: LLMRequest): Promise<LLMResponse> {
     const errors: string[] = [];
 
-    for (const providerName of this.fallbackChain) {
+    const model = (request.model || '').toLowerCase();
+    let targetProvider: string;
+
+    if (model.startsWith('gemini-')) {
+      targetProvider = 'gemini';
+    } else if (model.startsWith('deepseek-')) {
+      targetProvider = 'deepseek';
+    } else if (model.startsWith('gpt-') || model.startsWith('gpt4')) {
+      if (this.providers.has('openai')) {
+        targetProvider = 'openai';
+      } else if (this.providers.has('groq')) {
+        targetProvider = 'groq';
+      } else {
+        targetProvider = process.env.PRIMARY_LLM_PROVIDER ?? 'openai';
+      }
+    } else if (model.startsWith('llama-')) {
+      targetProvider = 'groq';
+    } else {
+      targetProvider = process.env.PRIMARY_LLM_PROVIDER ?? 'gemini';
+    }
+
+    const chain = [
+      targetProvider,
+      ...this.fallbackChain.filter((p) => p !== targetProvider),
+    ].filter((v, i, a) => a.indexOf(v) === i);
+
+    for (const providerName of chain) {
       const provider = this.providers.get(providerName);
       if (!provider || !provider.isAvailable()) continue;
 
