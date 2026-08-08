@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { generateQueryEmbedding } from './embeddings';
-import { llmClient } from '../server/ai/llm-client';
+import { llmClient, type LLMMessage } from '../server/ai/llm-client';
 import { GEMINI_PROMPT_MODEL } from '../server/ai/gemini-client';
 
 function getAdminClient() {
@@ -260,7 +260,7 @@ export async function generateBilingualSearchQueries(query: string): Promise<{ q
 Входная фраза: ${normalizedQuery}`;
 
   try {
-    const messages = [
+    const messages: LLMMessage[] = [
       { role: 'system', content: 'Формируй два коротких поисковых запросов для векторного поиска: естественный русский и естественный казахский. Не делай дословный перевод с русского, особенно для казахского варианта.' },
       { role: 'user', content: prompt },
     ];
