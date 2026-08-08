@@ -1,5 +1,5 @@
 import { buildCategoriesSummary, buildCategorizationPrompt, normalizeCategory, type KBCategory } from './categories.ts';
-import { geminiFetch } from '../../server/ai/gemini-client.ts';
+import { llmClient } from '../../server/ai/llm-client.ts';
 import { createAdminClient } from '../../supabase/admin.ts';
 
 const BATCH_SIZE = 10;
@@ -92,11 +92,6 @@ export async function buildSummaryForCategories(categories: KBCategory[]) {
 }
 
 async function categorizeBatchDetailed(chunks: string[], options: CategorizeChunksOptions = {}): Promise<CategorizationResult[]> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    return chunks.map(() => ({ category: 'other', fallbackUsed: true, error: 'gemini_api_key_missing' }));
-  }
-
   const requestPayload = {
     contents: [
       {
@@ -111,9 +106,18 @@ async function categorizeBatchDetailed(chunks: string[], options: CategorizeChun
   };
 
   try {
-    const response = await geminiFetch(GEMINI_MODEL, 'generateContent', requestPayload);
-    const payload = await response.json();
-    const text = payload?.candidates?.[0]?.content?.parts?.[0]?.text ?? '[]';
+    const messages = [
+      { role: 'user', content: buildCategorizationPrompt(chunks) },
+    ];
+
+    const llmResponse = await llmClient.generate({
+      model: GEMINI_MODEL,
+      messages,
+      temperature: 0.1,
+      maxTokens: 256,
+    });
+
+    const text = llmResponse.text ?? '[]';
     const categories = parseGeminiCategorizationText(text, chunks.length);
 
     if (categories) {
@@ -127,7 +131,7 @@ async function categorizeBatchDetailed(chunks: string[], options: CategorizeChun
     }
 
     const reason = 'gemini_response_not_array';
-    console.error('[knowledge-categorizer] Could not parse Gemini response', { text });
+    console.error('[knowledge-categorizer] Could not parse LLM response', { text });
     await logCategorizationCall(options, requestPayload, {
       status: 'fallback',
       fallback_reason: reason,

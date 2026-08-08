@@ -1,5 +1,6 @@
 import { createAdminClient } from '../supabase/admin.ts';
-import { geminiFetch, GEMINI_CHAT_MODEL } from '../server/ai/gemini-client.ts';
+import { llmClient } from '../server/ai/llm-client';
+import { GEMINI_CHAT_MODEL } from '../server/ai/gemini-client.ts';
 import { AGENT_TOOLS, mergeAllowedToolNames, type ToolCall } from './tools/registry.ts';
 import { executeTool, type ToolContext } from './tools/executor.ts';
 import { validateAgentAnswer } from './validate-output.ts';
@@ -227,37 +228,33 @@ async function callGemini(
       body.contents = contents;
     }
 
-    let res: Response;
-    try {
-      res = await geminiFetch(activeModel, 'generateContent', body);
-    } catch (err: any) {
-      const errorContext = {
-        model: activeModel,
-        endpoint: 'generateContent',
-        retryCount,
-        code: err?.code,
-        message: err?.message,
-        stack: err?.stack,
-      };
-      console.error('[GEMINI] fetch call failed', errorContext);
-      throw err;
-    }
+    const messages = [
+      { role: 'system', content: systemPrompt },
+      ...(contents.map((content) => ({
+        role: content.role === 'model' ? 'assistant' : (content.role as 'user' | 'assistant'),
+        content: Array.isArray(content.parts)
+          ? content.parts.map((part) => (typeof part?.text === 'string' ? part.text : '')).filter(Boolean).join('\n')
+          : '',
+      })) as any[]),
+    ];
 
-    if (!res.ok) {
-      const errText = await res.text();
-      const errorMessage = `Gemini API error ${res.status}: ${errText}`;
-      const combinedText = `${errText} ${res.status}`.toLowerCase();
-      const isModelIssue = res.status === 404 || /model not found|deprecated|not supported|does not support/i.test(combinedText);
-      if (isModelIssue) {
-        const modelIssueError = new Error(errorMessage) as Error & { status?: number };
-        modelIssueError.status = res.status;
-        throw modelIssueError;
-      }
-      console.error('[GEMINI] non-ok response', { status: res.status, error: errText, model: activeModel });
-      throw new Error(errorMessage);
-    }
+    const llmResponse = await llmClient.generate({
+      model: activeModel,
+      messages,
+      temperature: (generationConfig as any)?.temperature ?? 0.7,
+      maxTokens: (generationConfig as any)?.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+      tools: Array.isArray(tools) && tools.length > 0 ? tools : undefined,
+    });
 
-    const data = await res.json();
+    const data = {
+      candidates: [
+        {
+          content: {
+            parts: [{ text: llmResponse.text }],
+          },
+        },
+      ],
+    };
     if (process.env.LOG_GEMINI_RAW === '1') {
       try {
         console.log('[GEMINI][RAW_RESPONSE_JSON]', JSON.stringify(data, null, 2));
@@ -268,8 +265,7 @@ async function callGemini(
     }
     const candidate = data.candidates?.[0];
     const parts = (candidate?.content?.parts as Array<Record<string, unknown>> | undefined) ?? [];
-    const finishReason = candidate?.finishReason ?? candidate?.finish_reason;
-    const usageMetadata = candidate?.usageMetadata ?? data.usageMetadata;
+    const finishReason = undefined;
     const normalizedParts = normalizeResponseParts(parts, finishReason);
 
     if (finishReason === 'MAX_TOKENS' && retryCount === 0) {
@@ -285,8 +281,8 @@ async function callGemini(
           parts: normalizedParts,
           finishReason,
           usageMetadata: {
-            promptTokenCount: usageMetadata?.promptTokenCount ?? usageMetadata?.prompt_tokens ?? 0,
-            candidatesTokenCount: usageMetadata?.candidatesTokenCount ?? usageMetadata?.candidates_tokens ?? 0,
+            promptTokenCount: 0,
+            candidatesTokenCount: 0,
           },
         },
         usedModel: activeModel,
@@ -298,8 +294,8 @@ async function callGemini(
         parts: normalizedParts,
         finishReason,
         usageMetadata: {
-          promptTokenCount: usageMetadata?.promptTokenCount ?? usageMetadata?.prompt_tokens ?? 0,
-          candidatesTokenCount: usageMetadata?.candidatesTokenCount ?? usageMetadata?.candidates_tokens ?? 0,
+          promptTokenCount: 0,
+          candidatesTokenCount: 0,
         },
       },
       usedModel: activeModel,

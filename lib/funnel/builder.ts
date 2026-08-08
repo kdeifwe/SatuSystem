@@ -1,4 +1,5 @@
-import { geminiFetch, GEMINI_CHAT_MODEL } from '@/lib/server/ai/gemini-client';
+import { llmClient } from '@/lib/server/ai/llm-client';
+import { GEMINI_CHAT_MODEL } from '@/lib/server/ai/gemini-client';
 import { buildGeminiObjectSchema } from '@/lib/server/ai/gemini-response-schema';
 import type { FunnelFlow } from './types';
 
@@ -146,24 +147,25 @@ export async function buildOrUpdateFlow(
 
   const prompt = `${SYSTEM_PROMPT}\n\n${contextPrompt}\n\nИстория диалога:\n${conversationHistory.map((entry) => `${entry.role === 'user' ? 'Пользователь' : 'AI'}: ${entry.text}`).join('\n')}\n\nЗапрос пользователя:\n${userMessage}`;
 
-  const response = await geminiFetch(GEMINI_CHAT_MODEL, 'generateContent', {
-    system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
-    contents: [{ role: 'user', parts: [{ text: prompt }] }],
-    generationConfig: {
-      temperature: 0.2,
-      topP: 0.8,
-      maxOutputTokens: 8192,
-      responseMimeType: 'application/json',
-      responseSchema: FLOW_SCHEMA,
-    },
+  const llmResponse = await llmClient.generate({
+    model: GEMINI_CHAT_MODEL,
+    messages: [
+      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'user', content: prompt },
+    ],
+    temperature: 0.2,
+    maxTokens: 8192,
   });
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Gemini builder error ${response.status}: ${text}`);
-  }
-
-  const data = await response.json();
+  const data = {
+    candidates: [
+      {
+        content: {
+          parts: [{ text: llmResponse.text }],
+        },
+      },
+    ],
+  };
   const raw = extractText(data);
   if (!raw) {
     throw new Error('Gemini не вернул структурированный граф');

@@ -1,5 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/admin';
-import { geminiFetch, GEMINI_CHAT_MODEL } from '@/lib/server/ai/gemini-client';
+import { llmClient } from '@/lib/server/ai/llm-client';
+import { GEMINI_CHAT_MODEL } from '@/lib/server/ai/gemini-client';
 
 export type ScenarioTrigger =
   | { type: 'status_enter'; status: string }
@@ -334,22 +335,20 @@ async function runAiWrite(
 
   const prompt = `Выполни задачу: ${instruction}. Используй только историю диалога ниже и составь ответ от лица AI.`;
 
-  const res = await geminiFetch(GEMINI_CHAT_MODEL, 'generateContent', {
-    system_instruction: { parts: [{ text: prompt }] },
-    contents: [
-      ...contents,
-      { role: 'user', parts: [{ text: instruction }] },
+  const llmResponse = await llmClient.generate({
+    model: GEMINI_CHAT_MODEL,
+    messages: [
+      { role: 'system', content: prompt },
+      ...contents.map((item) => ({
+        role: item.role === 'user' ? 'user' : 'assistant',
+        content: item.parts?.[0]?.text ?? '',
+      })),
+      { role: 'user', content: instruction },
     ],
+    temperature: 0.7,
   });
 
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Gemini API error ${res.status}: ${errText}`);
-  }
-
-  const data = await res.json();
-  const parts = data.candidates?.[0]?.content?.parts as Array<Record<string, any>> | undefined;
-  const answer = parts?.filter((part) => typeof part?.text === 'string').map((part) => part.text).join('\n') ?? '';
+  const answer = llmResponse.text.trim();
   return answer || 'AI-сообщение создано, но текст пустой';
 }
 

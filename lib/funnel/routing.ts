@@ -1,4 +1,5 @@
-import { geminiFetch, GEMINI_CHAT_MODEL } from '../server/ai/gemini-client.ts';
+import { llmClient } from '../server/ai/llm-client';
+import { GEMINI_CHAT_MODEL } from '../server/ai/gemini-client.ts';
 import { buildGeminiObjectSchema } from '../server/ai/gemini-response-schema.ts';
 import { executeTool } from '../ai/tools/executor.ts';
 import { isSandboxLeadAttributes } from '../ai/sandbox-context.ts';
@@ -328,14 +329,33 @@ async function classifyTransition(node: FunnelNodeWithRouting, userMessage: stri
   }
 
   async function executeCall(retryCount = 0): Promise<string> {
-    const response = await geminiFetch(GEMINI_CHAT_MODEL, 'generateContent', requestBody);
+    const messages = [
+      { role: 'system', content: requestBody.system_instruction?.parts?.[0]?.text ?? '' },
+      ...((requestBody.contents ?? []) as Array<any>).map((content) => ({
+        role: content.role === 'model' ? 'assistant' : content.role,
+        content: Array.isArray(content.parts)
+          ? content.parts.map((part: any) => (typeof part?.text === 'string' ? part.text : '')).filter(Boolean).join('\n')
+          : '',
+      })),
+    ];
 
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`Routing classifier error ${response.status}: ${text}`);
-    }
+    const llmResponse = await llmClient.generate({
+      model: GEMINI_CHAT_MODEL,
+      messages,
+      temperature: requestBody.generationConfig?.temperature ?? 0.05,
+      maxTokens: requestBody.generationConfig?.maxOutputTokens ?? 512,
+    });
 
-    const data = await response.json();
+    const data = {
+      candidates: [
+        {
+          content: {
+            parts: [{ text: llmResponse.text }],
+          },
+        },
+      ],
+    };
+
     console.log('[Funnel][routing-classifier-raw-json]', JSON.stringify(data, null, 2));
 
     const candidate = Array.isArray((data as any)?.candidates) ? (data as any).candidates[0] : undefined;

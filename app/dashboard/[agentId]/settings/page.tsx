@@ -6,7 +6,17 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 
 const DEFAULT_AGENT_MODEL = 'gemini-2.5-flash';
-const ALLOWED_AGENT_MODELS = new Set(['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-pro', 'gemini-2.0-flash']);
+const ALLOWED_AGENT_MODELS = new Set([
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
+  'gemini-2.5-pro',
+  'gemini-2.0-flash',
+  'deepseek-v4-flash',
+  'deepseek-v4-pro',
+  'gpt-5.4-mini',
+  'gpt-5.4',
+  'llama-3.3-70b-versatile',
+]);
 
 function isAllowedAgentModel(model: unknown): model is string {
   return typeof model === 'string' && ALLOWED_AGENT_MODELS.has(model);
@@ -31,6 +41,11 @@ const modelGroups: Array<{
       { value: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite — дешёвый вариант для FAQ' },
       { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro — мощный вариант для сложных задач' },
       { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash — совместимый fallback' },
+      { value: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash — быстрый и экономный вариант' },
+      { value: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro — мощный вариант для сложных диалогов' },
+      { value: 'gpt-5.4-mini', label: 'GPT-5.4 Mini — лёгкий и быстрый вариант от OpenAI' },
+      { value: 'gpt-5.4', label: 'GPT-5.4 — полнофункциональная модель от OpenAI' },
+      { value: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70b Versatile — большая модель для сложных задач' },
     ],
   },
   {

@@ -1,5 +1,6 @@
  import { searchKnowledgeBaseWithLinks } from '@/lib/knowledge-base/search';
-import { geminiFetch, geminiCountTokens, GEMINI_CHAT_MODEL, GEMINI_PROMPT_MODEL } from '@/lib/server/ai/gemini-client';
+import { geminiCountTokens, GEMINI_CHAT_MODEL, GEMINI_PROMPT_MODEL } from '@/lib/server/ai/gemini-client';
+import { llmClient, type LLMResponse } from './llm-client';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { splitAgentMessage, calculateTypingDelay } from '@/lib/server/ai/message-splitter';
 import { getEmptyResponseFallbackMessage, injectHandoffSection, normalizeHandoffConfig, type HandoffConfig } from '@/lib/server/ai/handoff';
@@ -108,8 +109,6 @@ function tryBuildDeterministicFactAnswerWithLogging(
   console.log('[FACT_DEBUG] evaluating deterministic answer', { message, chunkCount: chunks.length, sample: chunks[0]?.content?.slice(0, 120) });
   return tryBuildDeterministicFactAnswer(message, chunks, leadGrade);
 }
-
-// === PHASE B SECTION 2.4: Script vs Dynamic split (Call A) ===
 // Helper: Find dialogue node by ID in funnel flow
 function getDialogueNode(flow: ReturnType<typeof normalizeFunnelFlow> | null | undefined, nodeId: string | null) {
   if (!flow || !nodeId) return null;
@@ -808,54 +807,27 @@ async function callGemini(
   const fallbackModel = 'gemini-2.5-flash';
 
   async function execute(activeModel: string): Promise<GeminiClientResponse> {
-    const body: Record<string, unknown> = {
-      system_instruction: { parts: [{ text: systemPrompt }] },
-      contents,
-      generationConfig,
-    };
+    const messages = [
+      { role: 'system', content: systemPrompt },
+      ...(contents.map((content) => ({
+        role: content.role === 'model' ? 'assistant' : (content.role as 'user' | 'assistant'),
+        content: Array.isArray(content.parts)
+          ? content.parts.map((part) => (typeof part?.text === 'string' ? part.text : '')).filter(Boolean).join('\n')
+          : '',
+      })) as any[]),
+    ];
 
-    if (Array.isArray(tools) && tools.length > 0) {
-      Object.assign(body, {
-        tools,
-        toolConfig: { functionCallingConfig: { mode: 'AUTO' } },
-      });
-    }
+    const llmResponse = await llmClient.generate({
+      model: activeModel,
+      messages,
+      temperature: (generationConfig as any)?.temperature ?? 0.7,
+      maxTokens: (generationConfig as any)?.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+      tools: Array.isArray(tools) && tools.length > 0 ? tools : undefined,
+    });
 
-    let res: Response;
-    try {
-      res = await geminiFetch(activeModel, 'generateContent', body);
-    } catch (err: any) {
-      const errorContext = {
-        model: activeModel,
-        endpoint: 'generateContent',
-        retryCount,
-        code: err?.code,
-        message: err?.message,
-        stack: err?.stack,
-      };
-      console.error('[GEMINI:SERVER] fetch call failed', errorContext);
-      throw err;
-    }
-
-    if (!res.ok) {
-      const errText = await res.text();
-      const errorMessage = `Gemini API error ${res.status}: ${errText}`;
-      const combinedText = `${errText} ${res.status}`.toLowerCase();
-      const isModelIssue = res.status === 404 || /model not found|deprecated|not supported|does not support/i.test(combinedText);
-      if (isModelIssue) {
-        const modelIssueError = new Error(errorMessage) as Error & { status?: number };
-        modelIssueError.status = res.status;
-        throw modelIssueError;
-      }
-      console.error('[GEMINI:SERVER] non-ok response', { status: res.status, error: errText, model: activeModel });
-      throw new Error(errorMessage);
-    }
-
-    const data = await res.json();
-    const candidate = data.candidates?.[0] ?? null;
-    const parts = (candidate?.content?.parts as Array<Record<string, unknown>> | undefined) ?? [];
-    const usageMetadata = candidate?.usageMetadata ?? data.usageMetadata ?? {};
-    const finishReason = candidate?.finishReason ?? candidate?.finish_reason;
+    const parts = llmResponse.text ? [{ text: llmResponse.text }] : [];
+    const usageMetadata = llmResponse.usage ?? ({ } as Record<string, unknown>);
+    const finishReason = undefined;
     const normalizedParts = normalizeResponseParts(parts, finishReason);
 
     if (finishReason === 'MAX_TOKENS' && retryCount === 0) {
@@ -871,8 +843,8 @@ async function callGemini(
           parts: normalizedParts,
           finishReason,
           usageMetadata: {
-            promptTokenCount: usageMetadata?.promptTokenCount ?? usageMetadata?.prompt_tokens ?? 0,
-            candidatesTokenCount: usageMetadata?.candidatesTokenCount ?? usageMetadata?.candidates_tokens ?? 0,
+            promptTokenCount: Number((usageMetadata as any)?.promptTokenCount ?? (usageMetadata as any)?.prompt_tokens ?? 0),
+            candidatesTokenCount: Number((usageMetadata as any)?.candidatesTokenCount ?? (usageMetadata as any)?.candidates_tokens ?? 0),
           },
         },
       };
@@ -883,8 +855,8 @@ async function callGemini(
         parts: normalizedParts,
         finishReason,
         usageMetadata: {
-          promptTokenCount: usageMetadata?.promptTokenCount ?? usageMetadata?.prompt_tokens ?? 0,
-          candidatesTokenCount: usageMetadata?.candidatesTokenCount ?? usageMetadata?.candidates_tokens ?? 0,
+          promptTokenCount: Number((usageMetadata as any)?.promptTokenCount ?? (usageMetadata as any)?.prompt_tokens ?? 0),
+          candidatesTokenCount: Number((usageMetadata as any)?.candidatesTokenCount ?? (usageMetadata as any)?.candidates_tokens ?? 0),
         },
       },
     };
@@ -1123,7 +1095,7 @@ export async function runAgentTurn(
 
   // Формируем toolDeclarations только для разрешённых тулов
   const toolDeclarations = buildToolDeclarationsForAgent(allowedToolNames, generalCapabilities, agentData?.dialogue_flow);
-  const toolPayload = toolDeclarations.length > 0 ? [{ functionDeclarations: toolDeclarations }] : [];
+  const toolPayload = toolDeclarations.length > 0 ? (toolDeclarations as unknown as Array<Record<string, unknown>>) : [];
   console.log(`[AGENT_TOOLS] Agent ${agentId}: allowed tools: [${allowedToolNames.join(', ')}], declarations: [${toolDeclarations.map((d) => d.name).join(', ')}]`);
 
   let resolvedLeadId: string | null = leadId ?? null;

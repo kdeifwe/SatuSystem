@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { generateQueryEmbedding } from './embeddings';
-import { geminiFetch, GEMINI_PROMPT_MODEL } from '../server/ai/gemini-client';
+import { llmClient } from '../server/ai/llm-client';
+import { GEMINI_PROMPT_MODEL } from '../server/ai/gemini-client';
 
 function getAdminClient() {
   return createClient(
@@ -259,27 +260,25 @@ export async function generateBilingualSearchQueries(query: string): Promise<{ q
 Входная фраза: ${normalizedQuery}`;
 
   try {
-    const response = await geminiFetch(GEMINI_PROMPT_MODEL, 'generateContent', {
-      system_instruction: {
-        parts: [{ text: 'Формируй два коротких поисковых запросов для векторного поиска: естественный русский и естественный казахский. Не делай дословный перевод с русского, особенно для казахского варианта.' }],
-      },
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature: 0.0,
-        topP: 0.85,
-        maxOutputTokens: 240,
-      },
+    const messages = [
+      { role: 'system', content: 'Формируй два коротких поисковых запросов для векторного поиска: естественный русский и естественный казахский. Не делай дословный перевод с русского, особенно для казахского варианта.' },
+      { role: 'user', content: prompt },
+    ];
+
+    const llmResponse = await llmClient.generate({
+      model: GEMINI_PROMPT_MODEL,
+      messages,
+      temperature: 0.0,
+      maxTokens: 240,
     });
 
-    if (!response.ok) {
+    const text = llmResponse.text ?? '';
+    if (!text) {
       const fallback = buildFallbackBilingualQueries(normalizedQuery);
       return { query_ru: fallback.query_ru, query_kk: fallback.query_kk };
     }
 
-    const data = await response.json();
-    const text = extractTextFromGeminiResponse(data);
     const parsed = parseBilingualSearchQueries(text, normalizedQuery);
-
     const queryRu = normalizeMetadataValue(parsed.query_ru) ?? normalizedQuery;
     const queryKk = normalizeMetadataValue(parsed.query_kk) ?? normalizedQuery;
     return { query_ru: queryRu, query_kk: queryKk };
