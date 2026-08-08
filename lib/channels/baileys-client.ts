@@ -44,10 +44,9 @@ const clientStore = globalThis.__baileysClients ?? new Map<string, BaileysClient
 globalThis.__baileysClients = clientStore;
 
 const authRoot = path.join(process.cwd(), 'baileys-auth');
-console.log('[baileys] cwd check:', process.cwd(), 'authRoot:', authRoot);
 const logger = pino({ level: process.env.NODE_ENV === 'development' ? 'info' : 'warn' });
 
-(async () => {
+export async function resetStaleChannelStatuses() {
   try {
     const admin = createAdminClient();
     await admin
@@ -57,7 +56,7 @@ const logger = pino({ level: process.env.NODE_ENV === 'development' ? 'info' : '
   } catch (error) {
     logger.warn({ error }, 'Failed to reset WhatsApp channel statuses on cold start');
   }
-})();
+}
 
 async function ensureAuthDir(agentId: string) {
   const dir = path.join(authRoot, agentId);
@@ -350,3 +349,5 @@ export async function getBaileysStatus(agentId: string): Promise<BaileysClientIn
     return { status: 'disconnected' };
   }
 }
+
+await resetStaleChannelStatuses();
