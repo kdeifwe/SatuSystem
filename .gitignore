@@ -43,3 +43,4 @@ scripts/verify-improve-logging.js
 MYKEYSS
 
 baseline-test.log
+.railway-temp-ssh-key*
