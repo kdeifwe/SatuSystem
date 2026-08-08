@@ -93,9 +93,9 @@ export class UnifiedLLMClient {
       } else if (this.providers.has('groq')) {
         targetProvider = 'groq';
       } else {
-        targetProvider = process.env.PRIMARY_LLM_PROVIDER ?? 'openai';
+        targetProvider = 'openai';
       }
-    } else if (model.startsWith('llama-')) {
+    } else if (model.startsWith('llama-') || model.startsWith('mixtral-')) {
       targetProvider = 'groq';
     } else {
       targetProvider = process.env.PRIMARY_LLM_PROVIDER ?? 'gemini';

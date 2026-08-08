@@ -2,8 +2,10 @@ import type { LLMRequest, LLMResponse, LLMProvider } from '../llm-client';
 
 const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
 
-function convertSchemaForOpenAI(schema: any): any {
-  if (!schema || typeof schema !== 'object') return { type: 'object', properties: {} };
+function convertSchemaForProvider(schema: any): any {
+  if (!schema || typeof schema !== 'object') {
+    return { type: 'object', properties: {} };
+  }
 
   const converted: any = {};
 
@@ -18,7 +20,7 @@ function convertSchemaForOpenAI(schema: any): any {
       Object.entries(schema.properties).map(([key, value]) => [
         key,
         typeof value === 'object' && value !== null
-          ? convertSchemaForOpenAI(value)
+          ? convertSchemaForProvider(value)
           : value,
       ]),
     );
@@ -37,13 +39,13 @@ function convertSchemaForOpenAI(schema: any): any {
   }
 
   if (schema.items && typeof schema.items === 'object') {
-    converted.items = convertSchemaForOpenAI(schema.items);
+    converted.items = convertSchemaForProvider(schema.items);
   }
 
   return converted;
 }
 
-function convertToolsForOpenAI(tools: any[]): any[] {
+function convertToolsForProvider(tools: any[]): any[] {
   return tools
     .map((tool) => {
       if (tool?.functionDeclarations && Array.isArray(tool.functionDeclarations)) {
@@ -55,7 +57,7 @@ function convertToolsForOpenAI(tools: any[]): any[] {
     .map((tool: any) => ({
       name: tool.name,
       description: tool.description,
-      parameters: tool.parameters ? convertSchemaForOpenAI(tool.parameters) : { type: 'object', properties: {} },
+      parameters: tool.parameters ? convertSchemaForProvider(tool.parameters) : { type: 'object', properties: {} },
     }));
 }
 
@@ -70,11 +72,11 @@ function buildOpenAIBody(request: LLMRequest): Record<string, unknown> {
   }
 
   if (typeof request.maxTokens === 'number') {
-    body.max_tokens = request.maxTokens;
+    body.max_completion_tokens = request.maxTokens;
   }
 
   if (Array.isArray(request.tools) && request.tools.length > 0) {
-    body.functions = convertToolsForOpenAI(request.tools);
+    body.functions = convertToolsForProvider(request.tools);
   }
 
   return body;
