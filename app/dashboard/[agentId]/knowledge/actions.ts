@@ -23,7 +23,8 @@ async function triggerIngest(sourceId: string): Promise<void> {
 export async function addTextSource(
   agentId: string,
   title: string,
-  content: string
+  content: string,
+  inlineInPrompt: boolean = false
 ): Promise<{ id: string }> {
   const supabase = createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -38,6 +39,7 @@ export async function addTextSource(
         title,
         raw_content: content,
         status: 'pending',
+        inline_in_prompt: inlineInPrompt,
       },
     ])
     .select('id')
@@ -53,7 +55,8 @@ export async function addTextSource(
 export async function addQASource(
   agentId: string,
   question: string,
-  answer: string
+  answer: string,
+  inlineInPrompt: boolean = false
 ): Promise<{ id: string }> {
   const supabase = createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -68,6 +71,7 @@ export async function addQASource(
         title: question,
         raw_content: answer,
         status: 'pending',
+        inline_in_prompt: inlineInPrompt,
       },
     ])
     .select('id')

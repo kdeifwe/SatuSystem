@@ -24,6 +24,41 @@ function extractGradeLabels(text: string): number[] {
   return Array.from(new Set(grades));
 }
 
+function guessCustomerLanguage(message: string): 'kk' | 'ru' | 'unknown' {
+  const text = (message ?? '').toLowerCase();
+  const hasKazakhLetters = /[әғқңөұүі]/i.test(text);
+  const hasKazakhWords = /\b(мен|сіз|сәлем|білмей|қанша|ұзақты|құны|пән|сынып|оқимын|оқисыз|сұраймын|қай|дәл|жоқ|иә)\b/i.test(text);
+  const hasRussianWords = /\b(что|где|когда|как|почему|да|нет|спасибо|пожалуйста|стоимость|цена|срок|длительность|сколько|курс)\b/i.test(text);
+
+  if (hasKazakhLetters || hasKazakhWords) return 'kk';
+  if (hasRussianWords) return 'ru';
+  return 'unknown';
+}
+
+function buildDurationAnswer(value: string, unit: string, language: 'kk' | 'ru' | 'unknown'): string {
+  if (language === 'kk') {
+    return `Оқу ұзақтығы — ${value} ${unit}.`;
+  }
+
+  return `Срок обучения — ${value} ${unit}.`;
+}
+
+function buildPriceAnswer(price: string, language: 'kk' | 'ru' | 'unknown'): string {
+  if (language === 'kk') {
+    return `Бағасы — ${price}.`;
+  }
+
+  return `Стоимость — ${price}.`;
+}
+
+function buildSubjectAnswer(subject: string, language: 'kk' | 'ru' | 'unknown'): string {
+  if (language === 'kk') {
+    return `Осы курс бойынша әдетте қарастырылатын пәндер: ${subject}.`;
+  }
+
+  return `По этому курсу обычно рассматриваются: ${subject}.`;
+}
+
 function scoreChunkForGrade(chunk: { content?: string; similarity?: number }, grade: number | null): number {
   if (grade === null) return 0;
   const labels = extractGradeLabels(chunk.content ?? '');
@@ -56,6 +91,8 @@ export function tryBuildDeterministicFactAnswer(
     const content = chunk.content ?? '';
     const lowerContent = content.toLowerCase();
 
+    const language = guessCustomerLanguage(message);
+
     if (/(канша|сколько|срок|длитель|длится|длиться|ұзақты|месяц|месяцев|ай)/i.test(lowerMessage)) {
       const durationMatch = content.match(/(\d+)\s*(?:ай|месяц(?:ев)?|month(?:s)?|мес)/i);
       if (durationMatch) {
@@ -64,21 +101,21 @@ export function tryBuildDeterministicFactAnswer(
         const unit = matchedUnit.toLowerCase().includes('month') || matchedUnit.toLowerCase().includes('месяц') || matchedUnit.toLowerCase().includes('мес')
           ? 'месяцев'
           : 'ай';
-        return `Срок обучения — ${value} ${unit}.`;
+        return buildDurationAnswer(value, unit, language);
       }
     }
 
     if (/(цена|стоимость|сколько стоит|құны|price|fee|cost)/i.test(lowerMessage)) {
       const priceMatch = content.match(/(\d[\s\d]{0,3}(?:тг|₸|kzt|тенге))/i);
       if (priceMatch) {
-        return `Стоимость — ${priceMatch[1]}.`;
+        return buildPriceAnswer(priceMatch[1], language);
       }
     }
 
     if (/(предмет|пән|subjects|subject)/i.test(lowerMessage) && /пән|предмет/i.test(lowerContent)) {
       const subjectMatch = content.match(/([А-Яа-яЁёA-Za-z0-9\s\-]+(?:пән|предмет|subject))/i);
       if (subjectMatch) {
-        return `По этому курсу обычно рассматриваются: ${subjectMatch[1].trim()}.`;
+        return buildSubjectAnswer(subjectMatch[1].trim(), language);
       }
     }
   }

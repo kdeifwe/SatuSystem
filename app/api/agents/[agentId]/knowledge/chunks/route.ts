@@ -84,6 +84,7 @@ export async function POST(request: NextRequest, { params }: { params: { agentId
     const embedding = await embedText(content);
     const admin = createAdminClient();
 
+    const inlineInPrompt = body.inlineInPrompt === true;
     const { data: sourceData, error: sourceError } = await admin
       .from('kb_sources')
       .insert([
@@ -93,6 +94,7 @@ export async function POST(request: NextRequest, { params }: { params: { agentId
           title,
           raw_content: content,
           status: 'done',
+          inline_in_prompt: inlineInPrompt,
           metadata: {
             category: type,
             type,

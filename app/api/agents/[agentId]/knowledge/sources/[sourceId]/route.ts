@@ -78,6 +78,7 @@ export async function PUT(
     const body = await request.json();
     const rawTag = body?.tag ?? (body?.metadata && body.metadata.tag) ?? null;
     const tag = typeof rawTag === 'string' ? rawTag.trim() : null;
+    const inlineInPrompt = typeof body?.inlineInPrompt === 'boolean' ? body.inlineInPrompt : undefined;
 
     // Fetch source and verify ownership
     const { data: source, error: fetchError } = await admin
@@ -101,9 +102,16 @@ export async function PUT(
       nextSourceMetadata.tag = tag;
     }
 
+    const updatePayload: Record<string, unknown> = {
+      metadata: nextSourceMetadata,
+    };
+    if (typeof inlineInPrompt === 'boolean') {
+      updatePayload.inline_in_prompt = inlineInPrompt;
+    }
+
     const { error: updateError } = await admin
       .from('kb_sources')
-      .update({ metadata: nextSourceMetadata })
+      .update(updatePayload)
       .eq('id', params.sourceId);
 
     if (updateError) {

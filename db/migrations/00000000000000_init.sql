@@ -62,6 +62,7 @@ create table if not exists kb_sources (
   title text,
   raw_content text,
   status text default 'pending',
+  inline_in_prompt boolean default false not null,
   metadata jsonb default '{}',
   created_at timestamptz default now()
 );

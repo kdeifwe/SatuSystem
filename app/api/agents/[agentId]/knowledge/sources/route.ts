@@ -28,7 +28,7 @@ export async function GET(request: NextRequest, { params }: { params: { agentId:
     const admin = createAdminClient();
     const { data, error } = await admin
       .from('kb_sources')
-      .select('id, title, type, status, file_size, metadata, created_at')
+      .select('id, title, type, status, file_size, metadata, created_at, inline_in_prompt')
       .eq('agent_id', params.agentId)
       .order('created_at', { ascending: false });
 
@@ -70,6 +70,7 @@ export async function POST(request: NextRequest, { params }: { params: { agentId
     let title = '';
     let type = 'other';
     let useAI = true;
+    let inlineInPrompt = false;
 
     if (contentType.includes('multipart/form-data')) {
       const formData = await request.formData();
@@ -79,6 +80,7 @@ export async function POST(request: NextRequest, { params }: { params: { agentId
       title = String(formData.get('title') || '').trim();
       type = getType(formData.get('type'));
       useAI = String(formData.get('useAI') || 'true') !== 'false';
+      inlineInPrompt = String(formData.get('inlineInPrompt') || 'false') === 'true';
     } else {
       const body = await request.json();
       file = null;
@@ -87,6 +89,7 @@ export async function POST(request: NextRequest, { params }: { params: { agentId
       title = String(body.title || '').trim();
       type = getType(body.type);
       useAI = body.useAI !== false;
+      inlineInPrompt = body.inlineInPrompt === true;
     }
 
     if (file) {
@@ -194,6 +197,7 @@ export async function POST(request: NextRequest, { params }: { params: { agentId
             title: sourceTitle,
             status: 'processing',
             raw_content: content,
+            inline_in_prompt: inlineInPrompt,
             metadata: {
               type: sourceType,
               title: sourceTitle,

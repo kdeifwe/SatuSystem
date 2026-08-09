@@ -62,6 +62,7 @@ const currencies: Currency[] = ['KZT', 'USD', 'EUR', 'RUB'];
 const timezones: Timezone[] = ['Asia/Almaty', 'Europe/Moscow', 'UTC'];
 const tones: Tone[] = ['Формальный', 'Дружелюбный', 'Нейтральный'];
 const addressForms: AddressForm[] = ['Адаптивное', 'На "вы"', 'На "ты"'];
+const INLINE_KB_WARNING_THRESHOLD = 18000;
 
 const toolOptions = [
   { value: 'searchKnowledgeBase', label: 'Поиск по базе знаний' },
@@ -134,6 +135,8 @@ export default function CreateAgentPage() {
   const [processingStep, setProcessingStep] = useState('');
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [statusType, setStatusType] = useState<'success' | 'error' | null>(null);
+  const [textInlineInPrompt, setTextInlineInPrompt] = useState(false);
+  const [qaInlineInPrompt, setQaInlineInPrompt] = useState(false);
   const [step2ValidationError, setStep2ValidationError] = useState('');
 
   const scenarioLabels: Record<Scenario, string> = {
@@ -513,12 +516,13 @@ export default function CreateAgentPage() {
     if (!agentId || !sourceText.trim()) return;
 
     try {
-      await addTextSource(agentId, 'Текст', sourceText);
+      await addTextSource(agentId, 'Текст', sourceText, textInlineInPrompt);
       setSources((prev) => [
         ...prev,
         { id: Math.random().toString(), title: 'Текст', type: 'text', status: 'pending' },
       ]);
       setSourceText('');
+      setTextInlineInPrompt(false);
       setShowSourceForm(null);
     } catch (error) {
       console.error('Error adding text source:', error);
@@ -530,13 +534,14 @@ export default function CreateAgentPage() {
     if (!agentId || !qaQuestion.trim() || !qaAnswer.trim()) return;
 
     try {
-      await addQASource(agentId, qaQuestion, qaAnswer);
+      await addQASource(agentId, qaQuestion, qaAnswer, qaInlineInPrompt);
       setSources((prev) => [
         ...prev,
         { id: Math.random().toString(), title: qaQuestion, type: 'qa', status: 'pending' },
       ]);
       setQaQuestion('');
       setQaAnswer('');
+      setQaInlineInPrompt(false);
       setShowSourceForm(null);
     } catch (error) {
       console.error('Error adding QA source:', error);
@@ -749,6 +754,19 @@ export default function CreateAgentPage() {
                       rows={5}
                       className="w-full rounded-3xl border border-gray-300 bg-white px-4 py-3 text-gray-900 shadow-sm focus:border-blue-600 focus:outline-none"
                     />
+                    <label className="flex items-center gap-3 text-sm text-gray-700">
+                      <input
+                        type="checkbox"
+                        checked={textInlineInPrompt}
+                        onChange={(e) => setTextInlineInPrompt(e.target.checked)}
+                      />
+                      <span>Включить в системный промпт как CORE_KNOWLEDGE</span>
+                    </label>
+                    {textInlineInPrompt && sourceText.length > INLINE_KB_WARNING_THRESHOLD && (
+                      <div className="rounded-3xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                        ⚠️ Содержимое слишком большое для inline-подборки ({sourceText.length} / {INLINE_KB_WARNING_THRESHOLD}). Лучше оставить опцию выключенной и использовать поиск по базе знаний.
+                      </div>
+                    )}
                     <Button variant="primary" onClick={handleAddTextSource}>
                       Добавить
                     </Button>
@@ -786,6 +804,19 @@ export default function CreateAgentPage() {
                       rows={4}
                       className="w-full rounded-3xl border border-gray-300 bg-white px-4 py-3 text-gray-900 shadow-sm focus:border-blue-600 focus:outline-none"
                     />
+                    <label className="flex items-center gap-3 text-sm text-gray-700">
+                      <input
+                        type="checkbox"
+                        checked={qaInlineInPrompt}
+                        onChange={(e) => setQaInlineInPrompt(e.target.checked)}
+                      />
+                      <span>Включить в системный промпт как CORE_KNOWLEDGE</span>
+                    </label>
+                    {qaInlineInPrompt && (qaQuestion.length + qaAnswer.length) > INLINE_KB_WARNING_THRESHOLD && (
+                      <div className="rounded-3xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                        ⚠️ Содержимое слишком большое для inline-подборки ({qaQuestion.length + qaAnswer.length} / {INLINE_KB_WARNING_THRESHOLD}). Лучше оставить опцию выключенной и использовать поиск по базе знаний.
+                      </div>
+                    )}
                     <Button variant="primary" onClick={handleAddQASource}>
                       Добавить
                     </Button>

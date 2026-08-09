@@ -83,6 +83,35 @@ function normalizeResponseParts(parts: Array<Record<string, unknown>> | undefine
   return trimmedText === text ? (parts ?? []) : [{ text: trimmedText }];
 }
 
+export function getToolExecutionPolicy(toolName: string, toolUsageCounts: Record<string, number>) {
+  const previousCalls = toolUsageCounts[toolName] ?? 0;
+  if (previousCalls >= 1) {
+    return {
+      shouldExecute: false,
+      reason: `${toolName} already used once in this turn`,
+    };
+  }
+
+  return { shouldExecute: true };
+}
+
+export function buildToolFailureFallbackMessage(toolResults: Array<Record<string, unknown>>) {
+  const failedResults = toolResults.filter((result) => Boolean(result.error));
+  if (failedResults.length === 0) {
+    return null;
+  }
+
+  const failedToolNames = failedResults
+    .map((result) => (typeof result.name === 'string' ? result.name : ''))
+    .filter(Boolean);
+
+  if (failedToolNames.includes('createKaspiInvoice')) {
+    return 'Счёт сейчас не получается оформить автоматически. Я не могу подтвердить, что он отправлен, и не буду обещать это клиенту. Могу уточнить данные для счёта или передать запрос оператору.';
+  }
+
+  return 'Не удалось выполнить действие автоматически. Я не могу подтвердить успех и не буду обещать его клиенту. Могу уточнить детали или передать запрос оператору.';
+}
+
 const AGENT_CACHE_TTL_MS = 30_000;
 const agentCache = new Map<string, { expiresAt: number; data: Record<string, unknown> | null }>();
 
@@ -1481,23 +1510,31 @@ export async function runAgentTurn(
         continue;
       }
 
-      const previousCalls = toolUsageCounts[toolCall.name] ?? 0;
-      if (toolCall.name === 'searchKnowledgeBase' && previousCalls >= 1) {
+      const policy = getToolExecutionPolicy(toolCall.name, toolUsageCounts);
+      if (!policy.shouldExecute) {
         toolResults.push({
           name: toolCall.name,
-          result: { skipped: true, reason: 'searchKnowledgeBase already used in this turn' },
+          result: { skipped: true, reason: policy.reason },
         });
         continue;
       }
 
-      toolUsageCounts[toolCall.name] = previousCalls + 1;
+      toolUsageCounts[toolCall.name] = (toolUsageCounts[toolCall.name] ?? 0) + 1;
       toolsUsed.push(toolCall.name);
       console.log('[PROD_TOOL] calling', { agentId, conversationId, name: toolCall.name, args: toolCall.args });
       const toolResult = await executeTool(toolCall as ToolCall, toolContext);
       toolResults.push({ name: toolCall.name, result: toolResult.result, error: toolResult.error });
       console.log('[PROD_TOOL_RESULT]', { agentId, name: toolCall.name, result: toolResult.result, error: toolResult.error });
 
-      if (toolCall.name === 'redirectToOperator' && toolResult.result && !toolResult.error) {
+      if (toolResult.error) {
+        const fallbackMessage = buildToolFailureFallbackMessage(toolResults);
+        if (fallbackMessage) {
+          finalAnswer = fallbackMessage;
+        }
+        break;
+      }
+
+      if (toolCall.name === 'redirectToOperator' && toolResult.result) {
         const redirectOutcome = await executeRedirectToOperator(
           admin,
           agentId,

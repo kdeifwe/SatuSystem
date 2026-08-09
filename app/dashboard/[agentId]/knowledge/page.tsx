@@ -25,6 +25,7 @@ type Source = {
   status: string;
   file_size?: number;
   chunks_count: number;
+  inline_in_prompt?: boolean;
   metadata?: {
     tag?: string;
     error?: string;
@@ -99,6 +100,8 @@ const badgeColor = (type?: string) => {
   }
 };
 
+const INLINE_KB_WARNING_THRESHOLD = 18000;
+
 const pluralize = (n: number, one: string, few: string, many: string) => {
   const mod10 = n % 10;
   const mod100 = n % 100;
@@ -154,6 +157,7 @@ export default function KnowledgePage() {
   const [instagramProfileUrl, setInstagramProfileUrl] = useState('');
   const [uploadGDocUrl, setUploadGDocUrl] = useState('');
   const [uploadUseAI, setUploadUseAI] = useState(true);
+  const [manualInlineInPrompt, setManualInlineInPrompt] = useState(false);
   const [manualTitle, setManualTitle] = useState('');
   const [manualType, setManualType] = useState('product');
   const [manualContent, setManualContent] = useState('');
@@ -237,6 +241,28 @@ export default function KnowledgePage() {
       setSources(previousSources);
       console.error('[KB] Delete source failed:', error);
       alert(error instanceof Error ? error.message : 'Не удалось удалить источник');
+    }
+  };
+
+  const toggleSourceInlineInPrompt = async (sourceId: string, inlineInPrompt: boolean) => {
+    const previousSources = sources;
+    setSources((prev) => prev.map((source) => (source.id === sourceId ? { ...source, inline_in_prompt: inlineInPrompt } : source)));
+
+    try {
+      const response = await fetch(`/api/agents/${agentId}/knowledge/sources/${sourceId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ inlineInPrompt }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Ошибка обновления source inline flag');
+      }
+      fetchSources();
+    } catch (error) {
+      setSources(previousSources);
+      console.error('[KB] Toggle inline failed:', error);
+      alert(error instanceof Error ? error.message : 'Не удалось обновить состояние inline');
     }
   };
 
@@ -485,6 +511,7 @@ export default function KnowledgePage() {
           type: manualType,
           title: manualTitle || `Без названия ${new Date().toISOString().slice(0, 10)}`,
           content: manualContent,
+          inlineInPrompt: manualInlineInPrompt,
         }),
       });
       const result = await response.json();
@@ -495,6 +522,7 @@ export default function KnowledgePage() {
       setManualTitle('');
       setManualType('product');
       setManualContent('');
+      setManualInlineInPrompt(false);
       fetchChunks();
     } catch (error) {
       console.error(error);
@@ -587,7 +615,7 @@ export default function KnowledgePage() {
                         {(source.status === 'done' || source.status === 'ready') && <span className="text-xs text-green-600">готово</span>}
                         {source.status === 'error' && <span className="text-xs text-red-600">ошибка</span>}
                       </div>
-                      <div className="mt-2 flex items-center gap-2">
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
                         <button
                           onClick={() => openTagModalForSource(source.id)}
                           title="Метка"
@@ -597,6 +625,19 @@ export default function KnowledgePage() {
                           <span>🏷️</span>
                           {source.metadata?.tag ? <span className="text-xs text-gray-600">{source.metadata.tag}</span> : <span className="text-xs text-gray-400">Добавить метку</span>}
                         </button>
+                        {typeof source.inline_in_prompt === 'boolean' && (
+                          <>
+                            <span className={`text-xs px-2 py-1 rounded-full ${source.inline_in_prompt ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>
+                              {source.inline_in_prompt ? 'В промпт' : 'Не в промпт'}
+                            </span>
+                            <button
+                              onClick={() => toggleSourceInlineInPrompt(source.id, !source.inline_in_prompt)}
+                              className="text-xs text-gray-600 hover:text-gray-900 px-3 py-1 border border-gray-200 rounded-xl transition-colors"
+                            >
+                              {source.inline_in_prompt ? 'Отключить inline' : 'Включить inline'}
+                            </button>
+                          </>
+                        )}
                       </div>
                       {source.status === 'error' && (
                         <div className="mt-2 text-xs text-red-600">
@@ -853,6 +894,19 @@ export default function KnowledgePage() {
                     className="mt-2 w-full border border-gray-200 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
+                <label className="flex items-center gap-3 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={manualInlineInPrompt}
+                    onChange={(event) => setManualInlineInPrompt(event.target.checked)}
+                  />
+                  <span>Включить в системный промпт как CORE_KNOWLEDGE</span>
+                </label>
+                {manualInlineInPrompt && manualContent.length > INLINE_KB_WARNING_THRESHOLD && (
+                  <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                    ⚠️ Содержимое слишком большое для inline-подборки ({manualContent.length} / {INLINE_KB_WARNING_THRESHOLD}). Лучше оставить опцию выключенной и использовать поиск по базе знаний.
+                  </div>
+                )}
                 <button
                   onClick={handleManualAdd}
                   disabled={isUploading}
