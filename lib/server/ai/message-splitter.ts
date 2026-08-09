@@ -9,6 +9,15 @@ export function splitAgentMessage(text: string, enabled: boolean, maxParts = 3):
   const cleaned = text.trim();
   const parts: string[] = [];
 
+  // Разбиение по маркеру ||| (LLM сам разделяет мысли)
+  const byMarker = cleaned.split(/\s*\|\|\|\s*/).filter((part) => part.trim().length > 0);
+  if (byMarker.length >= 2 && byMarker.length <= maxParts) {
+    return byMarker.map((part, index) => ({
+      text: part.trim(),
+      delayMs: index === 0 ? 0 : 600 + index * 400,
+    }));
+  }
+
   const byDoubleNewline = cleaned.split(/\n\n+/).filter((part) => part.trim().length > 20);
 
   if (byDoubleNewline.length >= 2 && byDoubleNewline.length <= 3) {
