@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
+import { createClient, getServerUser } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { runAgentTurn } from '@/lib/ai/orchestrator';
 import { splitAgentMessage, calculateTypingDelay } from '@/lib/server/ai/message-splitter';
 
 export async function POST(req: NextRequest) {
-  const supabase = createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const supabase = createClient(req);
+  const user = await getServerUser(supabase, req.headers.get('authorization') ?? undefined);
   if (!user) return NextResponse.json({ error: 'Не авторизован' }, { status: 401 });
 
   const { agentId, systemPrompt, message, history } = await req.json();

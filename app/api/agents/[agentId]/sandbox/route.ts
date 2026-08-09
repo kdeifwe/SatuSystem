@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
+import { createClient, getServerUser } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 function errorResponse(message: string, status = 500) {
@@ -10,10 +10,8 @@ export async function GET(
   req: NextRequest,
   { params }: { params: { agentId: string } }
 ) {
-  const supabase = createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const supabase = createClient(req);
+  const user = await getServerUser(supabase, req.headers.get('authorization') ?? undefined);
 
   if (!user) {
     return errorResponse('Не авторизован', 401);
