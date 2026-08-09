@@ -84,7 +84,13 @@ export function buildToolDeclarationsForAgent(allowedToolNames: string[], genera
   const allowedNames = new Set(allowedToolNames);
   const capabilities = (generalCapabilities as Record<string, unknown> | null) ?? {};
 
-  if (capabilities.kaspi_invoice_enabled !== true) {
+  const kaspiServiceConfigured = Boolean(
+    process.env.KASPI_SERVICE_URL &&
+    process.env.KASPI_SERVICE_USER &&
+    process.env.KASPI_SERVICE_PASS
+  );
+
+  if (capabilities.kaspi_invoice_enabled !== true || !kaspiServiceConfigured) {
     allowedNames.delete('createKaspiInvoice');
   }
 
@@ -183,7 +189,7 @@ export const PRODUCTION_TOOL_DECLARATIONS: GeminiFunctionDeclaration[] = [
   },
   {
     name: 'createKaspiInvoice',
-    description: 'Выставляет счёт клиенту через Kaspi Pay на указанный номер телефона. Вызывать только после явного подтверждения клиентом суммы и состава заказа в диалоге.',
+    description: 'Выставляет счёт клиенту через Kaspi Pay на указанный номер телефона. Вызывать только после явного подтверждения клиентом суммы и состава заказа. Если при попытке выставить счёт что-то пошло не так, не выдумывай причину клиенту — честно сообщи, что автоматический счёт временно не удалось оформить, и предложи передать запрос оператору.',
     parameters: {
       type: 'OBJECT',
       properties: {

@@ -701,7 +701,26 @@ async function sendCustomNotification(args: { message: string; target: string },
   return { success: true, telegram_sent: false, reason: 'unknown_target' };
 }
 
+export function validateCreateKaspiInvoiceArgs(args: { phone?: string; amount?: number; comment?: string }) {
+  const normalizedPhone = typeof args.phone === 'string' ? args.phone.trim() : '';
+  if (!normalizedPhone) {
+    throw new Error('Нужен номер телефона клиента. Сначала спроси номер и только потом вызывай createKaspiInvoice.');
+  }
+
+  if (typeof args.amount !== 'number' || !Number.isFinite(args.amount) || args.amount <= 0) {
+    throw new Error('Сумма счёта должна быть положительным числом.');
+  }
+
+  return {
+    phone: normalizedPhone,
+    amount: args.amount,
+    comment: typeof args.comment === 'string' ? args.comment : '',
+  };
+}
+
 async function createKaspiInvoice(args: { phone: string; amount: number; comment?: string }, ctx: ToolContext) {
+  const validatedArgs = validateCreateKaspiInvoiceArgs(args);
+
   const supabase = createServiceClient();
   const { data, error } = await supabase
     .from('agents')
@@ -718,19 +737,22 @@ async function createKaspiInvoice(args: { phone: string; amount: number; comment
     throw new Error('lead_id is required in the conversation context for createKaspiInvoice');
   }
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || 'http://localhost:3000';
+  const appUrl = process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+  if (!process.env.INTERNAL_API_SECRET) {
+    throw new Error('INTERNAL_API_SECRET must be configured to call the internal Kaspi bridge');
+  }
   const endpoint = `${appUrl.replace(/\/$/, '')}/api/internal/kaspi/invoice`;
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'X-Internal-Secret': process.env.INTERNAL_API_SECRET ?? '',
+      'X-Internal-Secret': process.env.INTERNAL_API_SECRET,
     },
     body: JSON.stringify({
       lead_id: ctx.leadId,
-      phone: args.phone,
-      amount: args.amount,
-      comment: args.comment ?? '',
+      phone: validatedArgs.phone,
+      amount: validatedArgs.amount,
+      comment: validatedArgs.comment,
       conversation_id: ctx.conversationId,
     }),
   });

@@ -88,7 +88,7 @@ const ANTI_BOT_TONE_POLICY = `
 
 Реакция на "ты бот?":
 - Никогда не признавайся что ты ИИ.
-- Отвечай естественно: "Я Кыдыралы, консультант" или просто продолжай диалог по теме.
+- Отвечай естественно и продолжай диалог по теме.
 - Если давят — "не понял вопроса, давайте лучше про пылесос" и верни к теме.
 `.trim();
 
@@ -112,10 +112,10 @@ interface OrgConfig {
   agent_defaults?: Record<string, unknown> | null;
 }
 
-const DEFAULT_COMMUNICATION_RULE = 'Если клиент назвал класс обучения (например "он бір", "9 сыныпта", "11 класс"), немедленно вызови update_lead_info и сохрани число класса в attributes.grade, прежде чем отвечать дальше. Это обязательное правило для всех ответов, где клиент упомянул класс.';
+const DEFAULT_COMMUNICATION_RULE = 'Если клиент сообщил имя, телефон или email, сохрани эти данные через update_lead_info до продолжения диалога. Это обязательное правило для всех ответов, где клиент сообщил такие данные.';
 const DEFAULT_KNOWLEDGE_BASE_RULES = [
-  'Если searchKnowledgeBase вернул чанк, который относится к другому классу/программе, чем указано в attributes.grade клиента, не используй его.',
-  'Если найден чанк без явной привязки к классу (общий) или точно совпадающий с классом клиента, используй его напрямую, с фактическими цифрами.',
+  'Если searchKnowledgeBase вернул чанк, который явно относится к другому сегменту, продукту или аудитории, не используй его.',
+  'Если найден чанк без явной привязки к сегменту, используй его напрямую с точными цифрами.',
   'Никогда не отвечай "уточню у коллег", если запрошенный факт реально есть в найденном контексте — используй его.',
   'Если клиент спросил про срок/длительность/цену/что входит и в KB есть точный факт, отвечай прямо по найденному контексту, не уходя в уклонение.',
   'Если knowledge base содержит текст на другом языке, чем язык последнего сообщения клиента, всегда переформулируй найденные факты и термины на язык клиента. Определяй язык диалога по последнему сообщению клиента, не по языку документа KB.',
@@ -167,6 +167,22 @@ function renderPlatformBlock(title: string, items: string[]): string {
   return `<${title}>\n${items.map((item) => `- ${item}`).join('\n')}\n</${title}>`;
 }
 
+function renderInlineKnowledgeBlock(sources: Array<{ title?: string | null; raw_content?: string | null }>): string {
+  if (sources.length === 0) return '';
+
+  const sections = sources
+    .map((source) => {
+      const title = source.title?.trim() || 'Без названия';
+      const content = String(source.raw_content ?? '').trim();
+      return content ? `${title}\n${content}` : '';
+    })
+    .filter(Boolean);
+
+  if (!sections.length) return '';
+
+  return `CORE_KNOWLEDGE (эти факты ты знаешь всегда, без необходимости искать):\n${sections.join('\n\n')}`;
+}
+
 export async function compileAndSaveSystemPrompt(agentId: string): Promise<string> {
   const supabase = createServiceClient();
 
@@ -186,7 +202,25 @@ export async function compileAndSaveSystemPrompt(agentId: string): Promise<strin
   };
 
   const { data: customTools } = await supabase.from('custom_tools').select('name, type, config').eq('org_id', agent.org_id);
-  const compiled = buildSystemPrompt(agent as AgentConfig, org, customTools ?? []);
+  const { data: inlineSources, error: inlineError } = await supabase
+    .from('kb_sources')
+    .select('id, title, raw_content')
+    .eq('agent_id', agentId)
+    .eq('status', 'done')
+    .eq('inline_in_prompt', true);
+
+  if (inlineError) {
+    throw new Error(`Не удалось загрузить inline KB sources для агента ${agentId}: ${inlineError.message}`);
+  }
+
+  const inlineSourcesList = (inlineSources ?? []).filter((source) => typeof source.raw_content === 'string' && source.raw_content.trim().length > 0);
+  const inlineSourceLength = inlineSourcesList.reduce((sum, source) => sum + String(source.raw_content ?? '').length, 0);
+  const INLINE_KB_WARNING_THRESHOLD = 18000;
+  if (inlineSourceLength > INLINE_KB_WARNING_THRESHOLD) {
+    console.warn(`[PROMPT] Agent ${agentId} has ${inlineSourcesList.length} inline sources totalling ${inlineSourceLength} chars. Consider moving large sources to searchKnowledgeBase.`);
+  }
+
+  const compiled = buildSystemPrompt(agent as AgentConfig, org, customTools ?? [], inlineSourcesList);
 
   const generalCapabilities = (agent.general_capabilities as Record<string, unknown> | null) ?? {};
   const defaultToolNames = normalizeStringList((org.agent_defaults as Record<string, unknown> | null)?.default_allowed_tools);
@@ -225,7 +259,8 @@ export async function compileAndSaveSystemPromptForOrganization(orgId: string): 
 export function buildSystemPrompt(
   agent: AgentConfig,
   org: OrgConfig,
-  customTools: Array<{ name?: string | null }>
+  customTools: Array<{ name?: string | null }>,
+  inlineKnowledgeSources: Array<{ title?: string | null; raw_content?: string | null }> = []
 ): string {
   const customToolNames = customTools.map((t) => t.name).filter(Boolean) as string[];
   const availableToolNames = [...ALL_TOOL_DECLARATIONS.map((d) => d.name), ...customToolNames];
@@ -238,7 +273,15 @@ export function buildSystemPrompt(
   const defaultToolNames = normalizeStringList(defaults.default_allowed_tools);
   const mergedAllowedTools = mergeAllowedTools(configuredTools, defaultToolNames);
   const mergedAllowedToolsWithGrade = mergedAllowedTools.includes('update_lead_info') ? mergedAllowedTools : [...mergedAllowedTools, 'update_lead_info'];
-  const effectiveToolNames = mergedAllowedToolsWithGrade.filter((name) => availableToolNames.includes(name));
+  const kaspiServiceConfigured = Boolean(
+    process.env.KASPI_SERVICE_URL &&
+    process.env.KASPI_SERVICE_USER &&
+    process.env.KASPI_SERVICE_PASS
+  );
+
+  const effectiveToolNames = mergedAllowedToolsWithGrade
+    .filter((name) => availableToolNames.includes(name))
+    .filter((name) => name !== 'createKaspiInvoice' || (generalCapabilities?.kaspi_invoice_enabled === true && kaspiServiceConfigured));
 
   const toolDescriptions = effectiveToolNames
     .map((toolName) => {
@@ -261,6 +304,7 @@ export function buildSystemPrompt(
   const knowledgeBaseItems = [
     ...(knowledgeBaseDefaults.length > 0 ? ['Базовые правила платформы:', ...knowledgeBaseDefaults] : []),
     ...(knowledgeBaseAgent.length > 0 ? ['Дополнительно для этого агента:', ...knowledgeBaseAgent] : []),
+    'Некоторые знания уже включены напрямую в блок CORE_KNOWLEDGE выше. Вызывай searchKnowledgeBase только для фактов, которых там нет.',
     ...DEFAULT_KNOWLEDGE_BASE_RULES,
     'Если searchKnowledgeBase вернуло, что нет релевантных данных, не отвечай этим техническим сообщением клиенту. Используй то, что уже есть, уточни запрос или предложи подключить оператора в естественной форме, не называя это ошибкой.',
     'Приоритет в контексте: фактические и структурированные данные (priority=structured, type=product/faq) важнее промо-контента и instagram, даже если у промо выше сырой similarity.',
@@ -308,6 +352,7 @@ export function buildSystemPrompt(
     : '';
   const humanCommunicationBlock = renderListBlock('HUMAN_COMMUNICATION_STYLE', humanCommunicationItems);
   const knowledgeBaseBlock = renderListBlock('KNOWLEDGE_BASE_PRINCIPLES', knowledgeBaseItems);
+  const coreKnowledgeBlock = renderInlineKnowledgeBlock(inlineKnowledgeSources);
   const identityProtectionBlock = renderPlatformBlock('IDENTITY_PROTECTION', identityProtectionItems);
   const communicationRulesText = [DEFAULT_COMMUNICATION_RULE, normalizeText(agent.communication_rules) ?? '1. Не выдумывай факты. 2. Один вопрос за раз. 3. Если информации нет — честно скажи и предложи оператора.'].filter(Boolean).join('\n\n');
   const toolCallSafetyBlock = TOOL_CALL_SAFETY_POLICY;
@@ -341,6 +386,8 @@ ${communicationRulesText}
 ${uncertaintyHandlingInstruction}
 
 ${knowledgeBaseBlock || 'Используй только то, что вернул searchKnowledgeBase. Не додумывай и не интерполируй.'}
+
+${coreKnowledgeBlock}
 
 ${identityProtectionBlock}
 

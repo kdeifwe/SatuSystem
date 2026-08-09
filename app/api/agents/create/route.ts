@@ -33,7 +33,15 @@ export async function POST() {
     const rawDefaultTools = Array.isArray(defaults.default_allowed_tools)
       ? defaults.default_allowed_tools.filter((tool): tool is string => typeof tool === 'string')
       : ['searchKnowledgeBase', 'redirectToOperator', 'advanceFunnelStep', 'getCurrentDate', 'add_lead_note'];
-    const defaultAllowedTools = Array.from(new Set([...rawDefaultTools, 'createKaspiInvoice']));
+    const kaspiServiceConfigured = Boolean(
+      process.env.KASPI_SERVICE_URL &&
+      process.env.KASPI_SERVICE_USER &&
+      process.env.KASPI_SERVICE_PASS
+    );
+    const defaultAllowedTools = Array.from(new Set([
+      ...rawDefaultTools,
+      ...(kaspiServiceConfigured ? ['createKaspiInvoice'] : []),
+    ]));
 
     const initialCommunicationStyle = typeof defaults.human_communication_style === 'string'
       ? defaults.human_communication_style
