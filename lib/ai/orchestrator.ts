@@ -463,8 +463,7 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
     : null;
   const flow = normalizeFunnelFlow(agent.dialogue_flow);
   const entryNodeId = flow?.entryNodeId ?? null;
-  let currentNodeId = conversationState?.current_funnel_step ?? persistedNodeId ?? entryNodeId ?? null;  const stepInstruction = buildFunnelStepInstruction(currentNodeId);
-  const promptWithCurrentStep = `${compiledPrompt}${stepInstruction}`;  const bypassStyleValidation = shouldBypassStyleValidation(agent.dialogue_flow, currentNodeId);
+  let currentNodeId = conversationState?.current_funnel_step ?? persistedNodeId ?? entryNodeId ?? null;
 
   if (conversationId && !conversationState?.current_funnel_step && entryNodeId) {
     await admin.from('conversations').update({ current_funnel_step: entryNodeId }).eq('id', conversationId);
@@ -495,6 +494,10 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
   if (scriptTurnResolution.shouldRoutePendingReply) {
     currentNodeId = scriptTurnResolution.currentFunnelStep ?? currentNodeId;
   }
+
+  const stepInstruction = buildFunnelStepInstruction(currentNodeId);
+  const promptWithCurrentStep = `${compiledPrompt}${stepInstruction}`;
+  const bypassStyleValidation = shouldBypassStyleValidation(agent.dialogue_flow, currentNodeId);
 
   const baseContents: Array<Record<string, unknown>> = [
     ...buildChatHistory(history),
