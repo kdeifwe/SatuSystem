@@ -30,9 +30,10 @@ export async function POST() {
       .single();
 
     const defaults = (organization?.agent_defaults as Record<string, unknown> | null) ?? {};
-    const defaultAllowedTools = Array.isArray(defaults.default_allowed_tools)
+    const rawDefaultTools = Array.isArray(defaults.default_allowed_tools)
       ? defaults.default_allowed_tools.filter((tool): tool is string => typeof tool === 'string')
       : ['searchKnowledgeBase', 'redirectToOperator', 'advanceFunnelStep', 'getCurrentDate', 'add_lead_note'];
+    const defaultAllowedTools = Array.from(new Set([...rawDefaultTools, 'createKaspiInvoice']));
 
     const initialCommunicationStyle = typeof defaults.human_communication_style === 'string'
       ? defaults.human_communication_style
