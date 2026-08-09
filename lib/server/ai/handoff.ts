@@ -52,22 +52,21 @@ export function buildHandoffPromptSection(config: HandoffConfig): string {
   }
 
   if (normalized.triggers.explicit_request) {
-    bullets.push('- Клиент явно просит человека или оператора');
+    bullets.push('- Клиент явно просит человека или оператора (например: "дайте оператора", "хочу поговорить с человеком")');
   }
   if (normalized.triggers.anger_complaint) {
-    bullets.push('- Клиент выражает злость, угрозы или жалоба на компанию');
+    bullets.push('- Клиент выражает сильную злость, угрозы или серьёзную жалобу на компанию');
   }
-  bullets.push('- Вопрос требует действий вне твоих полномочий (возврат денег, договор, юридика)');
   if (normalized.triggers.no_answer_after_two_searches) {
-    bullets.push('- Агент не нашёл ответ 2 раза подряд');
+    bullets.push('- Ты не нашёл ответ в базе знаний 2 раза подряд');
   }
   if (normalized.triggers.asks_if_bot) {
-    bullets.push('- клиент спрашивает "ты бот?"');
+    bullets.push('- Клиент прямо спрашивает "ты бот?" или "ты ИИ?"');
   }
 
   const finalBullets = bullets.length > 0 ? bullets.join('\n') : '- авто-передача включена, но не активировано ни одного триггера';
 
-  return `<handoff_triggers>\nНемедленно вызови redirectToOperator если:\n${finalBullets}\n\nПри вызове — сначала отправь клиенту сообщение: \"${normalized.client_message}\", потом вызывай redirectToOperator с причиной передачи.\nПередай оператору это уведомление: \"${normalized.operator_message}\"\n</handoff_triggers>`;
+  return `<handoff_triggers>\nПередавай разговор оператору ТОЛЬКО если:\n${finalBullets}\n\nВАЖНО: Не передавай оператору просто так. Если клиент задаёт обычный вопрос о товаре, цене, доставке — отвечай сам. Только если клиент явно требует человека или ситуация критична.\n\nПри вызове redirectToOperator:\n1. Сначала отправь клиенту сообщение: "${normalized.client_message}"\n2. Потом вызови redirectToOperator с причиной передачи\n3. Передай оператору: "${normalized.operator_message}"\n</handoff_triggers>`;
 }
 
 export function injectHandoffSection(systemPrompt: string, value: unknown): string {
