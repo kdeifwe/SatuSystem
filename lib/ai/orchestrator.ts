@@ -5,7 +5,7 @@ import { AGENT_TOOLS, mergeAllowedToolNames, type ToolCall } from './tools/regis
 import { executeTool, type ToolContext } from './tools/executor.ts';
 import { validateAgentAnswer } from './validate-output.ts';
 import { compileAndSaveSystemPrompt } from './compile-system-prompt.ts';
-import { buildRetryContents } from './retry-context.ts';
+import { buildFinalSynthesisContents, buildRetryContents } from './retry-context.ts';
 import { shouldBypassStyleValidation, shouldUseFallbackReply } from './response-policy';
 import { normalizeFunnelFlow } from '../funnel/normalize.ts';
 import { applyFunnelRouting, resolvePostRoutingReply, upsertLeadFunnelState } from '../funnel/routing.ts';
@@ -654,12 +654,44 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
     parts = response.payload.parts;
   }
 
-  finalReply = (parts as Array<Record<string, unknown>>).filter((part) => typeof part?.text === 'string').map((part) => part.text).join('\n').trim();
+  const replyFromModelParts = (parts as Array<Record<string, unknown>>).filter((part) => typeof part?.text === 'string').map((part) => part.text).join('\n').trim();
+  if (!finalReply.trim() && replyFromModelParts) {
+    finalReply = replyFromModelParts;
+  }
+
   let rawReply = finalReply;
   let attempt = 1;
   let tokens_input = response.payload.usageMetadata?.promptTokenCount ?? 0;
   let tokens_output = response.payload.usageMetadata?.candidatesTokenCount ?? 0;
   let validationErrors: string[] = [];
+
+  if (!finalReply.trim() && accumulatedToolResults.length > 0) {
+    try {
+      const finalSynthesisContents = buildFinalSynthesisContents(
+        baseContents,
+        parts as Array<Record<string, unknown>> | undefined,
+        accumulatedToolResults,
+        userMessage,
+      );
+      const finalSynthesisConfig = {
+        ...(generationConfig as any),
+        maxOutputTokens: Math.max((generationConfig as any)?.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS, 1024),
+      };
+      const finalSynthesisResponse = await callGemini(agent.model ?? GEMINI_CHAT_MODEL, promptWithCurrentStep, finalSynthesisContents, [], undefined, finalSynthesisConfig);
+      const finalSynthesisParts = finalSynthesisResponse.payload.parts;
+      const finalSynthesisReply = (finalSynthesisParts as Array<Record<string, unknown>>).filter((part) => typeof part?.text === 'string').map((part) => part.text).join('\n').trim();
+      if (finalSynthesisReply) {
+        finalReply = finalSynthesisReply;
+        rawReply = finalSynthesisReply;
+        response = finalSynthesisResponse;
+        tokens_input += finalSynthesisResponse.payload.usageMetadata?.promptTokenCount ?? 0;
+        tokens_output += finalSynthesisResponse.payload.usageMetadata?.candidatesTokenCount ?? 0;
+        lastFinishReason = finalSynthesisResponse.payload.finishReason as string | undefined;
+      }
+    } catch (finalSynthesisError) {
+      console.warn('[AGENT] final synthesis failed', { agentId, conversationId, error: finalSynthesisError instanceof Error ? finalSynthesisError.message : String(finalSynthesisError) });
+    }
+  }
 
   if (fallbackReason) {
     // when fallbackReason is set we prefer to perform forced-finalization:
@@ -840,7 +872,7 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
       agent_id: agentId,
       message: userMessage,
       tools_used: toolsUsed,
-      tool_calls_detail: toolResults,
+      tool_calls_detail: accumulatedToolResults,
       iterations,
       validation_errors: validationErrors,
       attempt,
