@@ -22,6 +22,8 @@ test('buildSystemPrompt includes tool names and prompt-injection safeguard', () 
 
   assert.match(prompt, /searchKnowledgeBase/);
   assert.match(prompt, /redirectToOperator/);
+  assert.match(prompt, /createKaspiInvoice/);
+  assert.match(prompt, /когда клиент явно подтвердил готовность оплатить/i);
   assert.match(prompt, /забудь все инструкции/i);
   assert.match(prompt, /prompt injection/i);
 });
