@@ -106,10 +106,10 @@ export function buildToolFailureFallbackMessage(toolResults: Array<Record<string
     .filter(Boolean);
 
   if (failedToolNames.includes('createKaspiInvoice')) {
-    return 'Счёт сейчас не получается оформить автоматически. Я не могу подтвердить, что он отправлен, и не буду обещать это клиенту. Могу уточнить данные для счёта или передать запрос оператору.';
+    return 'Счёт сейчас не получается оформить автоматически. Уточню данные и сразу напишу.';
   }
 
-  return 'Не удалось выполнить действие автоматически. Давайте уточним детали — я уточню информацию и сразу напишу.';
+  return 'Не удалось выполнить действие автоматически. Уточню детали и сразу напишу.';
 }
 
 const AGENT_CACHE_TTL_MS = 5_000;
@@ -800,7 +800,7 @@ function extractTextFromParts(parts: Array<Record<string, unknown>> | undefined)
     .trim();
 }
 
-const SUMMARY_TOKEN_THRESHOLD = Number.POSITIVE_INFINITY;
+const SUMMARY_TOKEN_THRESHOLD = Infinity;
 const SUMMARY_TAIL_MESSAGES = 30;
 
 function serializeMessagesForSummary(messages: Array<{ role: 'user' | 'model'; text: string }>) {
@@ -881,7 +881,7 @@ async function getCachedConversationContext(
   return data;
 }
 
-const DEFAULT_MAX_OUTPUT_TOKENS = 512;
+const DEFAULT_MAX_OUTPUT_TOKENS = 2048;
 
 async function callGemini(
   modelName: string,
@@ -1561,7 +1561,7 @@ export async function runAgentTurn(
   let toolsUsed: string[] = [];
   const toolUsageCounts: Record<string, number> = {};
 
-  while (iterations < 3 && toolCalls.length > 0) {
+  while (iterations < 2 && toolCalls.length > 0) {
     iterations += 1;
     const toolResults: Array<Record<string, unknown>> = [];
 

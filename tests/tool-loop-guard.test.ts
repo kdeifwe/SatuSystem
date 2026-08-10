@@ -15,5 +15,5 @@ test('builds a non-promissory fallback when a billing tool fails', () => {
   ]);
 
   assert.match(fallback ?? '', /не получается оформить автоматически/i);
-  assert.match(fallback ?? '', /не буду обещать/i);
+  assert.match(fallback ?? '', /уточню данные/i);
 });

@@ -53,9 +53,13 @@ interface GeminiClientResponse {
 function trimToLastCompleteSentence(text: string): string {
   const trimmed = text.trim();
   if (!trimmed) return trimmed;
-
-  const match = trimmed.match(/^[\s\S]*[.!?…]["')\]]?\s*/);
-  return match ? match[0].trim() : trimmed;
+  // Берём всё до последнего полного знака препинания
+  const match = trimmed.match(/^[\s\S]*?[.!?…](?:\s|$)/);
+  if (match) {
+    return match[0].trim();
+  }
+  // Если нет знака препинания — не шлём обрезанное слово
+  return '';
 }
 
 function normalizeResponseParts(parts: Array<Record<string, unknown>> | undefined, finishReason?: string) {
@@ -190,7 +194,7 @@ function extractToolCalls(parts: Array<Record<string, unknown>> | undefined): To
   }));
 }
 
-const DEFAULT_MAX_OUTPUT_TOKENS = 512;
+const DEFAULT_MAX_OUTPUT_TOKENS = 2048;
 
 async function callGemini(
   modelName: string,
@@ -590,7 +594,7 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
   let validationAttempted = false;
   let toolResults: Array<Record<string, unknown>> = [];
 
-  while (iterations < 3) {
+  while (iterations < 2) {
     const functionCalls = extractToolCalls(parts as Array<Record<string, unknown>> | undefined);
     if (functionCalls.length === 0) break;
 
