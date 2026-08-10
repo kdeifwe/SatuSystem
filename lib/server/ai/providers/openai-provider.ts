@@ -74,8 +74,8 @@ function buildOpenAIBody(request: LLMRequest): Record<string, unknown> {
 
   if (typeof request.maxTokens === 'number') {
     const modelName = String(request.model ?? '').toLowerCase();
-    const isReasoningModel = modelName.startsWith('o1') || modelName.startsWith('o3');
-    body[isReasoningModel ? 'max_completion_tokens' : 'max_tokens'] = request.maxTokens;
+    const isCompletionModel = modelName.startsWith('o1') || modelName.startsWith('o3') || modelName.startsWith('gpt-5');
+    body[isCompletionModel ? 'max_completion_tokens' : 'max_tokens'] = request.maxTokens;
   }
 
   if (Array.isArray(request.tools) && request.tools.length > 0) {
