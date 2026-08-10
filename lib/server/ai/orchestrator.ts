@@ -747,6 +747,39 @@ function tryExtractToolCalls(parts: Array<Record<string, any>> | undefined): Too
     }));
 }
 
+function normalizeLlmResponseParts(response: any): Array<Record<string, unknown>> {
+  const llmToolCalls = (response as any).toolCalls ?? [];
+  const llmParts: Array<Record<string, unknown>> = [];
+
+  if (typeof response?.text === 'string' && response.text.trim().length > 0) {
+    llmParts.push({ text: response.text });
+  }
+
+  for (const tc of llmToolCalls) {
+    if (!tc || typeof tc !== 'object') continue;
+    llmParts.push({
+      functionCall: {
+        name: tc.name,
+        args: tc.arguments ?? tc.args ?? {},
+      },
+    });
+  }
+
+  if (llmParts.length > 0) {
+    return llmParts;
+  }
+
+  if (Array.isArray(response?.payload?.parts)) {
+    return response.payload.parts as Array<Record<string, unknown>>;
+  }
+
+  if (typeof response?.text === 'string') {
+    return [{ text: response.text }];
+  }
+
+  return [];
+}
+
 function extractTextFromParts(parts: Array<Record<string, unknown>> | undefined): string {
   if (!Array.isArray(parts)) return '';
 
@@ -848,6 +881,8 @@ async function callGemini(
           : '',
       })) as any[]),
     ];
+
+    console.error('[FC-DEBUG] outgoing messages:', JSON.stringify(messages, null, 2));
 
     const llmResponse = await llmClient.generate({
       model: activeModel,
@@ -1483,8 +1518,8 @@ export async function runAgentTurn(
   } catch (e) {
     // non-fatal
   }
-  let currentParts = response.payload.parts;
-  let finalAnswer = extractTextFromParts(currentParts);
+  let currentParts = normalizeLlmResponseParts(response);
+  let finalAnswer = extractTextFromParts(currentParts) || ((response as any).text ?? '');
   let handoffMessage: string | undefined;
   let handoffTriggered = false;
 
@@ -1576,8 +1611,8 @@ export async function runAgentTurn(
 
     tokensInput += followUpResponse.payload.usageMetadata?.promptTokenCount ?? 0;
     tokensOutput += followUpResponse.payload.usageMetadata?.candidatesTokenCount ?? 0;
-    currentParts = followUpResponse.payload.parts;
-    finalAnswer = extractTextFromParts(currentParts) || finalAnswer;
+    currentParts = normalizeLlmResponseParts(followUpResponse);
+    finalAnswer = extractTextFromParts(currentParts) || ((followUpResponse as any).text ?? finalAnswer);
     console.log('[PROD_TOOL_FOLLOWUP_RESPONSE]', { agentId, answer: finalAnswer, toolCalls: tryExtractToolCalls(currentParts) });
     toolCalls = tryExtractToolCalls(currentParts);
   }
@@ -1602,8 +1637,8 @@ export async function runAgentTurn(
         ],
         toolPayload,
       );
-      const retryParts = retryResponse.payload.parts;
-      const retryText = extractTextFromParts(retryParts);
+      const retryParts = normalizeLlmResponseParts(retryResponse);
+      const retryText = extractTextFromParts(retryParts) || ((retryResponse as any).text ?? '');
       if (retryText.trim()) {
         response = retryResponse;
         currentParts = retryParts;
