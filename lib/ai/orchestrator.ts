@@ -898,9 +898,11 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
 
   const splitMessages = Boolean((generalCapabilities?.split_messages) ?? true);
   const splitMaxParts = Math.min(3, Math.max(1, Number(generalCapabilities?.split_max_parts ?? 3)));
-  const messageParts = splitAgentMessage(finalReply, splitMessages, splitMaxParts).map((part) => ({
+  const messageParts = splitAgentMessage(finalReply, splitMessages, splitMaxParts).map((part, index) => ({
     text: part.text,
-    delayMs: typingSimulation ? calculateTypingDelay(part.text) + part.delayMs : part.delayMs,
+    delayMs: typingSimulation
+      ? Math.max(2000 * index, calculateTypingDelay(part.text) + part.delayMs)
+      : Math.max(2000 * index, part.delayMs),
   }));
 
   return {

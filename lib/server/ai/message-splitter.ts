@@ -14,7 +14,7 @@ export function splitAgentMessage(text: string, enabled: boolean, maxParts = 3):
   if (byMarker.length >= 2 && byMarker.length <= maxParts) {
     return byMarker.map((part, index) => ({
       text: part.trim(),
-      delayMs: index === 0 ? 0 : 600 + index * 400,
+      delayMs: index === 0 ? 0 : 2000 * index,
     }));
   }
 
@@ -23,7 +23,7 @@ export function splitAgentMessage(text: string, enabled: boolean, maxParts = 3):
   if (byDoubleNewline.length >= 2 && byDoubleNewline.length <= 3) {
     return byDoubleNewline.map((part, index) => ({
       text: part.trim(),
-      delayMs: index === 0 ? 0 : 800 + index * 400,
+      delayMs: index === 0 ? 0 : 2000 * index,
     }));
   }
 
@@ -39,7 +39,7 @@ export function splitAgentMessage(text: string, enabled: boolean, maxParts = 3):
         if (cleaned.length < 400 || maxParts < 3) {
           return [
             { text: first, delayMs: 0 },
-            { text: second, delayMs: 1000 },
+            { text: second, delayMs: 2000 },
           ];
         }
 
@@ -51,8 +51,8 @@ export function splitAgentMessage(text: string, enabled: boolean, maxParts = 3):
         if (p1.length > 20 && p2.length > 20 && p3.length > 20) {
           return [
             { text: p1, delayMs: 0 },
-            { text: p2, delayMs: 1200 },
-            { text: p3, delayMs: 2000 },
+            { text: p2, delayMs: 2000 },
+            { text: p3, delayMs: 4000 },
           ];
         }
       }

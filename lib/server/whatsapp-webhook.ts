@@ -357,9 +357,11 @@ export async function processIncomingWhatsAppMessage(body: any) {
 
       const capabilities = agent.general_capabilities ?? {};
       const maxParts = Math.min(3, Math.max(1, Number(capabilities.split_max_parts ?? 2)));
-      const fallbackParts = splitAgentMessage(answer, capabilities.split_messages ?? true, maxParts).map((part) => ({
+      const fallbackParts = splitAgentMessage(answer, capabilities.split_messages ?? true, maxParts).map((part, index) => ({
         text: part.text,
-        delayMs: typingSimulation ? calculateTypingDelay(part.text) + part.delayMs : part.delayMs,
+        delayMs: typingSimulation
+          ? Math.max(2000 * index, calculateTypingDelay(part.text) + part.delayMs)
+          : Math.max(2000 * index, part.delayMs),
       }));
       const parts = (Array.isArray(messageParts) && messageParts.length > 0
         ? messageParts

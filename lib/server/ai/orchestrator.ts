@@ -1478,9 +1478,11 @@ export async function runAgentTurn(
     const splitMessages = Boolean((generalCapabilities?.split_messages) ?? true);
     const splitMaxParts = Math.min(3, Math.max(1, Number(generalCapabilities?.split_max_parts ?? 3)));
     const typingSimulation = Boolean((generalCapabilities?.typing_simulation) ?? true);
-    const messageParts = splitAgentMessage(priceAnswer, splitMessages, splitMaxParts).map((part) => ({
+    const messageParts = splitAgentMessage(priceAnswer, splitMessages, splitMaxParts).map((part, index) => ({
       text: part.text,
-      delayMs: typingSimulation ? calculateTypingDelay(part.text) + part.delayMs : part.delayMs,
+      delayMs: typingSimulation
+        ? Math.max(2000 * index, calculateTypingDelay(part.text) + part.delayMs)
+        : Math.max(2000 * index, part.delayMs),
     }));
 
     if (conversationId) {
@@ -1508,9 +1510,11 @@ export async function runAgentTurn(
     const splitMessages = Boolean((generalCapabilities?.split_messages) ?? true);
     const splitMaxParts = Math.min(3, Math.max(1, Number(generalCapabilities?.split_max_parts ?? 3)));
     const typingSimulation = Boolean((generalCapabilities?.typing_simulation) ?? true);
-    const messageParts = splitAgentMessage(deterministicFactAnswer, splitMessages, splitMaxParts).map((part) => ({
+    const messageParts = splitAgentMessage(deterministicFactAnswer, splitMessages, splitMaxParts).map((part, index) => ({
       text: part.text,
-      delayMs: typingSimulation ? calculateTypingDelay(part.text) + part.delayMs : part.delayMs,
+      delayMs: typingSimulation
+        ? Math.max(2000 * index, calculateTypingDelay(part.text) + part.delayMs)
+        : Math.max(2000 * index, part.delayMs),
     }));
 
     if (conversationId) {
@@ -1864,9 +1868,11 @@ export async function runAgentTurn(
   const splitMaxParts = Math.min(3, Math.max(1, Number(capabilities.split_max_parts ?? 3)));
   const typingSimulation = Boolean(capabilities.typing_simulation ?? true);
 
-  const messageParts = splitAgentMessage(finalAnswer, splitMessages, splitMaxParts).map((part) => ({
+  const messageParts = splitAgentMessage(finalAnswer, splitMessages, splitMaxParts).map((part, index) => ({
     text: part.text,
-    delayMs: typingSimulation ? calculateTypingDelay(part.text) + part.delayMs : part.delayMs,
+    delayMs: typingSimulation
+      ? Math.max(2000 * index, calculateTypingDelay(part.text) + part.delayMs)
+      : Math.max(2000 * index, part.delayMs),
   }));
 
   return {

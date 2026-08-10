@@ -98,6 +98,7 @@ export function buildToolDeclarationsForAgent(allowedToolNames: string[], genera
 
   if (capabilities.kaspi_invoice_enabled !== true || !kaspiServiceConfigured) {
     allowedNames.delete('createKaspiInvoice');
+    allowedNames.delete('sendKaspiPay');
   }
 
   return ALL_TOOL_DECLARATIONS.filter((declaration) => allowedNames.has(declaration.name))

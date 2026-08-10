@@ -232,9 +232,11 @@ async function handleUpdate(update: any, agentId: string) {
     const maxParts = Math.min(3, Math.max(1, Number(caps.split_max_parts ?? 2)));
     const effectiveTypingSimulation = typeof typingSimulation === 'boolean' ? typingSimulation : (caps.typing_simulation ?? true);
 
-    const fallbackParts = splitAgentMessage(answer, splitEnabled, maxParts).map((part) => ({
+    const fallbackParts = splitAgentMessage(answer, splitEnabled, maxParts).map((part, index) => ({
       text: part.text,
-      delayMs: effectiveTypingSimulation ? calculateTypingDelay(part.text) + part.delayMs : part.delayMs,
+      delayMs: effectiveTypingSimulation
+        ? Math.max(2000 * index, calculateTypingDelay(part.text) + part.delayMs)
+        : Math.max(2000 * index, part.delayMs),
     }));
     const parts = (Array.isArray(messageParts) && messageParts.length > 0
       ? messageParts
