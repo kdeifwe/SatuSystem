@@ -508,7 +508,6 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
     temperature: typeof agent.temperature === 'number' ? agent.temperature : 0.7,
     topP: typeof agent.top_p === 'number' ? agent.top_p : 0.9,
     maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
-    thinkingConfig: { thinkingBudget: 256 },
   } as Record<string, unknown>;
 
   // === PHASE B SECTION 2.4: Script vs Dynamic split (Call A) ===
@@ -591,7 +590,7 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
   let validationAttempted = false;
   let toolResults: Array<Record<string, unknown>> = [];
 
-  while (iterations < 5) {
+  while (iterations < 3) {
     const functionCalls = extractToolCalls(parts as Array<Record<string, unknown>> | undefined);
     if (functionCalls.length === 0) break;
 
@@ -609,9 +608,8 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
       if (call.name === 'searchKnowledgeBase') {
         searchLookupCount += 1;
         if (searchLookupCount > 3) {
-          forcedFinalization = true;
-          fallbackReason = 'Сейчас уточню информацию и вернусь с ответом.';
-          toolResults.push({ name: call.name, result: null, error: 'Search lookup limit exceeded' });
+          forcedFinalization = false;
+          fallbackReason = null;
           break;
         }
       }
@@ -845,29 +843,8 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
   }
 
   const shouldKeepCurrentReply = Boolean(finalReply?.trim()) && !shouldUseFallbackReply(validationErrors, finalReply);
-  if (!validation.valid && !validationAttempted && !bypassStyleValidation && !shouldKeepCurrentReply) {
-    validationAttempted = true;
-    console.warn('[AGENT] validation failed, retrying once', { agentId, errors: validation.errors });
-    const retryResponse = await callGemini(agent.model ?? GEMINI_CHAT_MODEL, promptWithCurrentStep, retryContents, allowedToolDeclarations, undefined, generationConfig);
-    lastFinishReason = retryResponse.payload.finishReason as string | undefined;
-    const retryParts = retryResponse.payload.parts;
-    const retryReply = (retryParts as Array<Record<string, unknown>>).filter((part) => typeof part?.text === 'string').map((part) => part.text).join('\n').trim();
-    const retryValidation = validateAgentAnswer(retryReply);
-    attempt = 2;
-    rawReply = retryReply;
-    tokens_input += retryResponse.payload.usageMetadata?.promptTokenCount ?? 0;
-    tokens_output += retryResponse.payload.usageMetadata?.candidatesTokenCount ?? 0;
-    validationErrors = retryValidation.valid ? [] : retryValidation.errors;
-
-    if (retryValidation.valid || !shouldUseFallbackReply(validationErrors, retryReply)) {
-      finalReply = retryReply;
-    } else {
-      console.warn('[AGENT] retry validation failed', { agentId, errors: retryValidation.errors });
-      const fallbackOutcome = await resolveFallbackReply(admin, agentId, allowedToolNames, toolContext, 'Ошибка валидации после повторной попытки');
-      finalReply = fallbackOutcome.reply;
-      handoffTriggered = handoffTriggered || fallbackOutcome.handoffTriggered;
-      await logErrorIncident(admin, agentId, { reason: 'validation_retry_failed', errors: retryValidation.errors, attempt });
-    }
+  if (!validation.valid && !bypassStyleValidation) {
+    console.warn('[AGENT] validation failed, using reply as-is', { agentId, errors: validation.errors });
   }
 
   const routingOutcome = await applyFunnelRouting({

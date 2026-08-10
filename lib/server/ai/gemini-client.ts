@@ -1,5 +1,5 @@
 export const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
-export const GEMINI_CHAT_MODEL = process.env.GEMINI_CHAT_MODEL ?? 'gemini-3.5-flash';
+export const GEMINI_CHAT_MODEL = process.env.GEMINI_CHAT_MODEL ?? 'gemini-2.5-flash';
 export const GEMINI_PROMPT_MODEL = process.env.GEMINI_PROMPT_MODEL ?? 'gemini-2.5-flash';
 export const GEMINI_EMBEDDING_MODEL = process.env.GEMINI_EMBEDDING_MODEL ?? 'gemini-embedding-2';
 export const GEMINI_EMBEDDING_OUTPUT_DIMENSIONALITY = Number(process.env.GEMINI_EMBEDDING_OUTPUT_DIM ?? '768');

@@ -36,7 +36,9 @@ test('compileFlowToPrompt includes step instructions and transitions', () => {
   assert.match(prompt, /\[Шаг: greeting\]/);
   assert.match(prompt, /Поприветствуй клиента/);
   assert.match(prompt, /если "готов купить"/);
-  assert.match(prompt, /advanceFunnelStep/);
+  assert.match(prompt, /система автоматически вызовет/);
+  assert.match(prompt, /НИКОГДА не пишешь клиенту/);
+  assert.doesNotMatch(prompt, /вызывать инструмент advanceFunnelStep/);
 });
 
 test('compileFlowToPrompt falls back to script_parts and preserves template placeholders', () => {

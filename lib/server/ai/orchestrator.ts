@@ -114,6 +114,8 @@ export function buildToolFailureFallbackMessage(toolResults: Array<Record<string
 
 const AGENT_CACHE_TTL_MS = 5_000;
 const agentCache = new Map<string, { expiresAt: number; data: Record<string, unknown> | null }>();
+const contextCache = new Map<string, { data: unknown; expiresAt: number }>();
+const CONTEXT_CACHE_TTL_MS = 10_000;
 
 async function getCachedAgent(
   admin: ReturnType<typeof createAdminClient>,
@@ -528,12 +530,27 @@ async function ensureLeadContext(
   }
 
   const externalId = `sandbox:${agentId}`;
-  let { data: lead } = await admin
+  const { data: leadLookup } = await admin
     .from('leads')
     .select('id, attributes')
     .eq('org_id', agentData.org_id)
     .eq('external_id', externalId)
     .maybeSingle();
+
+  let lead = leadLookup as { id?: string; attributes?: Record<string, unknown> | null } | null;
+  let conversation: { id?: string } | null = null;
+
+  if (lead?.id) {
+    const { data: existingConversation } = await admin
+      .from('conversations')
+      .select('id')
+      .eq('lead_id', lead.id)
+      .eq('agent_id', agentId)
+      .order('started_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    conversation = existingConversation as { id?: string } | null;
+  }
 
   if (!lead) {
     const { data: createdLead } = await admin
@@ -547,7 +564,7 @@ async function ensureLeadContext(
       })
       .select('id, attributes')
       .single();
-    lead = createdLead;
+    lead = createdLead as { id?: string; attributes?: Record<string, unknown> | null } | null;
   }
 
   if (lead?.id && !isSandboxLeadAttributes((lead.attributes as Record<string, unknown> | null) ?? null)) {
@@ -566,16 +583,9 @@ async function ensureLeadContext(
     };
   }
 
-  let { data: conversation } = await admin
-    .from('conversations')
-    .select('id')
-    .eq('lead_id', lead.id)
-    .eq('agent_id', agentId)
-    .order('started_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (!conversation) {
+  const existingConversation = conversation as { id?: string } | null;
+  let resolvedConversation = existingConversation;
+  if (!resolvedConversation) {
     const entryNodeId = getEntryNodeId(normalizeFunnelFlow(agentData?.dialogue_flow));
     const { data: createdConversation } = await admin
       .from('conversations')
@@ -586,12 +596,12 @@ async function ensureLeadContext(
       }))
       .select('id')
       .single();
-    conversation = createdConversation;
+    resolvedConversation = createdConversation as { id?: string } | null;
   }
 
-  const insertedMessage = conversation?.id
+  const insertedMessage = resolvedConversation?.id
     ? await admin.from('messages').insert({
-        conversation_id: conversation.id,
+        conversation_id: resolvedConversation.id,
         sender: 'user',
         content: userMessage,
       }).select('id').single()
@@ -599,7 +609,7 @@ async function ensureLeadContext(
 
   return {
     leadId: lead.id,
-    conversationId: conversation?.id ?? null,
+    conversationId: resolvedConversation?.id ?? null,
     orgId: agentData.org_id,
     leadAttributes: lead.id ? await findLeadAttributes(lead.id) : null,
     previousConversationSummary: lead.id ? await findPreviousConversationSummary(lead.id) : null,
@@ -790,7 +800,7 @@ function extractTextFromParts(parts: Array<Record<string, unknown>> | undefined)
     .trim();
 }
 
-const SUMMARY_TOKEN_THRESHOLD = 150_000;
+const SUMMARY_TOKEN_THRESHOLD = Number.POSITIVE_INFINITY;
 const SUMMARY_TAIL_MESSAGES = 30;
 
 function serializeMessagesForSummary(messages: Array<{ role: 'user' | 'model'; text: string }>) {
@@ -834,12 +844,14 @@ async function loadConversationMessages(
   admin: ReturnType<typeof createAdminClient>,
   conversationId: string,
   excludeMessageId?: string | null,
+  limit = 30,
 ) {
   let query = admin
     .from('messages')
     .select('id, sender, content')
     .eq('conversation_id', conversationId)
-    .order('created_at', { ascending: true });
+    .order('created_at', { ascending: false })
+    .limit(limit);
 
   if (excludeMessageId) {
     query = query.neq('id', excludeMessageId);
@@ -850,7 +862,23 @@ async function loadConversationMessages(
     throw new Error(`Failed to load conversation messages: ${error.message}`);
   }
 
-  return (data as Array<{ id: string; sender: string | null; content: string | null }> | null) ?? [];
+  return ((data as Array<{ id: string; sender: string | null; content: string | null }> | null) ?? []).reverse();
+}
+
+async function getCachedConversationContext(
+  admin: ReturnType<typeof createAdminClient>,
+  conversationId: string,
+  excludeMessageId?: string | null,
+) {
+  const key = `${conversationId}:${excludeMessageId ?? 'none'}`;
+  const cached = contextCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.data as Awaited<ReturnType<typeof buildConversationContext>>;
+  }
+
+  const data = await buildConversationContext(admin, conversationId, excludeMessageId);
+  contextCache.set(key, { data, expiresAt: Date.now() + CONTEXT_CACHE_TTL_MS });
+  return data;
 }
 
 const DEFAULT_MAX_OUTPUT_TOKENS = 512;
@@ -865,7 +893,6 @@ async function callGemini(
     temperature: 0.7,
     topP: 0.9,
     maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
-    thinkingConfig: { thinkingBudget: 256 },
   },
   retryCount = 0,
 ): Promise<GeminiClientResponse> {
@@ -1183,7 +1210,7 @@ export async function runAgentTurn(
 
   const [contextData, retrieval] = await Promise.all([
     ensureLeadContext(admin, agentId, userMessage, resolvedLeadId ?? undefined, resolvedUserMessageId ?? undefined),
-    searchKnowledgeBaseWithLinks(agentId, userMessage, 7, 0.5, undefined),
+    searchKnowledgeBaseWithLinks(agentId, userMessage, 3, 0.5, undefined),
   ]);
 
   resolvedLeadId = contextData.leadId ?? resolvedLeadId;
@@ -1270,7 +1297,7 @@ export async function runAgentTurn(
   }
 
   const conversationContext = conversationId
-    ? await buildConversationContext(admin, conversationId, persistedUserMessageId)
+    ? await getCachedConversationContext(admin, conversationId, persistedUserMessageId)
     : {
         conversationSummary: null,
         messagesAfterSummary: history,
@@ -1534,7 +1561,7 @@ export async function runAgentTurn(
   let toolsUsed: string[] = [];
   const toolUsageCounts: Record<string, number> = {};
 
-  while (iterations < 5 && toolCalls.length > 0) {
+  while (iterations < 3 && toolCalls.length > 0) {
     iterations += 1;
     const toolResults: Array<Record<string, unknown>> = [];
 
