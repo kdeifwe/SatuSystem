@@ -50,7 +50,7 @@ async function dispatch(call: ToolCall, ctx: ToolContext): Promise<unknown> {
     }
   }
 
-  switch (call.name) {
+  switch (call.name as string) {
     case 'searchKnowledgeBase': {
       const argsTyped = call.args as { query: string; top_k?: number };
       const topK = Math.min(argsTyped.top_k ?? 5, 10);
@@ -84,6 +84,8 @@ async function dispatch(call: ToolCall, ctx: ToolContext): Promise<unknown> {
     }
     case 'redirectToOperator':
       return redirectToOperator(call.args as { reason: string; priority?: string }, ctx);
+    case 'sendKaspiPay':
+      return createKaspiInvoice(call.args as { phone: string; amount: number; comment?: string }, ctx);
     case 'advanceFunnelStep':
       return advanceFunnelStep(call.args as { stepId: string; reason: string }, ctx);
     case 'getCurrentDate':
@@ -91,6 +93,8 @@ async function dispatch(call: ToolCall, ctx: ToolContext): Promise<unknown> {
     case 'getMediaFiles':
       return getMediaFiles(call.args as { category: string; search_query?: string }, ctx);
     case 'update_lead_status':
+      return updateLeadStatus(call.args as { lead_id: string; status: string }, ctx);
+    case 'updateLeadStatus':
       return updateLeadStatus(call.args as { lead_id: string; status: string }, ctx);
     case 'createKaspiInvoice':
       return createKaspiInvoice(call.args as { phone: string; amount: number; comment?: string }, ctx);

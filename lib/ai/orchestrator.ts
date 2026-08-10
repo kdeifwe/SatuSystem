@@ -623,7 +623,7 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
       // accumulate across iterations for possible forced finalization
       accumulatedToolResults.push({ name: call.name, result: toolResult.result, error: toolResult.error });
 
-      if (call.name === 'advanceFunnelStep' && toolResult.result && !toolResult.error) {
+      if ((call.name as any) === 'advanceFunnelStep' && toolResult.result && !toolResult.error) {
         const stepId = typeof (toolResult.result as any)?.step_id === 'string'
           ? String((toolResult.result as any).step_id)
           : undefined;

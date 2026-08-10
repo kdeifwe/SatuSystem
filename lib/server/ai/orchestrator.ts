@@ -1286,31 +1286,29 @@ export async function runAgentTurn(
     leadContextItems.push(`Предыдущее завершённое общение:\n${previousConversationSummary}`);
   }
 
-  const leadContextBlock = leadContextItems.length > 0
-    ? `<lead_context>\n${leadContextItems.join('\n\n')}\n</lead_context>\n\n`
-    : '';
+  const fullSystemPrompt = basePrompt;
+  const extraContextMessages: Array<{ role: string; parts: Array<{ text: string }> }> = [];
 
-  const previousConversationBlock = conversationContext.conversationSummary
-    ? `<previous_conversation_context>\n${conversationContext.conversationSummary}\n</previous_conversation_context>\n\n`
-    : '';
+  if (leadAttributes && Object.keys(leadAttributes).length > 0) {
+    extraContextMessages.push({
+      role: 'user',
+      parts: [{ text: `Контекст по клиенту:\n${JSON.stringify(leadAttributes, null, 2)}` }],
+    });
+  }
 
-  const stepContext = flow && currentFunnelStep
-    ? `\n\n<funnel_context>\n${compileFlowToPrompt(flow)}\n</funnel_context>`
-    : '';
+  if (previousConversationSummary) {
+    extraContextMessages.push({
+      role: 'user',
+      parts: [{ text: `Предыдущее завершённое общение:\n${previousConversationSummary}` }],
+    });
+  }
 
-  const knowledgeBasePromptRules = [
-    'Ниже идёт контекст из базы знаний. Он уже отсортирован по полезности для ответа: сначала фактические и структурированные данные, затем менее приоритетный промо-контент.',
-    'Если клиент назвал класс обучения (например "он бір", "9 сыныпта", "11 класс"), немедленно вызови update_lead_info и сохрани число класса в attributes.grade, прежде чем отвечать дальше.',
-    'Если запрос клиента — прямой факт о курсе/обучении (срок, длительность, цена, предметы, что входит), и в KB есть релевантный факт, отвечай напрямую из этого факта без лишних вопросов.',
-    'Если в контексте есть и фактический факт, и instagram/промо-контент, отвечай на основе фактического факта и явно оговаривай ограничения, если они есть.',
-    'Если searchKnowledgeBase вернул чанк, который относится к другому классу/программе, чем указано в attributes.grade клиента, не используй его.',
-    'Если найден чанк без явной привязки к классу (общий) или точно совпадающий с классом клиента, используй его напрямую, с фактическими цифрами.',
-    'Если данных нет вообще — честно скажи «Уточню».',
-    'Если данные есть, но не на 100% покрывают конкретную комбинацию клиента — дай найденный факт с явной оговоркой, например: «Для комбинации X длительность 6 месяцев; уточню детали именно под вашу комбинацию Y».',
-    'Никогда не отвечай «уточню у коллег», если запрошенный факт реально есть в найденном контексте — используй его.',
-  ].join('\n');
-
-  const fullSystemPrompt = `${basePrompt}\n\n${leadContextBlock}${previousConversationBlock}${stepContext}\n\n<knowledge_base>\n${kbContext}\n</knowledge_base>\n\n${knowledgeBasePromptRules}`;
+  if (kbContext) {
+    extraContextMessages.push({
+      role: 'user',
+      parts: [{ text: `Контекст из базы знаний:\n${kbContext}` }],
+    });
+  }
 
   const conversationContents = conversationContext.messagesAfterSummary.map((message) => ({
     role: message.role === 'user' ? 'user' : 'model',
@@ -1476,7 +1474,7 @@ export async function runAgentTurn(
   let tokensOutput = 0;
 
   try {
-    const extraUserContextMessages: Array<{ role: string; parts: Array<{ text: string }> }> = [];
+    const extraUserContextMessages = [...extraContextMessages];
     const knownName = leadAttributes && typeof leadAttributes === 'object' ? (leadAttributes as any).whatsapp_push_name : null;
     if (typeof knownName === 'string' && isValidLeadName(knownName)) {
       extraUserContextMessages.push({ role: 'user', parts: [{ text: `Известное имя клиента: ${knownName}` }] });
