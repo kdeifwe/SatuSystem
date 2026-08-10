@@ -195,7 +195,7 @@ export async function handleIncomingMessageWithDependencies(
     for (let i = 0; i < parts.length; i += 1) {
       const part = parts[i];
       const delay = i > 0 && typingSimulation !== false
-        ? Math.max(0, part.delayMs)
+        ? Math.min(500, Math.max(100, part.delayMs || 100))
         : 0;
 
       if (delay > 0) {

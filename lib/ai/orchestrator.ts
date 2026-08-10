@@ -495,9 +495,9 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
     currentNodeId = scriptTurnResolution.currentFunnelStep ?? currentNodeId;
   }
 
-  const stepInstruction = buildFunnelStepInstruction(currentNodeId);
-  const promptWithCurrentStep = `${compiledPrompt}${stepInstruction}`;
-  const bypassStyleValidation = shouldBypassStyleValidation(agent.dialogue_flow, currentNodeId);
+  let stepInstruction = buildFunnelStepInstruction(currentNodeId);
+  let promptWithCurrentStep = `${compiledPrompt}${stepInstruction}`;
+  let bypassStyleValidation = shouldBypassStyleValidation(agent.dialogue_flow, currentNodeId);
 
   const baseContents: Array<Record<string, unknown>> = [
     ...buildChatHistory(history),
@@ -622,6 +622,20 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
       toolResults.push({ name: call.name, args: call.args, result: toolResult.result, error: toolResult.error });
       // accumulate across iterations for possible forced finalization
       accumulatedToolResults.push({ name: call.name, result: toolResult.result, error: toolResult.error });
+
+      if (call.name === 'advanceFunnelStep' && toolResult.result && !toolResult.error) {
+        const stepId = typeof (toolResult.result as any)?.step_id === 'string'
+          ? String((toolResult.result as any).step_id)
+          : undefined;
+
+        if (stepId && stepId !== currentNodeId) {
+          currentNodeId = stepId;
+          stepInstruction = buildFunnelStepInstruction(currentNodeId);
+          promptWithCurrentStep = `${compiledPrompt}${stepInstruction}`;
+          bypassStyleValidation = shouldBypassStyleValidation(agent.dialogue_flow, currentNodeId);
+          console.log('[AGENT] advanceFunnelStep changed current node:', { agentId, conversationId, currentNodeId });
+        }
+      }
 
       if (call.name === 'redirectToOperator' && toolResult.result && !toolResult.error) {
         handoffTriggered = true;

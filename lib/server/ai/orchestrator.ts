@@ -112,7 +112,7 @@ export function buildToolFailureFallbackMessage(toolResults: Array<Record<string
   return 'Не удалось выполнить действие автоматически. Я не могу подтвердить успех и не буду обещать его клиенту. Могу уточнить детали или передать запрос оператору.';
 }
 
-const AGENT_CACHE_TTL_MS = 30_000;
+const AGENT_CACHE_TTL_MS = 5_000;
 const agentCache = new Map<string, { expiresAt: number; data: Record<string, unknown> | null }>();
 
 async function getCachedAgent(
@@ -1048,12 +1048,13 @@ async function buildConversationContext(
       text: message.content!.trim(),
     }));
 
-  const tokenContents = serializeContentForTokenCount(conversation?.summary, formattedMessages);
+  const recentMessages = formattedMessages.slice(-10);
+  const tokenContents = serializeContentForTokenCount(conversation?.summary, recentMessages);
   const { tokens: totalTokens, fallback: tokenEstimateFallback } = await estimateContentTokens(tokenContents);
   if (totalTokens <= SUMMARY_TOKEN_THRESHOLD) {
     return {
       conversationSummary: conversation?.summary ?? null,
-      messagesAfterSummary: formattedMessages,
+      messagesAfterSummary: recentMessages,
       summaryUpToMessageId,
       contextTokenCount: totalTokens,
       contextTokenCountFallback: tokenEstimateFallback,
@@ -1063,11 +1064,12 @@ async function buildConversationContext(
   const compressibleCount = Math.max(1, formattedMessages.length - SUMMARY_TAIL_MESSAGES);
   const messagesToCompress = formattedMessages.slice(0, compressibleCount);
   const tailMessages = formattedMessages.slice(compressibleCount);
+  const recentTailMessages = tailMessages.slice(-10);
 
   if (messagesToCompress.length === 0) {
     return {
       conversationSummary: conversation?.summary ?? null,
-      messagesAfterSummary: formattedMessages,
+      messagesAfterSummary: recentMessages,
       summaryUpToMessageId,
       contextTokenCount: totalTokens,
       contextTokenCountFallback: tokenEstimateFallback,
@@ -1083,7 +1085,7 @@ async function buildConversationContext(
 
   return {
     conversationSummary: summaryText,
-    messagesAfterSummary: tailMessages,
+    messagesAfterSummary: recentTailMessages,
     summaryUpToMessageId: updatedSummaryId,
     contextTokenCount: totalTokens,
     contextTokenCountFallback: tokenEstimateFallback,
@@ -1179,13 +1181,14 @@ export async function runAgentTurn(
   let resolvedConversationId: string | null = conversationId ?? null;
   let resolvedUserMessageId: string | null = userMessageId ?? null;
 
-  let contextData: Awaited<ReturnType<typeof ensureLeadContext>> | null = null;
-  if (!resolvedLeadId || !resolvedConversationId) {
-    contextData = await ensureLeadContext(admin, agentId, userMessage);
-    resolvedLeadId = contextData.leadId;
-    resolvedConversationId = contextData.conversationId;
-    resolvedUserMessageId = contextData.userMessageId;
-  }
+  const [contextData, retrieval] = await Promise.all([
+    ensureLeadContext(admin, agentId, userMessage, resolvedLeadId ?? undefined, resolvedUserMessageId ?? undefined),
+    searchKnowledgeBaseWithLinks(agentId, userMessage, 7, 0.5, undefined),
+  ]);
+
+  resolvedLeadId = contextData.leadId ?? resolvedLeadId;
+  resolvedConversationId = contextData.conversationId ?? resolvedConversationId;
+  resolvedUserMessageId = contextData.userMessageId ?? resolvedUserMessageId;
 
   leadId = resolvedLeadId ?? undefined;
   conversationId = resolvedConversationId ?? undefined;
@@ -1201,9 +1204,7 @@ export async function runAgentTurn(
     ? (leadAttributes.grade as string | number | null | undefined)
     : null;
 
-  // 1. RAG — ищем релевантные чанки ДО вызова Gemini,
-  // но уже с учётом класса лида, если он известен.
-  const retrieval = await searchKnowledgeBaseWithLinks(agentId, userMessage, 15, 0.3, leadGrade);
+  // 1. RAG — ищем релевантные чанки ДО вызова Gemini.
   const chunks = retrieval.primaryChunks;
   const linkedChunks = retrieval.linkedChunks;
   const kbContext = retrieval.contextText;

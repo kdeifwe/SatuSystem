@@ -35,12 +35,18 @@ export function mergeAllowedToolNames(
   _options?: { includeAdvanceFunnelStep?: boolean },
 ): string[] {
   const merged = new Set<string>();
+  const normalizedExisting = normalizeToolNameList(configuredTools);
+  const normalizedDefaults = normalizeToolNameList(defaultTools);
 
-  for (const tool of normalizeToolNameList(configuredTools)) {
+  if (normalizedExisting.length === 0 && normalizedDefaults.length === 0) {
+    return ALL_TOOL_DECLARATIONS.map((declaration) => declaration.name);
+  }
+
+  for (const tool of normalizedExisting) {
     if (tool) merged.add(tool);
   }
 
-  for (const tool of normalizeToolNameList(defaultTools)) {
+  for (const tool of normalizedDefaults) {
     if (tool) merged.add(tool);
   }
 

@@ -232,7 +232,9 @@ export async function POST(req: NextRequest) {
           try {
             await notifyOrgAdmins(
               organizationId,
-              '⚠️ Сессия Kaspi Pay истекла — AI-агент не может выставлять счета. Нужна реавторизация в Настройки → Интеграции → Kaspi Pay'
+              '⚠️ Сессия Kaspi Pay истекла — AI-агент не может выставлять счета.\n' +
+                `Последняя попытка: lead_id ${normalizedLeadId ?? 'неизвестен'}.\n` +
+                'Нужна реавторизация в Настройки → Интеграции → Kaspi Pay'
             );
           } catch (alertError) {
             console.error('[kaspi invoice] failed to notify org admins about auth expiry', alertError);
