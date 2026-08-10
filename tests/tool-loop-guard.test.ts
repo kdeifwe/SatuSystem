@@ -17,3 +17,11 @@ test('builds a non-promissory fallback when a billing tool fails', () => {
   assert.match(fallback ?? '', /не получается оформить автоматически/i);
   assert.match(fallback ?? '', /уточню данные/i);
 });
+
+test('does not force a fallback when searchKnowledgeBase errors', () => {
+  const fallback = buildToolFailureFallbackMessage([
+    { name: 'searchKnowledgeBase', error: 'timeout' },
+  ]);
+
+  assert.equal(fallback, null);
+});

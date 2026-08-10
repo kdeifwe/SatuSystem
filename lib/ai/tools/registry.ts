@@ -113,7 +113,7 @@ export function buildToolDeclarationsForAgent(allowedToolNames: string[], genera
 export const PRODUCTION_TOOL_DECLARATIONS: GeminiFunctionDeclaration[] = [
   {
     name: 'searchKnowledgeBase',
-    description: `Выполняет семантический поиск по базе знаний компании. Вызывай перед любым утверждением о цене, товаре, характеристике, доставке или условиях. Не угадывай факты.`,
+    description: `Выполняет семантический поиск по базе знаний компании. Используй ТОЛЬКО если нужный факт отсутствует в твоей памяти (CORE_KNOWLEDGE) или инструкциях выше. Не вызывай для цены, продукта, условий, FAQ и возражений, если они уже описаны в CORE_KNOWLEDGE. Не угадывай факты.`,
     parameters: {
       type: 'OBJECT',
       properties: {

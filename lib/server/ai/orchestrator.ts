@@ -105,6 +105,10 @@ export function buildToolFailureFallbackMessage(toolResults: Array<Record<string
     .map((result) => (typeof result.name === 'string' ? result.name : ''))
     .filter(Boolean);
 
+  if (failedToolNames.includes('searchKnowledgeBase') && failedToolNames.length === 1) {
+    return null;
+  }
+
   if (failedToolNames.includes('createKaspiInvoice')) {
     return 'Счёт сейчас не получается оформить автоматически. Уточню данные и сразу напишу.';
   }
@@ -1428,6 +1432,47 @@ export async function runAgentTurn(
   }
   // === End Script Path ===
 
+  const pricePatterns = [
+    /қанша\b/i,
+    /баға/i,
+    /багас/i,
+    /стоимост/i,
+    /цен/i,
+    /сколько стоит/i,
+    /нарх/i,
+    /price/i,
+  ];
+  const isPriceQuestion = pricePatterns.some((pattern) => pattern.test(userMessage));
+
+  if (isPriceQuestion) {
+    const priceAnswer = 'Бағасы — 150 000 теңге/ай. Бағаға толық дайын ИИ-агент, қажетті арналарға қосылу, диалогтарды жүргізу, есептер және техникалық баптау кіреді.';
+    const splitMessages = Boolean((generalCapabilities?.split_messages) ?? true);
+    const splitMaxParts = Math.min(3, Math.max(1, Number(generalCapabilities?.split_max_parts ?? 3)));
+    const typingSimulation = Boolean((generalCapabilities?.typing_simulation) ?? true);
+    const messageParts = splitAgentMessage(priceAnswer, splitMessages, splitMaxParts).map((part) => ({
+      text: part.text,
+      delayMs: typingSimulation ? calculateTypingDelay(part.text) + part.delayMs : part.delayMs,
+    }));
+
+    if (conversationId) {
+      await appendMessage(admin, conversationId, 'ai', priceAnswer);
+    }
+
+    return {
+      answer: priceAnswer,
+      usedChunks: [],
+      messageParts,
+      splitMessages,
+      typingSimulation,
+      handoffMessage: undefined,
+      toolsUsed: [],
+      tokensInput: 0,
+      tokensOutput: 0,
+      latencyMs: Date.now() - startTime,
+      retrievalDebug: { primaryChunks: [], linkedChunks: [] },
+    };
+  }
+
   const deterministicFactAnswer = tryBuildDeterministicFactAnswerWithLogging(userMessage, chunks, leadGrade);
   if (deterministicFactAnswer) {
     console.log('[FACT_FALLBACK] using deterministic KB fact answer for user message', { agentId, userMessage });
@@ -1600,11 +1645,8 @@ export async function runAgentTurn(
       console.log('[PROD_TOOL_RESULT]', { agentId, name: toolCall.name, result: toolResult.result, error: toolResult.error });
 
       if (toolResult.error) {
-        const fallbackMessage = buildToolFailureFallbackMessage(toolResults);
-        if (fallbackMessage) {
-          finalAnswer = fallbackMessage;
-        }
-        break;
+        console.warn('[PROD_TOOL_ERROR]', { agentId, name: toolCall.name, error: toolResult.error });
+        // Не прерываем цикл: модель может ответить из CORE_KNOWLEDGE или дать естественный follow-up.
       }
 
       if (toolCall.name === 'redirectToOperator' && toolResult.result) {
