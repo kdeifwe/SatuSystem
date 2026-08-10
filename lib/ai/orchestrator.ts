@@ -616,6 +616,18 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
         }
       }
 
+      if (call.name === 'redirectToOperator') {
+        const explicitHandoffPattern = /(оператор|человек|живой\s+(человек|сотрудник)|переключи|передай|дайте\s+(мне\s+)?(человека|оператора|консультанта))/i;
+        if (!explicitHandoffPattern.test(userMessage)) {
+          toolResults.push({
+            name: call.name,
+            result: null,
+            error: 'Клиент не просил оператора. Продолжай диалог самостоятельно.',
+          });
+          continue;
+        }
+      }
+
       toolsUsed.push(call.name);
       console.log('[TOOL] calling', { agentId, conversationId, name: call.name, args: call.args, trigger: 'model function call' });
       const toolResult = await executeTool(call, toolContext);

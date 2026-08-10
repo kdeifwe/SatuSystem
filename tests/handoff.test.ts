@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildHandoffPromptSection, normalizeHandoffConfig } from '../lib/server/ai/handoff';
+import { buildHandoffPromptSection, getEmptyResponseFallbackMessage, normalizeHandoffConfig } from '../lib/server/ai/handoff';
 
 test('buildHandoffPromptSection includes enabled triggers and messages', () => {
   const config = normalizeHandoffConfig({
@@ -42,4 +42,8 @@ test('buildHandoffPromptSection does not add unrelated bullet when no triggers e
 
   assert.match(section, /- авто-передача включена, но не активировано ни одного триггера/);
   assert.doesNotMatch(section, /вне твоих полномочий/);
+});
+
+test('getEmptyResponseFallbackMessage uses the non-handoff clarification fallback', () => {
+  assert.equal(getEmptyResponseFallbackMessage(), 'Сейчас уточню информацию и вернусь с ответом.');
 });

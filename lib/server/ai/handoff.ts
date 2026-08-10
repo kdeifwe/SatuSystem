@@ -23,7 +23,7 @@ export const DEFAULT_HANDOFF_CONFIG: HandoffConfig = {
 };
 
 export function getEmptyResponseFallbackMessage(): string {
-  return DEFAULT_HANDOFF_CONFIG.client_message;
+  return 'Сейчас уточню информацию и вернусь с ответом.';
 }
 
 export function normalizeHandoffConfig(value: unknown): HandoffConfig {

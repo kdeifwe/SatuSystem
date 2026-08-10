@@ -109,7 +109,7 @@ export function buildToolFailureFallbackMessage(toolResults: Array<Record<string
     return 'Счёт сейчас не получается оформить автоматически. Я не могу подтвердить, что он отправлен, и не буду обещать это клиенту. Могу уточнить данные для счёта или передать запрос оператору.';
   }
 
-  return 'Не удалось выполнить действие автоматически. Я не могу подтвердить успех и не буду обещать его клиенту. Могу уточнить детали или передать запрос оператору.';
+  return 'Не удалось выполнить действие автоматически. Давайте уточним детали — я уточню информацию и сразу напишу.';
 }
 
 const AGENT_CACHE_TTL_MS = 5_000;
@@ -1551,6 +1551,18 @@ export async function runAgentTurn(
           result: { skipped: true, reason: policy.reason },
         });
         continue;
+      }
+
+      if (toolCall.name === 'redirectToOperator') {
+        const explicitHandoffPattern = /(оператор|человек|живой\s+(человек|сотрудник)|переключи|передай|дайте\s+(мне\s+)?(человека|оператора|консультанта))/i;
+        if (!explicitHandoffPattern.test(userMessage)) {
+          toolResults.push({
+            name: toolCall.name,
+            result: null,
+            error: 'Клиент не просил оператора. Продолжай диалог самостоятельно. Если не знаешь ответ — скажи "Сейчас уточню информацию".',
+          });
+          continue;
+        }
       }
 
       toolUsageCounts[toolCall.name] = (toolUsageCounts[toolCall.name] ?? 0) + 1;

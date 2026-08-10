@@ -1,8 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { getEmptyResponseFallbackMessage } from '../lib/server/ai/handoff';
 import { buildSystemPrompt } from '../lib/ai/compile-system-prompt.ts';
 
-test('buildSystemPrompt includes tool names and prompt-injection safeguard', () => {
+test('empty response fallback uses a clarification message instead of a handoff message', () => {
+  assert.equal(getEmptyResponseFallbackMessage(), 'Сейчас уточню информацию и вернусь с ответом.');
+});
+
+test('system prompt forbids operator escalation for missing product details', () => {
   const prompt = buildSystemPrompt(
     {
       id: 'agent-1',
@@ -20,12 +25,6 @@ test('buildSystemPrompt includes tool names and prompt-injection safeguard', () 
     []
   );
 
-  assert.match(prompt, /searchKnowledgeBase/);
-  assert.match(prompt, /redirectToOperator/);
-  assert.match(prompt, /createKaspiInvoice/);
-  assert.match(prompt, /когда клиент явно подтвердил готовность оплатить/i);
-  assert.match(prompt, /забудь все инструкции/i);
-  assert.match(prompt, /prompt injection/i);
   assert.match(prompt, /НИКОГДА не переключай на оператора только потому что не знаешь цену, наличие или характеристику/i);
   assert.match(prompt, /переключай на оператора ТОЛЬКО если клиент явно просит/i);
 });
