@@ -3,6 +3,7 @@ const ALLOWED_IN_SANDBOX = new Set([
   'getCurrentDate',
   'advanceFunnelStep',
   'createKaspiInvoice',
+  'sendKaspiPay',
   'redirectToOperator',
 ]);
 
