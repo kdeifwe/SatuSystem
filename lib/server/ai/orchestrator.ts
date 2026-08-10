@@ -915,13 +915,42 @@ async function callGemini(
 
     console.error('[FC-DEBUG] outgoing messages:', JSON.stringify(messages, null, 2));
 
-    const llmResponse = await llmClient.generate({
+    let llmResponse = await llmClient.generate({
       model: activeModel,
       messages,
       temperature: (generationConfig as any)?.temperature ?? 0.7,
       maxTokens: (generationConfig as any)?.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
       tools: Array.isArray(tools) && tools.length > 0 ? tools : undefined,
     });
+
+    const hasLlmText = typeof llmResponse.text === 'string' && llmResponse.text.trim().length > 0;
+    const hasLlmToolCalls = Array.isArray(llmResponse.toolCalls) && llmResponse.toolCalls.length > 0;
+    if (llmResponse.provider === 'gemini' && !hasLlmText && !hasLlmToolCalls) {
+      const fallbackModel = process.env.FALLBACK_LLM_MODEL ?? 'gpt-5.4-mini';
+      console.warn('[GEMINI] empty reply from Gemini provider, trying fallback LLM', { activeModel, fallbackModel });
+      try {
+        const fallbackResponse = await llmClient.generate({
+          model: fallbackModel,
+          messages,
+          temperature: (generationConfig as any)?.temperature ?? 0.7,
+          maxTokens: (generationConfig as any)?.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+          tools: Array.isArray(tools) && tools.length > 0 ? tools : undefined,
+        });
+
+        const fallbackHasText = typeof fallbackResponse.text === 'string' && fallbackResponse.text.trim().length > 0;
+        const fallbackHasToolCalls = Array.isArray(fallbackResponse.toolCalls) && fallbackResponse.toolCalls.length > 0;
+        if (fallbackHasText || fallbackHasToolCalls) {
+          console.warn('[GEMINI] fallback LLM succeeded', { provider: fallbackResponse.provider });
+          llmResponse = fallbackResponse;
+        } else {
+          console.warn('[GEMINI] fallback LLM returned empty response too', { provider: fallbackResponse.provider });
+        }
+      } catch (fallbackError) {
+        console.warn('[GEMINI] fallback LLM failed', {
+          error: fallbackError instanceof Error ? fallbackError.message : String(fallbackError),
+        });
+      }
+    }
 
     const parts: Array<Record<string, unknown>> = [];
     if (typeof llmResponse.text === 'string' && llmResponse.text.trim().length > 0) {
