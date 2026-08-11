@@ -14,6 +14,16 @@ import { buildConversationInsertData, buildSandboxConversationInsertData, buildS
 import { tryBuildDeterministicFactAnswer } from '@/lib/server/ai/deterministic-facts';
 import { isValidLeadName } from '@/lib/server/lead-name';
 
+const ORCHESTRATOR_BUILD_TAG =
+  process.env.ORCHESTRATOR_BUILD_TAG ||
+  process.env.GITHUB_SHA ||
+  process.env.VERCEL_GIT_COMMIT_SHA ||
+  process.env.CI_COMMIT_SHA ||
+  process.env.COMMIT_SHA ||
+  'unknown';
+const ORCHESTRATOR_BUILD_TIME = process.env.ORCHESTRATOR_BUILD_TIME || new Date().toISOString();
+console.log('[ORCHESTRATOR_VERSION]', { tag: ORCHESTRATOR_BUILD_TAG, builtAt: ORCHESTRATOR_BUILD_TIME });
+
 export interface ChatMessage {
   role: 'user' | 'model';
   text: string;
@@ -109,7 +119,7 @@ export function buildToolFailureFallbackMessage(toolResults: Array<Record<string
     return null;
   }
 
-  if (failedToolNames.includes('createKaspiInvoice')) {
+  if (failedToolNames.some((name) => ['createKaspiInvoice', 'sendKaspiPay'].includes(name))) {
     return 'Счёт сейчас не получается оформить автоматически. Уточню данные и сразу напишу.';
   }
 
