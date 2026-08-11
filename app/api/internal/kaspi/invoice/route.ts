@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { notifyOrgAdmins } from '@/lib/notifications';
 import { getSupabaseAdminClient } from '@/lib/supabase-server';
+import { normalizeKaspiPhone } from '@/lib/kaspi-phone.ts';
 
 export const runtime = 'nodejs';
 
@@ -29,20 +30,6 @@ function buildBasicAuthHeader(username: string, password: string) {
 
 function isValidUuid(value: string | null | undefined) {
   return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value.trim());
-}
-
-function normalizeKzPhone(raw: string): string {
-  const digits = raw.replace(/\D/g, '');
-  if (digits.length === 11 && digits.startsWith('8')) {
-    return '7' + digits.slice(1);
-  }
-  if (digits.length === 11 && digits.startsWith('7')) {
-    return digits;
-  }
-  if (digits.length === 10) {
-    return '7' + digits;
-  }
-  return digits;
 }
 
 async function sleep(ms: number) {
@@ -124,7 +111,10 @@ export async function POST(req: NextRequest) {
     const normalizedConversationId = typeof conversation_id === 'string' && conversation_id.trim() ? conversation_id.trim() : null;
     const normalizedConversationIdForDb = isValidUuid(normalizedConversationId) ? normalizedConversationId : null;
     const normalizedComment = typeof comment === 'string' ? comment : null;
-    const normalizedPhone = normalizeKzPhone(phone.trim());
+    const normalizedPhone = normalizeKaspiPhone(phone.trim());
+    if (!/^[7]\d{10}$/.test(normalizedPhone)) {
+      return NextResponse.json({ error: 'phone must be normalized to format 7XXXXXXXXXX' }, { status: 400 });
+    }
 
     const admin = getSupabaseAdminClient();
     let organizationId: string | null = null;

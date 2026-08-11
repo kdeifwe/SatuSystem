@@ -2,6 +2,7 @@ import { createServiceClient } from '../../supabase/service.ts';
 import { generateQueryEmbedding } from '../embeddings.ts';
 import { enqueueNotification } from '../../notifications.ts';
 import { sendTelegramNotification } from '../../extensions/telegram-notify.ts';
+import { normalizeKaspiPhone } from '../../kaspi-phone.ts';
 import { type ToolCall, type ToolResult } from './registry.ts';
 import { isSandboxToolAllowed } from './sandbox-allowlist';
 import { getLinkedKBChunks, searchKnowledgeBaseBilingual } from '../../knowledge-base/search.ts';
@@ -706,9 +707,14 @@ async function sendCustomNotification(args: { message: string; target: string },
 }
 
 export function validateCreateKaspiInvoiceArgs(args: { phone?: string; amount?: number; comment?: string }) {
-  const normalizedPhone = typeof args.phone === 'string' ? args.phone.trim() : '';
-  if (!normalizedPhone) {
+  const rawPhone = typeof args.phone === 'string' ? args.phone.trim() : '';
+  if (!rawPhone) {
     throw new Error('Нужен номер телефона клиента. Сначала спроси номер и только потом вызывай createKaspiInvoice.');
+  }
+
+  const normalizedPhone = normalizeKaspiPhone(rawPhone);
+  if (!/^[7]\d{10}$/.test(normalizedPhone)) {
+    throw new Error('Номер телефона должен содержать 11 цифр и начинаться с 7. Пример: 7XXXXXXXXXX.');
   }
 
   if (typeof args.amount !== 'number' || !Number.isFinite(args.amount) || args.amount <= 0) {
@@ -774,7 +780,13 @@ async function createKaspiInvoice(args: { phone: string; amount: number; comment
   }
 
   if (!response.ok) {
-    throw new Error(`createKaspiInvoice failed: ${payload?.error ?? response.statusText}`);
+    const errorDetail =
+      typeof payload?.message === 'string' && payload.message.trim()
+        ? payload.message.trim()
+        : typeof payload?.error === 'string' && payload.error.trim()
+          ? payload.error.trim()
+          : response.statusText || 'Unknown error';
+    throw new Error(`createKaspiInvoice failed: ${errorDetail}`);
   }
 
   return payload;

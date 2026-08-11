@@ -1702,6 +1702,14 @@ export async function runAgentTurn(
       break;
     }
 
+    const toolFailureFallback = buildToolFailureFallbackMessage(toolResults);
+    if (toolFailureFallback) {
+      finalAnswer = toolFailureFallback;
+      currentParts = [{ text: toolFailureFallback }];
+      toolCalls = [];
+      break;
+    }
+
     const functionResponseParts = toolResults.map((result) => ({
       functionResponse: {
         name: result.name,
