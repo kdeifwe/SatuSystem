@@ -107,23 +107,34 @@ export function getToolExecutionPolicy(toolName: string, toolUsageCounts: Record
 
 export function buildToolFailureFallbackMessage(toolResults: Array<Record<string, unknown>>) {
   const failedResults = toolResults.filter((result) => Boolean(result.error));
-  if (failedResults.length === 0) {
-    return null;
-  }
-
   const failedToolNames = failedResults
     .map((result) => (typeof result.name === 'string' ? result.name : ''))
     .filter(Boolean);
 
-  if (failedToolNames.includes('searchKnowledgeBase') && failedToolNames.length === 1) {
-    return null;
-  }
+  const fallbackMessage = (() => {
+    if (failedResults.length === 0) {
+      return null;
+    }
 
-  if (failedToolNames.some((name) => ['createKaspiInvoice', 'sendKaspiPay'].includes(name))) {
-    return 'Счёт сейчас не получается оформить автоматически. Уточню данные и сразу напишу.';
-  }
+    if (failedToolNames.includes('searchKnowledgeBase') && failedToolNames.length === 1) {
+      return null;
+    }
 
-  return 'Не удалось выполнить действие автоматически. Уточню детали и сразу напишу.';
+    if (failedToolNames.some((name) => ['createKaspiInvoice', 'sendKaspiPay'].includes(name))) {
+      return 'Счёт сейчас не получается оформить автоматически. Уточню данные и сразу напишу.';
+    }
+
+    return 'Не удалось выполнить действие автоматически. Уточню детали и сразу напишу.';
+  })();
+
+  console.log('[BUILD_TOOL_FALLBACK]', {
+    toolResults,
+    failedResults,
+    failedToolNames,
+    fallbackMessage,
+  });
+
+  return fallbackMessage;
 }
 
 const AGENT_CACHE_TTL_MS = 5_000;
@@ -1713,6 +1724,7 @@ export async function runAgentTurn(
     }
 
     const toolFailureFallback = buildToolFailureFallbackMessage(toolResults);
+    console.log('[TOOL_FAILURE_DECISION]', { agentId, conversationId, toolResults, toolFailureFallback });
     if (toolFailureFallback) {
       finalAnswer = toolFailureFallback;
       currentParts = [{ text: toolFailureFallback }];
