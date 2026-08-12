@@ -5,6 +5,7 @@ import { AGENT_TOOLS, mergeAllowedToolNames, type ToolCall } from './tools/regis
 import { executeTool, type ToolContext } from './tools/executor.ts';
 import { validateAgentAnswer } from './validate-output.ts';
 import { compileAndSaveSystemPrompt } from './compile-system-prompt.ts';
+import { sanitizeAgentReply } from './response-sanitizer.ts';
 import { buildFinalSynthesisContents, buildRetryContents } from './retry-context.ts';
 import { shouldBypassStyleValidation, shouldUseFallbackReply } from './response-policy';
 import { normalizeFunnelFlow } from '../funnel/normalize.ts';
@@ -684,7 +685,7 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
 
   const replyFromModelParts = (parts as Array<Record<string, unknown>>).filter((part) => typeof part?.text === 'string').map((part) => part.text).join('\n').trim();
   if (!finalReply.trim() && replyFromModelParts) {
-    finalReply = replyFromModelParts;
+    finalReply = sanitizeAgentReply(replyFromModelParts);
   }
 
   let rawReply = finalReply;
@@ -709,8 +710,8 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
       const finalSynthesisParts = finalSynthesisResponse.payload.parts;
       const finalSynthesisReply = (finalSynthesisParts as Array<Record<string, unknown>>).filter((part) => typeof part?.text === 'string').map((part) => part.text).join('\n').trim();
       if (finalSynthesisReply) {
-        finalReply = finalSynthesisReply;
-        rawReply = finalSynthesisReply;
+        finalReply = sanitizeAgentReply(finalSynthesisReply);
+        rawReply = finalReply;
         response = finalSynthesisResponse;
         tokens_input += finalSynthesisResponse.payload.usageMetadata?.promptTokenCount ?? 0;
         tokens_output += finalSynthesisResponse.payload.usageMetadata?.candidatesTokenCount ?? 0;
@@ -797,8 +798,8 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
       const noToolsParts = noToolsResponse.payload.parts;
       const noToolsReply = (noToolsParts as Array<Record<string, unknown>>).filter((part) => typeof part?.text === 'string').map((part) => part.text).join('\n').trim();
       if (noToolsReply) {
-        finalReply = noToolsReply;
-        rawReply = noToolsReply;
+        finalReply = sanitizeAgentReply(noToolsReply);
+        rawReply = finalReply;
         response = noToolsResponse;
         tokens_input += noToolsResponse.payload.usageMetadata?.promptTokenCount ?? 0;
         tokens_output += noToolsResponse.payload.usageMetadata?.candidatesTokenCount ?? 0;
@@ -817,8 +818,8 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
       const retryParts = retryResponse.payload.parts;
       const retryReply = (retryParts as Array<Record<string, unknown>>).filter((part) => typeof part?.text === 'string').map((part) => part.text).join('\n').trim();
       if (retryReply) {
-        finalReply = retryReply;
-        rawReply = retryReply;
+        finalReply = sanitizeAgentReply(retryReply);
+        rawReply = finalReply;
         response = retryResponse;
         attempt = 2;
         tokens_input += retryResponse.payload.usageMetadata?.promptTokenCount ?? 0;
@@ -869,7 +870,7 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
   });
 
   handoffTriggered = handoffTriggered || routingOutcome.shouldHandoff;
-  finalReply = postRoutingReply.finalAnswer;
+  finalReply = sanitizeAgentReply(postRoutingReply.finalAnswer);
 
   const assistantMessageId = await appendMessage(admin, conversationId, 'ai', finalReply, toolsUsed.map((name) => ({ name })));
 

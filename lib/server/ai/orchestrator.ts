@@ -13,6 +13,7 @@ import { applyFunnelRouting, resolvePostRoutingReply, upsertLeadFunnelState } fr
 import { buildConversationInsertData, buildSandboxConversationInsertData, buildSandboxLeadAttributes, isSandboxLeadAttributes } from '@/lib/ai/sandbox-context';
 import { tryBuildDeterministicFactAnswer } from '@/lib/server/ai/deterministic-facts';
 import { isValidLeadName } from '@/lib/server/lead-name';
+import { sanitizeAgentReply } from '@/lib/ai/response-sanitizer';
 
 const ORCHESTRATOR_BUILD_TAG =
   process.env.ORCHESTRATOR_BUILD_TAG ||
@@ -1644,7 +1645,7 @@ export async function runAgentTurn(
     // non-fatal
   }
   let currentParts = normalizeLlmResponseParts(response);
-  let finalAnswer = extractTextFromParts(currentParts) || ((response as any).text ?? '');
+  let finalAnswer = sanitizeAgentReply(extractTextFromParts(currentParts) || ((response as any).text ?? ''));
   let handoffMessage: string | undefined;
   let handoffTriggered = false;
 
@@ -1755,7 +1756,7 @@ export async function runAgentTurn(
     tokensInput += followUpResponse.payload.usageMetadata?.promptTokenCount ?? 0;
     tokensOutput += followUpResponse.payload.usageMetadata?.candidatesTokenCount ?? 0;
     currentParts = normalizeLlmResponseParts(followUpResponse);
-    finalAnswer = extractTextFromParts(currentParts) || ((followUpResponse as any).text ?? finalAnswer);
+    finalAnswer = sanitizeAgentReply(extractTextFromParts(currentParts) || ((followUpResponse as any).text ?? finalAnswer));
     console.log('[PROD_TOOL_FOLLOWUP_RESPONSE]', { agentId, answer: finalAnswer, toolCalls: tryExtractToolCalls(currentParts) });
     toolCalls = tryExtractToolCalls(currentParts);
   }
@@ -1781,7 +1782,7 @@ export async function runAgentTurn(
         toolPayload,
       );
       const retryParts = normalizeLlmResponseParts(retryResponse);
-      const retryText = extractTextFromParts(retryParts) || ((retryResponse as any).text ?? '');
+      const retryText = sanitizeAgentReply(extractTextFromParts(retryParts) || ((retryResponse as any).text ?? ''));
       if (retryText.trim()) {
         response = retryResponse;
         currentParts = retryParts;
@@ -1842,7 +1843,7 @@ export async function runAgentTurn(
   });
 
   handoffTriggered = handoffTriggered || routingResult.handoffTriggered;
-  finalAnswer = routingResult.finalAnswer;
+  finalAnswer = sanitizeAgentReply(routingResult.finalAnswer);
   // === End Routing ===
 
   if (conversationId && routingResult.shouldAppendMessage) {

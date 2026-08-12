@@ -321,8 +321,8 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({
           success: true,
           lead_id: normalizedLeadId,
+          kaspi_invoice_id: qrOperationId,
           request: payload,
-          kaspiResponse: responseBody,
         });
       } catch (error) {
         const message = toErrorMessage(error);
