@@ -8,6 +8,8 @@ export const runtime = 'nodejs';
 const MAX_AUTO_INVOICE_AMOUNT = 200000;
 const DEFAULT_TIMEOUT_MS = 8000;
 const RETRY_DELAY_MS = 1000;
+const DUPLICATE_INVOICE_WINDOW_MS = 60_000;
+const SEND_DELAY_MS = 6000;
 
 const INTERNAL_API_SECRET_HEADER = 'X-Internal-Secret';
 
@@ -146,6 +148,49 @@ export async function POST(req: NextRequest) {
       organizationId = organization.id;
     }
 
+    const duplicateThreshold = new Date(Date.now() - DUPLICATE_INVOICE_WINDOW_MS).toISOString();
+    let duplicateQuery = admin
+      .from('kaspi_invoices')
+      .select('*')
+      .eq('org_id', organizationId)
+      .eq('amount', normalizedAmount)
+      .eq('phone', normalizedPhone)
+      .in('status', ['pending', 'success'])
+      .gt('created_at', duplicateThreshold)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (normalizedLeadIdForDb) {
+      duplicateQuery = duplicateQuery.eq('lead_id', normalizedLeadIdForDb);
+    }
+
+    const { data: duplicateInvoice, error: duplicateQueryError } = await duplicateQuery.maybeSingle();
+    if (duplicateQueryError) {
+      console.error('[kaspi invoice] duplicate lookup failed', duplicateQueryError);
+      return NextResponse.json({ error: 'Failed to verify duplicate invoice' }, { status: 500 });
+    }
+
+    if (duplicateInvoice) {
+      return NextResponse.json(
+        {
+          success: true,
+          duplicate: true,
+          existing_invoice: {
+            id: duplicateInvoice.id,
+            kaspi_invoice_id: duplicateInvoice.kaspi_invoice_id,
+            lead_id: duplicateInvoice.lead_id,
+            conversation_id: duplicateInvoice.conversation_id,
+            phone: duplicateInvoice.phone,
+            amount: duplicateInvoice.amount,
+            comment: duplicateInvoice.comment,
+            status: duplicateInvoice.status,
+            created_at: duplicateInvoice.created_at,
+          },
+        },
+        { status: 200 },
+      );
+    }
+
     const { data: invoiceRecord, error: invoiceInsertError } = await admin
       .from('kaspi_invoices')
       .insert({
@@ -190,6 +235,8 @@ export async function POST(req: NextRequest) {
       amount: normalizedAmount,
       comment: normalizedComment ?? '',
     };
+
+    await sleep(SEND_DELAY_MS);
 
     const headers = {
       'Content-Type': 'application/json',

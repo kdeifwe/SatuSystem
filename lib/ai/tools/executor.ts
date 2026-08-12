@@ -768,9 +768,6 @@ async function createKaspiInvoice(args: { phone: string; amount: number; comment
   });
 
   const responseText = await response.text();
-  console.error('[createKaspiInvoice DEBUG] endpoint:', endpoint);
-  console.error('[createKaspiInvoice DEBUG] status:', response.status);
-  console.error('[createKaspiInvoice DEBUG] body (first 500 chars):', responseText.slice(0, 500));
 
   let payload;
   try {
