@@ -1,7 +1,12 @@
 import { createClient } from '@supabase/supabase-js';
 import { generateQueryEmbedding } from './embeddings';
-import { llmClient, type LLMMessage } from '../server/ai/llm-client';
-import { GEMINI_PROMPT_MODEL } from '../server/ai/gemini-client';
+
+const searchCache = new Map<string, { results: KBSearchResult[]; expiresAt: number }>();
+const SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
+
+function getCacheKey(agentId: string, query: string): string {
+  return `${agentId}:${query.toLowerCase().trim()}`;
+}
 
 function getAdminClient() {
   return createClient(
@@ -106,31 +111,37 @@ function sanitizeGeminiJsonResponse(text: string): string {
   return cleaned;
 }
 
-function buildFallbackBilingualQueries(query: string): { query_ru: string; query_kk: string } {
-  const normalizedQuery = query?.trim() ?? '';
-  const queryRu = normalizedQuery || '';
-  const lower = normalizedQuery.toLowerCase();
-
-  let queryKk = normalizedQuery;
-  if (/(сколько|стоимость|цена|стоит)/i.test(lower) && /(обучение|учеба|учёба)/i.test(lower)) {
-    queryKk = 'Оқу құны';
-  } else if (/(срок|длительность|длится|длиться|канша уакыт|ұзақты|месяц|month|months|ай)/i.test(lower)) {
-    queryKk = 'Оқу ұзақтығы';
-  } else if (/(предмет|предметы|предметов|пән|пәндер|subject|subjects)/i.test(lower)) {
-    queryKk = 'Пәндер';
-  } else if (/(зарегистр|регистрация|тіркел)/i.test(lower)) {
-    queryKk = 'Тіркелу';
-  } else if (/онлайн/i.test(lower)) {
-    queryKk = 'Онлайн формат';
-  } else if (/smart/i.test(lower)) {
-    queryKk = 'SMART бағдарламасы';
-  } else if (/когда|начинаются|начинается/i.test(lower)) {
-    queryKk = 'Қашан басталады';
-  } else if (/как/i.test(lower)) {
-    queryKk = 'Қалай';
+function fastBilingualMap(query: string): { query_ru: string; query_kk: string } {
+  const lower = query.toLowerCase().trim();
+  if (!lower) {
+    return { query_ru: '', query_kk: '' };
   }
 
-  return { query_ru: queryRu, query_kk: queryKk || queryRu };
+  if (/^(қанша|ия\s+қанша|баға|стоимост|цен|сколько\s+стоит|нарх)/i.test(lower)) {
+    return { query_ru: 'стоимость обучения', query_kk: 'оқу құны' };
+  }
+
+  if (/^(қанша\s+уақыт|ұзақты|срок|длительност|длится|месяц|ай)/i.test(lower)) {
+    return { query_ru: 'срок обучения', query_kk: 'оқу ұзақтығы' };
+  }
+
+  if (/^(пән|пәндер|предмет|что\s+изучают|қай\s+пәндер)/i.test(lower)) {
+    return { query_ru: 'изучаемые предметы', query_kk: 'қай пәндер' };
+  }
+
+  if (/^(тіркел|регистрац|как\s+записаться|как\s+зарегистрироваться|как\s+поступить|записаться)/i.test(lower)) {
+    return { query_ru: 'регистрация на курс', query_kk: 'курсқа тіркелу' };
+  }
+
+  if (/^(не\s+ұсынасыз|что\s+продаёте|услуга|қызмет)/i.test(lower)) {
+    return { query_ru: 'продукт и услуги', query_kk: 'өнім мен қызметтер' };
+  }
+
+  return { query_ru: lower, query_kk: lower };
+}
+
+function buildFallbackBilingualQueries(query: string): { query_ru: string; query_kk: string } {
+  return fastBilingualMap(query);
 }
 
 function buildExpandedSearchQueries(query: string): string[] {
@@ -242,51 +253,7 @@ export async function generateBilingualSearchQueries(query: string): Promise<{ q
     return { query_ru: '', query_kk: '' };
   }
 
-  const prompt = `Сгенерируй ровно две строки без лишнего текста.
-Первая строка — короткий естественный русский поисковый запрос.
-Вторая строка — короткий естественный казахский поисковый запрос.
-Обе строки должны быть короткими, поисковыми и 2–6 слов.
-Не делай дословный перевод с русского, особенно для казахского варианта.
-Пиши как носитель языка, а не как кальку с русского.
-Для казахского варианта лучше использовать короткую естественную фразу, а не одно слово.
-Если есть термины вроде SMART, Junior, online, registration, duration, fee, subjects, сохраняй их в естественной форме.
-
-Примеры:
-- "Сколько стоит обучение?" -> "Стоимость обучения"
-- "Какие предметы изучают?" -> "Қай пәндер оқытылады?"
-- "Как зарегистрироваться?" -> "Тіркелу қалай болады?"
-- "Какой срок обучения?" -> "Оқу ұзақтығы"
-
-Входная фраза: ${normalizedQuery}`;
-
-  try {
-    const messages: LLMMessage[] = [
-      { role: 'system', content: 'Формируй два коротких поисковых запросов для векторного поиска: естественный русский и естественный казахский. Не делай дословный перевод с русского, особенно для казахского варианта.' },
-      { role: 'user', content: prompt },
-    ];
-
-    const llmResponse = await llmClient.generate({
-      model: GEMINI_PROMPT_MODEL,
-      messages,
-      temperature: 0.0,
-      maxTokens: 240,
-    });
-
-    const text = llmResponse.text ?? '';
-    if (!text) {
-      const fallback = buildFallbackBilingualQueries(normalizedQuery);
-      return { query_ru: fallback.query_ru, query_kk: fallback.query_kk };
-    }
-
-    const parsed = parseBilingualSearchQueries(text, normalizedQuery);
-    const queryRu = normalizeMetadataValue(parsed.query_ru) ?? normalizedQuery;
-    const queryKk = normalizeMetadataValue(parsed.query_kk) ?? normalizedQuery;
-    return { query_ru: queryRu, query_kk: queryKk };
-  } catch (error) {
-    console.warn('[KB] Failed to generate bilingual search queries, using deterministic fallback', error);
-    const fallback = buildFallbackBilingualQueries(normalizedQuery);
-    return { query_ru: fallback.query_ru, query_kk: fallback.query_kk };
-  }
+  return fastBilingualMap(normalizedQuery);
 }
 
 async function searchKnowledgeBaseSingleQuery(
@@ -329,6 +296,31 @@ export async function searchKnowledgeBase(
   return searchKnowledgeBaseSingleQuery(agentId, query, topK, threshold);
 }
 
+function rerankChunks(chunks: KBSearchResult[], query: string): KBSearchResult[] {
+  const queryWords = new Set(
+    query.toLowerCase()
+      .replace(/[^\w\sа-яәіңғүұқөһ]/gi, '')
+      .split(/\s+/)
+      .filter((word) => word.length > 3)
+  );
+
+  return chunks
+    .map((chunk) => {
+      const contentWords = new Set(
+        chunk.content.toLowerCase()
+          .replace(/[^\w\sа-яәіңғүұқөһ]/gi, '')
+          .split(/\s+/)
+      );
+
+      const intersection = [...queryWords].filter((word) => contentWords.has(word)).length;
+      const coverage = queryWords.size > 0 ? intersection / queryWords.size : 0;
+      const rerankedScore = chunk.similarity + (coverage * 0.25);
+
+      return { ...chunk, similarity: Math.min(rerankedScore, 1.0) };
+    })
+    .sort((a, b) => b.similarity - a.similarity);
+}
+
 export async function searchKnowledgeBaseBilingual(
   agentId: string,
   query: string,
@@ -336,30 +328,36 @@ export async function searchKnowledgeBaseBilingual(
   threshold = 0.3,
   leadGrade: number | string | null = null,
 ): Promise<KBSearchResult[]> {
+  const cacheKey = getCacheKey(agentId, query);
+  const cached = searchCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    console.log('[KB] CACHE HIT', { query });
+    return cached.results;
+  }
+
+  const { query_ru, query_kk } = fastBilingualMap(query);
+
+  const [ruResults, kkResults] = await Promise.all([
+    searchKnowledgeBaseSingleQuery(agentId, query_ru, topK, threshold),
+    searchKnowledgeBaseSingleQuery(agentId, query_kk, topK, threshold),
+  ]);
+
+  const mergedResults = mergeSearchResults(ruResults, kkResults);
   const normalizedGrade = parseLeadGrade(leadGrade);
-  const expandedQueries = buildExpandedSearchQueries(query);
-  const allResults: KBSearchResult[] = [];
 
-  for (const candidateQuery of expandedQueries) {
-    const { query_ru, query_kk } = await generateBilingualSearchQueries(candidateQuery);
-    const [ruResults, kkResults] = await Promise.all([
-      searchKnowledgeBaseSingleQuery(agentId, query_ru, topK, threshold),
-      searchKnowledgeBaseSingleQuery(agentId, query_kk, topK, threshold),
-    ]);
-    allResults.push(...mergeSearchResults(ruResults, kkResults));
+  let finalResults = normalizedGrade !== null
+    ? mergedResults.filter((chunk) => isChunkAllowedForLead(chunk, normalizedGrade))
+    : mergedResults;
+
+  if (finalResults.length === 0) {
+    finalResults = mergedResults;
   }
 
-  const mergedResults = mergeSearchResults(allResults, []);
-  if (normalizedGrade === null) {
-    return rankKnowledgeBaseChunks(mergedResults, query);
-  }
+  const reranked = rerankChunks(finalResults, query);
+  const ranked = rankKnowledgeBaseChunks(reranked, query);
+  searchCache.set(cacheKey, { results: ranked, expiresAt: Date.now() + SEARCH_CACHE_TTL_MS });
 
-  const filtered = mergedResults.filter((chunk) => isChunkAllowedForLead(chunk, normalizedGrade));
-  if (filtered.length > 0) {
-    return rankKnowledgeBaseChunks(filtered, query);
-  }
-
-  return rankKnowledgeBaseChunks(mergedResults, query);
+  return ranked;
 }
 
 export interface LinkedKBChunkResult {

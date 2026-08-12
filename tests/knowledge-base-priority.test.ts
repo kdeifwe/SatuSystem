@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildSystemPrompt } from '../lib/ai/compile-system-prompt.ts';
-import { formatChunksForPrompt, rankKnowledgeBaseChunks } from '../lib/knowledge-base/search.ts';
+import { formatChunksForPrompt, generateBilingualSearchQueries, rankKnowledgeBaseChunks } from '../lib/knowledge-base/search.ts';
 
 test('rankKnowledgeBaseChunks promotes structured factual chunks over instagram promo content', () => {
   const ranked = rankKnowledgeBaseChunks([
@@ -51,6 +51,28 @@ test('formatChunksForPrompt preserves ranking and metadata for factual chunks', 
   assert.match(prompt, /source: faq/i);
   assert.match(prompt, /type: faq/i);
   assert.ok(prompt.indexOf('6 месяцев') < prompt.indexOf('Скидка 20%'));
+});
+
+test('generateBilingualSearchQueries uses deterministic mappings without Gemini', async () => {
+  assert.deepEqual(await generateBilingualSearchQueries('сколько стоит обучение'), {
+    query_ru: 'стоимость обучения',
+    query_kk: 'оқу құны',
+  });
+
+  assert.deepEqual(await generateBilingualSearchQueries('срок обучения'), {
+    query_ru: 'срок обучения',
+    query_kk: 'оқу ұзақтығы',
+  });
+
+  assert.deepEqual(await generateBilingualSearchQueries('как записаться'), {
+    query_ru: 'регистрация на курс',
+    query_kk: 'курсқа тіркелу',
+  });
+
+  assert.deepEqual(await generateBilingualSearchQueries('погода'), {
+    query_ru: 'погода',
+    query_kk: 'погода',
+  });
 });
 
 test('buildSystemPrompt includes uncertainty handling that preserves partial facts', () => {
