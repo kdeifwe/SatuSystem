@@ -44,3 +44,9 @@ MYKEYSS
 
 baseline-test.log
 .railway-temp-ssh-key*
+
+# Local debug/temp files produced during diagnostics
+auth_init.json
+agent-logs-*.txt
+agent-logs-full.txt
+app_js.txt
