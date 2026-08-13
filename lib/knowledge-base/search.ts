@@ -281,21 +281,53 @@ function rerankChunks(chunks: KBSearchResult[], query: string): KBSearchResult[]
 
 async function searchKnowledgeBaseSingleQuery(
   agentId: string,
-  query: string,
+  queryVariant: string,
   topK = 15,
   threshold = 0.3,
+  queryEmbeddingOverride: unknown | null = null,
+  originalQuery?: string | null,
 ): Promise<KBSearchResult[]> {
   const supabase = getAdminClient();
-  const queryEmbedding = await generateQueryEmbedding(query);
+  const queryEmbedding = queryEmbeddingOverride ?? await generateQueryEmbedding(originalQuery ?? queryVariant);
 
-  const { data, error } = await supabase.rpc('search_knowledge_base', {
-    p_agent_id: agentId,
-    query_embedding: queryEmbedding,
-    match_count: topK,
-    similarity_threshold: threshold,
-  });
+  let data: any = null;
+  try {
+    const res = await supabase.rpc('search_knowledge_base', {
+      p_agent_id: agentId,
+      query_embedding: queryEmbedding,
+      p_query_text: originalQuery ?? queryVariant,
+      match_count: topK,
+      similarity_threshold: threshold,
+    });
+    data = res.data;
+    if (res.error) throw res.error;
+  } catch (err: any) {
+    const msg = String(err?.message ?? err?.error ?? err);
+    const signatureError = /could not find the function|no matches were found|unknown parameter|unrecognized parameter|argument.*not found|invalid parameter/i;
+    const shouldFallback = signatureError.test(msg);
+    if (!shouldFallback) {
+      // For non-signature errors (network, timeout, etc.) surface the error instead of silently falling back
+      throw err;
+    }
 
-  if (error) throw error;
+    console.warn('[KB] search RPC fallback without p_query_text due to signature/parameter mismatch:', msg);
+    try {
+      const res2 = await supabase.rpc('search_knowledge_base', {
+        p_agent_id: agentId,
+        query_embedding: queryEmbedding,
+        match_count: topK,
+        similarity_threshold: threshold,
+      });
+      data = res2.data;
+      if (res2.error) throw res2.error;
+    } catch (err2) {
+      // If fallback also fails, rethrow with both messages attached
+      const msg2 = String(err2?.message ?? err2?.error ?? err2);
+      const combined = `${msg} || fallback error: ${msg2}`;
+      const e = new Error(combined);
+      throw e;
+    }
+  }
 
   const results = (data || []).map((row: any) => ({
     chunk_id: row.chunk_id,
@@ -307,7 +339,7 @@ async function searchKnowledgeBaseSingleQuery(
     source_metadata: row.source_metadata || null,
   }));
 
-  return rankKnowledgeBaseChunks(results, query);
+  return rankKnowledgeBaseChunks(results, originalQuery ?? queryVariant);
 }
 
 export async function searchKnowledgeBase(
@@ -325,6 +357,7 @@ export async function searchKnowledgeBaseBilingual(
   topK = 15,
   threshold = 0.3,
   leadGrade: number | string | null = null,
+  queryEmbeddingOverride: unknown | null = null,
 ): Promise<KBSearchResult[]> {
   const cacheKey = getCacheKey(agentId, query);
   const cached = searchCache.get(cacheKey);
@@ -357,11 +390,14 @@ export async function searchKnowledgeBaseBilingual(
   const { query_ru, query_kk } = fastBilingualMap(query, termMap);
 
   const [ruResults, kkResults] = await Promise.all([
-    searchKnowledgeBaseSingleQuery(agentId, query_ru, topK, threshold),
-    searchKnowledgeBaseSingleQuery(agentId, query_kk, topK, threshold),
+    searchKnowledgeBaseSingleQuery(agentId, query_ru, topK, threshold, queryEmbeddingOverride, query),
+    searchKnowledgeBaseSingleQuery(agentId, query_kk, topK, threshold, queryEmbeddingOverride, query),
   ]);
 
-  const mergedResults = mergeSearchResults(ruResults, kkResults);
+  // Merge RU/KK results and ensure a global sort by similarity so the combined
+  // list is globally ordered (avoids two internally-sorted lists being concatenated).
+  let mergedResults = mergeSearchResults(ruResults, kkResults);
+  mergedResults.sort((a, b) => b.similarity - a.similarity);
   const normalizedGrade = parseLeadGrade(leadGrade);
 
   let finalResults = normalizedGrade !== null
@@ -374,6 +410,9 @@ export async function searchKnowledgeBaseBilingual(
 
   const reranked = rerankChunks(finalResults, query);
   const ranked = rankKnowledgeBaseChunks(reranked, query);
+  // Return the ranked list (sorted by rankingScore inside `rankKnowledgeBaseChunks`).
+  // Do NOT override this with a pure similarity-only sort here — that would erase
+  // the effects of keywordBonus and priorityBoost and cause a regression.
   searchCache.set(cacheKey, { results: ranked, expiresAt: Date.now() + SEARCH_CACHE_TTL_MS });
 
   return ranked;
@@ -494,8 +533,9 @@ export async function searchKnowledgeBaseWithLinks(
   topK = 15,
   threshold = 0.3,
   leadGrade: number | string | null = null,
+  queryEmbeddingOverride: unknown | null = null,
 ): Promise<KnowledgeBaseRetrievalResult> {
-  const primaryChunks = await searchKnowledgeBaseBilingual(agentId, query, topK, threshold, leadGrade);
+  const primaryChunks = await searchKnowledgeBaseBilingual(agentId, query, topK, threshold, leadGrade, queryEmbeddingOverride);
   const linkedChunkIds = primaryChunks.map((chunk) => chunk.chunk_id);
   const linkedChunks = await getLinkedKBChunks(linkedChunkIds);
 
