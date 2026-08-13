@@ -4,6 +4,15 @@ import { generateQueryEmbedding } from './embeddings';
 const searchCache = new Map<string, { results: KBSearchResult[]; expiresAt: number }>();
 const SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
 
+type BilingualTermRule = {
+  pattern: string;
+  query_ru: string;
+  query_kk: string;
+  variants?: string[];
+};
+
+const bilingualConfigCache = new Map<string, { termMap?: BilingualTermRule[]; expiresAt: number }>();
+
 function getCacheKey(agentId: string, query: string): string {
   return `${agentId}:${query.toLowerCase().trim()}`;
 }
@@ -111,108 +120,96 @@ function sanitizeGeminiJsonResponse(text: string): string {
   return cleaned;
 }
 
-function fastBilingualMap(query: string): { query_ru: string; query_kk: string } {
+function fastBilingualMap(query: string, termMap?: BilingualTermRule[]): { query_ru: string; query_kk: string } {
   const lower = query.toLowerCase().trim();
   if (!lower) {
     return { query_ru: '', query_kk: '' };
   }
 
-  if (/^(қанша|ия\s+қанша|баға|стоимост|цен|сколько\s+стоит|нарх)/i.test(lower)) {
-    return { query_ru: 'стоимость обучения', query_kk: 'оқу құны' };
+  if (!termMap || termMap.length === 0) {
+    return { query_ru: lower, query_kk: lower };
   }
 
-  if (/^(қанша\s+уақыт|ұзақты|срок|длительност|длится|месяц|ай)/i.test(lower)) {
-    return { query_ru: 'срок обучения', query_kk: 'оқу ұзақтығы' };
-  }
-
-  if (/^(пән|пәндер|предмет|что\s+изучают|қай\s+пәндер)/i.test(lower)) {
-    return { query_ru: 'изучаемые предметы', query_kk: 'қай пәндер' };
-  }
-
-  if (/^(тіркел|регистрац|как\s+записаться|как\s+зарегистрироваться|как\s+поступить|записаться)/i.test(lower)) {
-    return { query_ru: 'регистрация на курс', query_kk: 'курсқа тіркелу' };
-  }
-
-  if (/^(не\s+ұсынасыз|что\s+продаёте|услуга|қызмет)/i.test(lower)) {
-    return { query_ru: 'продукт и услуги', query_kk: 'өнім мен қызметтер' };
+  for (const rule of termMap) {
+    try {
+      const re = new RegExp(rule.pattern, 'i');
+      if (re.test(lower)) {
+        return { query_ru: rule.query_ru, query_kk: rule.query_kk };
+      }
+    } catch (e) {
+      // ignore invalid regex and continue
+    }
   }
 
   return { query_ru: lower, query_kk: lower };
 }
 
-function buildFallbackBilingualQueries(query: string): { query_ru: string; query_kk: string } {
-  return fastBilingualMap(query);
+function buildFallbackBilingualQueries(query: string, termMap?: BilingualTermRule[]): { query_ru: string; query_kk: string } {
+  return fastBilingualMap(query, termMap);
 }
 
-function buildExpandedSearchQueries(query: string): string[] {
+function buildExpandedSearchQueries(query: string, termMap?: BilingualTermRule[]): string[] {
   const normalizedQuery = query?.trim() ?? '';
   if (!normalizedQuery) return [];
 
   const variants = new Set<string>([normalizedQuery]);
   const lower = normalizedQuery.toLowerCase();
 
-  if (/(срок|длительность|длится|длиться|канша уакыт|ұзақты|месяц|month|months|ай)/i.test(lower)) {
-    variants.add('срок обучения');
-    variants.add('оқу ұзақтығы');
-    variants.add('длительность курса');
-    variants.add('курс ұзақтығы');
+  if (!termMap || termMap.length === 0) {
+    return Array.from(variants).filter(Boolean);
   }
 
-  if (/(стоимость|цена|стоит|құны|fee|price)/i.test(lower)) {
-    variants.add('стоимость обучения');
-    variants.add('оқу құны');
-    variants.add('цена курса');
-  }
-
-  if (/(предмет|предметы|пән|пәндер|subject|subjects)/i.test(lower)) {
-    variants.add('предметы курса');
-    variants.add('қай пәндер');
+  for (const rule of termMap) {
+    try {
+      const re = new RegExp(rule.pattern, 'i');
+      if (re.test(lower)) {
+        variants.add(rule.query_ru);
+        variants.add(rule.query_kk);
+        if (Array.isArray(rule.variants)) {
+          for (const v of rule.variants) variants.add(v);
+        }
+      }
+    } catch (e) {
+      // ignore invalid regex
+    }
   }
 
   return Array.from(variants).filter(Boolean);
 }
 
-function normalizeGeneratedBilingualQueries(originalQuery: string, queryRu: string, queryKk: string) {
+function normalizeGeneratedBilingualQueries(originalQuery: string, queryRu: string, queryKk: string, termMap?: BilingualTermRule[]) {
   const normalizedRu = normalizeMetadataValue(queryRu) ?? originalQuery;
   const normalizedKk = normalizeMetadataValue(queryKk) ?? originalQuery;
   const lowerOriginal = originalQuery.toLowerCase();
 
-  let improvedRu = normalizedRu;
-  let improvedKk = normalizedKk;
+  if (!termMap || termMap.length === 0) {
+    return {
+      query_ru: normalizedRu,
+      query_kk: normalizedKk,
+    };
+  }
 
-  if (/(сколько|стоимость|цена|стоит)/i.test(lowerOriginal) && /(обучение|учеба|учёба)/i.test(lowerOriginal)) {
-    improvedRu = 'Стоимость обучения';
-    improvedKk = 'Оқу құны';
-  } else if (/(срок|длительность|длится|длиться)/i.test(lowerOriginal)) {
-    improvedRu = 'Срок обучения';
-    improvedKk = 'Оқу ұзақтығы';
-  } else if (/(предмет|предметы|предметов|subjects)/i.test(lowerOriginal)) {
-    improvedRu = 'Изучаемые предметы';
-    improvedKk = 'Қай пәндер';
-  } else if (/(зарегистр|регистрация|тіркел|join|record)/i.test(lowerOriginal)) {
-    improvedRu = 'Регистрация на курс';
-    improvedKk = 'Курсқа тіркелу';
-  } else if (/онлайн/i.test(lowerOriginal)) {
-    improvedRu = 'Онлайн формат обучения';
-    improvedKk = 'Онлайн оқу';
-  } else if (/smart|программа/i.test(lowerOriginal)) {
-    improvedRu = 'Программа SMART';
-    improvedKk = 'SMART бағдарламасы';
-  } else if (/(когда|начинаются|начинается)/i.test(lowerOriginal)) {
-    improvedRu = 'Начало занятий';
-    improvedKk = 'Қашан басталады';
+  for (const rule of termMap) {
+    try {
+      const re = new RegExp(rule.pattern, 'i');
+      if (re.test(lowerOriginal)) {
+        return { query_ru: rule.query_ru, query_kk: rule.query_kk };
+      }
+    } catch (e) {
+      // ignore invalid regex
+    }
   }
 
   return {
-    query_ru: improvedRu,
-    query_kk: improvedKk,
+    query_ru: normalizedRu,
+    query_kk: normalizedKk,
   };
 }
 
-function parseBilingualSearchQueries(text: string, fallbackQuery: string): { query_ru: string; query_kk: string } {
+function parseBilingualSearchQueries(text: string, fallbackQuery: string, termMap?: BilingualTermRule[]): { query_ru: string; query_kk: string } {
   const sanitized = sanitizeGeminiJsonResponse(text);
   if (!sanitized) {
-    return buildFallbackBilingualQueries(fallbackQuery);
+    return buildFallbackBilingualQueries(fallbackQuery, termMap);
   }
 
   try {
@@ -220,7 +217,7 @@ function parseBilingualSearchQueries(text: string, fallbackQuery: string): { que
     const queryRu = normalizeMetadataValue(parsed?.query_ru) ?? '';
     const queryKk = normalizeMetadataValue(parsed?.query_kk) ?? '';
     if (queryRu || queryKk) {
-      return normalizeGeneratedBilingualQueries(fallbackQuery, queryRu, queryKk);
+      return normalizeGeneratedBilingualQueries(fallbackQuery, queryRu, queryKk, termMap);
     }
   } catch {
     // continue with line-based parsing
@@ -232,7 +229,8 @@ function parseBilingualSearchQueries(text: string, fallbackQuery: string): { que
     return normalizeGeneratedBilingualQueries(
       fallbackQuery,
       queryRuMatch?.[1] ?? '',
-      queryKkMatch?.[1] ?? ''
+      queryKkMatch?.[1] ?? '',
+      termMap,
     );
   }
 
@@ -241,10 +239,10 @@ function parseBilingualSearchQueries(text: string, fallbackQuery: string): { que
     .map((line) => line.trim())
     .filter(Boolean);
   if (lines.length >= 2) {
-    return normalizeGeneratedBilingualQueries(fallbackQuery, lines[0] || '', lines[1] || '');
+    return normalizeGeneratedBilingualQueries(fallbackQuery, lines[0] || '', lines[1] || '', termMap);
   }
 
-  return buildFallbackBilingualQueries(fallbackQuery);
+  return buildFallbackBilingualQueries(fallbackQuery, termMap);
 }
 
 export async function generateBilingualSearchQueries(query: string): Promise<{ query_ru: string; query_kk: string }> {
@@ -254,6 +252,31 @@ export async function generateBilingualSearchQueries(query: string): Promise<{ q
   }
 
   return fastBilingualMap(normalizedQuery);
+}
+
+function rerankChunks(chunks: KBSearchResult[], query: string): KBSearchResult[] {
+  const queryWords = new Set(
+    query.toLowerCase()
+      .replace(/[^\w\sа-яәіңғүұқөһ]/gi, '')
+      .split(/\s+/)
+      .filter((word) => word.length > 3)
+  );
+
+  return chunks
+    .map((chunk) => {
+      const contentWords = new Set(
+        chunk.content.toLowerCase()
+          .replace(/[^\w\sа-яәіңғүұқөһ]/gi, '')
+          .split(/\s+/)
+      );
+
+      const intersection = [...queryWords].filter((word) => contentWords.has(word)).length;
+      const coverage = queryWords.size > 0 ? intersection / queryWords.size : 0;
+      const rerankedScore = chunk.similarity + (coverage * 0.25);
+
+      return { ...chunk, similarity: Math.min(rerankedScore, 1.0) };
+    })
+    .sort((a, b) => b.similarity - a.similarity);
 }
 
 async function searchKnowledgeBaseSingleQuery(
@@ -296,31 +319,6 @@ export async function searchKnowledgeBase(
   return searchKnowledgeBaseSingleQuery(agentId, query, topK, threshold);
 }
 
-function rerankChunks(chunks: KBSearchResult[], query: string): KBSearchResult[] {
-  const queryWords = new Set(
-    query.toLowerCase()
-      .replace(/[^\w\sа-яәіңғүұқөһ]/gi, '')
-      .split(/\s+/)
-      .filter((word) => word.length > 3)
-  );
-
-  return chunks
-    .map((chunk) => {
-      const contentWords = new Set(
-        chunk.content.toLowerCase()
-          .replace(/[^\w\sа-яәіңғүұқөһ]/gi, '')
-          .split(/\s+/)
-      );
-
-      const intersection = [...queryWords].filter((word) => contentWords.has(word)).length;
-      const coverage = queryWords.size > 0 ? intersection / queryWords.size : 0;
-      const rerankedScore = chunk.similarity + (coverage * 0.25);
-
-      return { ...chunk, similarity: Math.min(rerankedScore, 1.0) };
-    })
-    .sort((a, b) => b.similarity - a.similarity);
-}
-
 export async function searchKnowledgeBaseBilingual(
   agentId: string,
   query: string,
@@ -335,7 +333,28 @@ export async function searchKnowledgeBaseBilingual(
     return cached.results;
   }
 
-  const { query_ru, query_kk } = fastBilingualMap(query);
+  // load per-agent bilingual term map (cached briefly)
+  let termMap: BilingualTermRule[] | undefined = undefined;
+  const cfgCache = bilingualConfigCache.get(agentId);
+  if (cfgCache && cfgCache.expiresAt > Date.now()) {
+    termMap = cfgCache.termMap;
+  } else {
+    try {
+      const supabase = getAdminClient();
+      const { data, error } = await supabase.from('agents').select('search_config').eq('id', agentId).single();
+      if (!error && data) {
+        const cfg = data.search_config ?? {};
+        if (Array.isArray(cfg?.bilingual_term_map)) {
+          termMap = cfg.bilingual_term_map as BilingualTermRule[];
+        }
+      }
+    } catch (e) {
+      // ignore DB errors — treat as no term map
+    }
+    bilingualConfigCache.set(agentId, { termMap, expiresAt: Date.now() + SEARCH_CACHE_TTL_MS });
+  }
+
+  const { query_ru, query_kk } = fastBilingualMap(query, termMap);
 
   const [ruResults, kkResults] = await Promise.all([
     searchKnowledgeBaseSingleQuery(agentId, query_ru, topK, threshold),
