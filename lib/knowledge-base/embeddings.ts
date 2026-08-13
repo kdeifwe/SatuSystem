@@ -1,5 +1,8 @@
 import { GEMINI_EMBEDDING_MODEL, GEMINI_EMBEDDING_OUTPUT_DIMENSIONALITY } from '@/lib/server/ai/gemini-client';
 
+const OPENAI_EMBEDDING_MODEL = process.env.OPENAI_EMBEDDING_MODEL ?? 'text-embedding-3-small';
+const OPENAI_EMBEDDING_DIMENSIONS = Number(process.env.OPENAI_EMBEDDING_DIMENSIONS ?? 768);
+
 const GEMINI_EMBED_URL =
   `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_EMBEDDING_MODEL}:embedContent`;
 
@@ -21,7 +24,41 @@ function normalizeEmbedding(values: number[]): number[] {
   return values.map((value) => value / length);
 }
 
+async function generateOpenAIEmbedding(text: string): Promise<number[]> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error('OPENAI_API_KEY is not set');
+
+  const response = await fetch('https://api.openai.com/v1/embeddings', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      input: text,
+      model: OPENAI_EMBEDDING_MODEL,
+      dimensions: OPENAI_EMBEDDING_DIMENSIONS,
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`OpenAI embed error: ${response.status} ${body}`);
+  }
+
+  const data = await response.json() as { data?: Array<{ embedding?: number[] }> };
+  const embedding = data.data?.[0]?.embedding;
+  if (!embedding) throw new Error('OpenAI embed response missing embedding data');
+
+  console.log('[KB] OpenAI embedding generated, dimensions:', embedding.length);
+  return normalizeEmbedding(embedding);
+}
+
 export async function generateEmbedding(text: string): Promise<number[]> {
+  if (process.env.OPENAI_API_KEY) {
+    return generateOpenAIEmbedding(text);
+  }
+
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY is not set');
 
@@ -87,6 +124,10 @@ export async function generateEmbeddingsBatch(texts: string[]): Promise<Embeddin
  * Generates an embedding for semantic search (uses RETRIEVAL_QUERY task type).
  */
 export async function generateQueryEmbedding(query: string): Promise<number[]> {
+  if (process.env.OPENAI_API_KEY) {
+    return generateOpenAIEmbedding(query);
+  }
+
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY is not set');
 
