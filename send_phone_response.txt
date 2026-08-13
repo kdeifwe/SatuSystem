@@ -1,0 +1,14 @@
+HTTP/1.1 200 OK
+Content-Type: application/json; charset=utf-8
+Date: Wed, 12 Aug 2026 05:52:20 GMT
+etag: W/"1ed-0aMF4pSRzPLh0eHtXKbs0zaqGQk"
+Server: railway-hikari
+x-powered-by: Express
+x-railway-request-id: eD1mZBe3QBiJXTjV9o6EoQ
+Content-Length: 493
+x-hikari-trace: ams1.cycp
+x-railway-edge: ams1
+vary: accept-encoding
+Connection: keep-alive
+
+{"success":false,"passwordRequired":false,"processId":"228349be-a047-44d7-beb1-ea51db70e388","body":{"meta":{"pId":"228349be-a047-44d7-beb1-ea51db70e388","sn":"EnterPhoneNumber"},"data":{},"type":"Action","error":{"desc":"Введенный номер не принадлежит ни одному оператору РК","label":"Ошибка ввода номера телефона","type":"Business","code":"UserPhoneNumberDoesNotBelongToAnyOperator"},"isClosed":false,"actType":"Alarm"}}
