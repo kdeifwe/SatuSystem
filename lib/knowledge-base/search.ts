@@ -320,9 +320,9 @@ async function searchKnowledgeBaseSingleQuery(
       });
       data = res2.data;
       if (res2.error) throw res2.error;
-    } catch (err2) {
+    } catch (err2: any) {
       // If fallback also fails, rethrow with both messages attached
-      const msg2 = String(err2?.message ?? err2?.error ?? err2);
+      const msg2 = err2 instanceof Error ? err2.message : String(err2?.error ?? err2);
       const combined = `${msg} || fallback error: ${msg2}`;
       const e = new Error(combined);
       throw e;
