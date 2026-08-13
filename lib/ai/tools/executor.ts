@@ -164,6 +164,7 @@ async function searchKnowledgeBase(args: { query: string; top_k?: number }, ctx:
   const { data, error } = await supabase.rpc('search_knowledge_base', {
     p_agent_id: ctx.agentId,
     query_embedding: queryEmbedding,
+    p_query_text: args.query,
     match_count: topK,
     similarity_threshold: 0.3,
   });
