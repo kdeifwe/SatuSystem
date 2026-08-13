@@ -50,3 +50,14 @@ auth_init.json
 agent-logs-*.txt
 agent-logs-full.txt
 app_js.txt
+auth_send_phone_*
+verify_otp_*
+session*.txt
+session_check*
+kaspi_internal_test*
+invoice_test_final*
+invoice_verbose.txt
+invoice_get.txt
+health.json
+root.txt
+status.txt
