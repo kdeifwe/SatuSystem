@@ -1158,12 +1158,27 @@ async function buildConversationContext(
     };
   }
 
-  const { summaryText, summaryUpToMessageId: updatedSummaryId } = await summarizeConversationSegment(
-    admin,
-    conversationId,
-    conversation?.summary ?? null,
-    messagesToCompress,
-  );
+  let summaryText: string | null = null;
+  let updatedSummaryId: string | null = null;
+  try {
+    const res = await summarizeConversationSegment(
+      admin,
+      conversationId,
+      conversation?.summary ?? null,
+      messagesToCompress,
+    );
+    summaryText = res.summaryText;
+    updatedSummaryId = res.summaryUpToMessageId;
+  } catch (summErr: any) {
+    console.warn('[SUMMARIZE] summarizeConversationSegment failed, falling back to full history without compression', {
+      error: summErr instanceof Error ? summErr.message : String(summErr),
+      conversationId,
+      messagesToCompress: messagesToCompress.length,
+    });
+    // graceful degradation: keep existing conversation.summary and use recent tail messages
+    summaryText = conversation?.summary ?? null;
+    updatedSummaryId = conversation?.summary_up_to_message_id ?? null;
+  }
 
   return {
     conversationSummary: summaryText,
