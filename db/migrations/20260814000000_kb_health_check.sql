@@ -15,58 +15,74 @@ security definer
 as $function$
 declare
   a record;
-  mode text;
-  last_embedding_change timestamptz;
-  has_search_vector boolean;
+  v_mode text;
+  v_last_embedding_change timestamptz;
+  v_has_search_vector boolean;
+  v_agent_id uuid;
+  v_agent_name text;
+  v_total_chunks integer;
+  v_null_embedding_count integer;
+  v_null_search_vector_count integer;
+  v_embedding_provider_mismatch_count integer;
+  v_stale_semantic_links integer;
 begin
-  has_search_vector := exists(
+  v_has_search_vector := exists(
     select 1 from information_schema.columns
     where table_schema = 'public' and table_name = 'kb_chunks' and column_name = 'search_vector'
   );
 
   for a in select id, name from public.agents loop
-    agent_id := a.id;
-    agent_name := a.name;
+    v_agent_id := a.id;
+    v_agent_name := a.name;
 
-    select count(*) into total_chunks from public.kb_chunks where public.kb_chunks.agent_id = a.id;
-    select count(*) into null_embedding_count from public.kb_chunks where public.kb_chunks.agent_id = a.id and public.kb_chunks.embedding is null;
+    select count(*) into v_total_chunks from public.kb_chunks where public.kb_chunks.agent_id = v_agent_id;
+    select count(*) into v_null_embedding_count from public.kb_chunks where public.kb_chunks.agent_id = v_agent_id and public.kb_chunks.embedding is null;
 
-    if has_search_vector then
-      execute format('select count(*) from public.kb_chunks where public.kb_chunks.agent_id = %L and search_vector is null', a.id) into null_search_vector_count;
+    if v_has_search_vector then
+      execute format('select count(*) from public.kb_chunks where public.kb_chunks.agent_id = %L and search_vector is null', v_agent_id) into v_null_search_vector_count;
     else
-      null_search_vector_count := 0;
+      v_null_search_vector_count := 0;
     end if;
 
-    select t.embedding_provider into mode
+    select t.embedding_provider into v_mode
     from (
       select embedding_provider, count(*) as c
       from public.kb_chunks
-      where public.kb_chunks.agent_id = a.id and public.kb_chunks.embedding_provider is not null
+      where public.kb_chunks.agent_id = v_agent_id and public.kb_chunks.embedding_provider is not null
       group by embedding_provider
       order by c desc
       limit 1
     ) t;
 
-    if mode is null then
-      embedding_provider_mismatch_count := 0;
+    if v_mode is null then
+      v_embedding_provider_mismatch_count := 0;
     else
-      select count(*) into embedding_provider_mismatch_count
+      select count(*) into v_embedding_provider_mismatch_count
       from public.kb_chunks
-      where public.kb_chunks.agent_id = a.id and (public.kb_chunks.embedding_provider is null or public.kb_chunks.embedding_provider <> mode);
+      where public.kb_chunks.agent_id = v_agent_id and (public.kb_chunks.embedding_provider is null or public.kb_chunks.embedding_provider <> v_mode);
     end if;
 
     select max(coalesce((metadata->>'embedding_updated_at')::timestamptz, created_at))
-    into last_embedding_change
+    into v_last_embedding_change
     from public.kb_chunks
-    where public.kb_chunks.agent_id = a.id and public.kb_chunks.embedding is not null;
+    where public.kb_chunks.agent_id = v_agent_id and public.kb_chunks.embedding is not null;
 
-    if last_embedding_change is null then
-      stale_semantic_links := 0;
+    if v_last_embedding_change is null then
+      v_stale_semantic_links := 0;
     else
-      select count(*) into stale_semantic_links
+      select count(*) into v_stale_semantic_links
       from public.kb_chunk_links l
-      where l.agent_id = a.id and l.link_type = 'semantic' and l.created_at < last_embedding_change;
+      where l.agent_id = v_agent_id and l.link_type = 'semantic' and l.created_at < v_last_embedding_change;
     end if;
+
+    -- assign OUT variables before returning
+    agent_id := v_agent_id;
+    agent_name := v_agent_name;
+    total_chunks := v_total_chunks;
+    null_embedding_count := v_null_embedding_count;
+    null_search_vector_count := v_null_search_vector_count;
+    embedding_provider_mismatch_count := v_embedding_provider_mismatch_count;
+    stale_semantic_links := v_stale_semantic_links;
 
     return next;
   end loop;
