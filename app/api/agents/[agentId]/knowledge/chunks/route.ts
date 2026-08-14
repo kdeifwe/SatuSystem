@@ -140,7 +140,7 @@ export async function POST(request: NextRequest, { params }: { params: { agentId
     await admin.rpc('refresh_kb_chunk_links', {
       p_agent_id: params.agentId,
       p_top_k: 3,
-      p_min_similarity: 0.75,
+      p_min_similarity: 0.55,
     });
 
     return NextResponse.json({ data, sourceId: sourceData.id });

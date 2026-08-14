@@ -254,6 +254,16 @@ export async function processSource(sourceId: string, agentId: string, useAI: bo
         metadata: nextMetadata,
       })
       .eq('id', sourceId);
+    // Recalculate semantic links for the agent. Non-critical: warn on failure.
+    try {
+      await admin.rpc('refresh_kb_chunk_links', {
+        p_agent_id: currentAgentId,
+        p_top_k: 3,
+        p_min_similarity: 0.55,
+      });
+    } catch (rpcError) {
+      console.warn('[KB] refresh_kb_chunk_links failed (non-critical):', rpcError instanceof Error ? rpcError.message : String(rpcError));
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     console.error(`[KB] Source processing failed for ${sourceId}:`, message);

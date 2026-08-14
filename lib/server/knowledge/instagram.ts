@@ -494,11 +494,10 @@ export async function processInstagramSource(sourceId: string, agentId: string, 
       throw error;
     }
 
-    // TODO: verify that public.refresh_kb_chunk_links exists in Supabase and is applied from DB migrations or manual SQL.
     await admin.rpc('refresh_kb_chunk_links', {
       p_agent_id: agentId,
       p_top_k: 3,
-      p_min_similarity: 0.75,
+      p_min_similarity: 0.55,
     });
   }
 
