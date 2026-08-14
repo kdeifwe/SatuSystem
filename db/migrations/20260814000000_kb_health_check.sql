@@ -28,11 +28,11 @@ begin
     agent_id := a.id;
     agent_name := a.name;
 
-    select count(*) into total_chunks from public.kb_chunks where agent_id = a.id;
-    select count(*) into null_embedding_count from public.kb_chunks where agent_id = a.id and embedding is null;
+    select count(*) into total_chunks from public.kb_chunks where public.kb_chunks.agent_id = a.id;
+    select count(*) into null_embedding_count from public.kb_chunks where public.kb_chunks.agent_id = a.id and public.kb_chunks.embedding is null;
 
     if has_search_vector then
-      execute format('select count(*) from public.kb_chunks where agent_id = %L and search_vector is null', a.id) into null_search_vector_count;
+      execute format('select count(*) from public.kb_chunks where public.kb_chunks.agent_id = %L and search_vector is null', a.id) into null_search_vector_count;
     else
       null_search_vector_count := 0;
     end if;
@@ -41,7 +41,7 @@ begin
     from (
       select embedding_provider, count(*) as c
       from public.kb_chunks
-      where agent_id = a.id and embedding_provider is not null
+      where public.kb_chunks.agent_id = a.id and public.kb_chunks.embedding_provider is not null
       group by embedding_provider
       order by c desc
       limit 1
@@ -52,13 +52,13 @@ begin
     else
       select count(*) into embedding_provider_mismatch_count
       from public.kb_chunks
-      where agent_id = a.id and (embedding_provider is null or embedding_provider <> mode);
+      where public.kb_chunks.agent_id = a.id and (public.kb_chunks.embedding_provider is null or public.kb_chunks.embedding_provider <> mode);
     end if;
 
     select max(coalesce((metadata->>'embedding_updated_at')::timestamptz, created_at))
     into last_embedding_change
     from public.kb_chunks
-    where agent_id = a.id and embedding is not null;
+    where public.kb_chunks.agent_id = a.id and public.kb_chunks.embedding is not null;
 
     if last_embedding_change is null then
       stale_semantic_links := 0;
