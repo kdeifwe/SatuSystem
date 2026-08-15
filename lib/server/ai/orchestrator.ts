@@ -94,6 +94,39 @@ function normalizeResponseParts(parts: Array<Record<string, unknown>> | undefine
   return trimmedText === text ? (parts ?? []) : [{ text: trimmedText }];
 }
 
+export function buildAgentResponseLogMeta({
+  activeModel,
+  llmResponse,
+}: {
+  activeModel?: string;
+  llmResponse?: Partial<LLMResponse> & { rawResponse?: Record<string, unknown> };
+}) {
+  const resolvedActiveModel = activeModel ?? GEMINI_CHAT_MODEL;
+  const usage = llmResponse?.usage as
+    | { promptTokens?: number; completionTokens?: number; totalTokens?: number }
+    | undefined;
+
+  const usageMetadata = usage
+    ? {
+        promptTokenCount: Number(usage.promptTokens ?? 0),
+        candidatesTokenCount: Number(usage.completionTokens ?? 0),
+        totalTokenCount: Number(usage.totalTokens ?? 0),
+      }
+    : null;
+
+  const rawResponse = llmResponse?.rawResponse && typeof llmResponse.rawResponse === 'object' ? llmResponse.rawResponse : {};
+  const actualProvider = llmResponse?.provider ?? 'unknown';
+  const actualModel = typeof rawResponse.model === 'string' && rawResponse.model.trim().length > 0
+    ? rawResponse.model
+    : resolvedActiveModel;
+
+  return {
+    actualProvider,
+    actualModel,
+    usageMetadata,
+  };
+}
+
 export function getToolExecutionPolicy(toolName: string, toolUsageCounts: Record<string, number>) {
   const previousCalls = toolUsageCounts[toolName] ?? 0;
   if (previousCalls >= 1) {
@@ -1867,11 +1900,16 @@ export async function runAgentTurn(
 
   const rawReply = extractTextFromParts(currentParts);
   if (conversationId) {
+    const logMeta = buildAgentResponseLogMeta({ llmResponse: response as any });
+
     await admin.from('ai_call_logs').insert({
       conversation_id: conversationId,
       request: {
         type: 'agent_response',
         model: GEMINI_CHAT_MODEL,
+        actual_provider: logMeta.actualProvider,
+        actual_model: logMeta.actualModel,
+        usage_metadata: logMeta.usageMetadata,
         user_message: userMessage,
         context_mode: conversationContext.conversationSummary ? 'summary+tail' : 'full_history',
         messages_in_context: conversationContext.messagesAfterSummary.length,
@@ -1899,9 +1937,9 @@ export async function runAgentTurn(
       response: {
         raw: rawReply,
         final: finalAnswer,
-        provider: response.provider ?? 'gemini',
+        provider: logMeta.actualProvider,
         finish_reason: response.payload.finishReason ?? null,
-        usage_metadata: response.payload.usageMetadata ?? null,
+        usage_metadata: logMeta.usageMetadata,
       },
       tokens_input: tokensInput,
       tokens_output: tokensOutput,
