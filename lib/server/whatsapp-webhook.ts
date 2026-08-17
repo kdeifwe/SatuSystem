@@ -5,6 +5,7 @@ import { runAgentTurnWithLead } from '@/lib/server/ai/orchestrator';
 import { splitAgentMessage, calculateTypingDelay } from '@/lib/server/ai/message-splitter';
 import { sendWhatsAppMessage } from '@/lib/channels/whatsapp';
 import { withLeadProcessingLock } from '@/lib/server/lead-processing-queue';
+import { fetchAndTranscribeWhatsAppMedia, saveBufferToSupabase } from '@/lib/server/media-stt';
 
 // WhatsApp webhook callbacks run outside a user session, so we use a service-role
 // Supabase client here to bypass RLS while still keeping the webhook handling secure.
@@ -195,17 +196,74 @@ export async function processIncomingWhatsAppMessage(body: any) {
 
     const msg = value.messages[0];
     const phoneNumber = msg.from;
-    const text = msg.text?.body ?? '';
+    let text = msg.text?.body ?? '';
     const messageId = msg.id;
 
-    if (!phoneNumber || !text) {
+    if (!phoneNumber) {
       return;
     }
 
+    // Resolve admin and channel once and reuse
     const admin = getAdmin();
     const webhookPhoneNumberId = value?.metadata?.phone_number_id;
+    const channel = await resolveWhatsAppChannelForPhoneNumber(admin, phoneNumber, webhookPhoneNumberId);
+    if (!channel) {
+      console.error('[whatsapp webhook] channel not found for phone_number_id', webhookPhoneNumberId);
+      return;
+    }
+
     const normalizedPhoneNumber = String(phoneNumber).replace(/^\+/, '');
     const processingLockKey = `whatsapp:${webhookPhoneNumberId ?? 'unknown'}:${normalizedPhoneNumber}`;
+
+    // Attempt STT for audio messages when there's no text
+    let mediaPath: string | null = null;
+    if (!text && (msg.type === 'audio' || msg.audio)) {
+      try {
+        const mediaId = msg.audio?.id;
+        const accessToken = String(((channel?.credentials as Record<string, unknown>) ?? {})['access_token'] ?? '');
+        if (mediaId && accessToken) {
+          const { text: transcribedText, buffer, mimeType } = await fetchAndTranscribeWhatsAppMedia(mediaId, accessToken);
+          if (transcribedText) text = transcribedText;
+          // save original audio to private Supabase bucket, store storage PATH (not signed URL)
+          try {
+            const storagePath = `whatsapp/${channel?.org_id ?? 'unknown'}/${normalizedPhoneNumber}/${messageId}.${(mimeType?.split('/')[1] ?? 'ogg')}`;
+            await saveBufferToSupabase(admin, 'messages-media', storagePath, buffer, mimeType);
+            mediaPath = storagePath;
+          } catch (e) {
+            console.error('[whatsapp webhook] failed to upload media to storage', e);
+          }
+        }
+      } catch (err) {
+        console.error('[whatsapp webhook] media/transcription error', err);
+        // friendly user message (do not silent-return)
+        try {
+          const recipient = phoneNumber.replace(/^\+/, '');
+          const phoneNumberId = String(((channel?.credentials as Record<string, unknown>) ?? {})['phone_number_id'] ?? webhookPhoneNumberId ?? '');
+          const accessToken = String(((channel?.credentials as Record<string, unknown>) ?? {})['access_token'] ?? '');
+          if (phoneNumberId && accessToken) {
+            await sendWhatsAppMessage(phoneNumberId, accessToken, recipient, 'Извините, не получилось распознать голосовое, напишите, пожалуйста, текстом');
+          }
+        } catch (sendErr) {
+          console.error('[whatsapp webhook] failed to notify user about STT error', sendErr);
+        }
+        return;
+      }
+    }
+
+    // If after STT we still have no text, handle unsupported types / polite message and exit
+    if (!text) {
+      try {
+        const recipient = phoneNumber.replace(/^\+/, '');
+        const phoneNumberId = String(((channel?.credentials as Record<string, unknown>) ?? {})['phone_number_id'] ?? webhookPhoneNumberId ?? '');
+        const accessToken = String(((channel?.credentials as Record<string, unknown>) ?? {})['access_token'] ?? '');
+        if (phoneNumberId && accessToken) {
+          await sendWhatsAppMessage(phoneNumberId, accessToken, recipient, 'Извините, пока могу отвечать только на текст и голосовые сообщения. Пожалуйста, напишите текстом.');
+        }
+      } catch (e) {
+        console.error('[whatsapp webhook] failed to notify user about unsupported media', e);
+      }
+      return;
+    }
 
     await withLeadProcessingLock(processingLockKey, async () => {
       const externalMessageId = `wa_${messageId}`;
@@ -220,6 +278,8 @@ export async function processIncomingWhatsAppMessage(body: any) {
         return;
       }
 
+      // TODO: channel is resolved earlier outside the lock for STT/unsupported-media handling.
+      // Consider re-using the earlier `channel` variable instead of resolving again here.
       const channel = await resolveWhatsAppChannelForPhoneNumber(admin, phoneNumber, webhookPhoneNumberId);
 
       if (!channel) {
@@ -328,6 +388,7 @@ export async function processIncomingWhatsAppMessage(body: any) {
         conversation_id: conversation.id,
         sender: 'user',
         content: text,
+        media_url: mediaPath,
         external_message_id: externalMessageId,
       }).select('id').single();
       const currentUserMessageId = insertedUserMessage?.id ?? null;

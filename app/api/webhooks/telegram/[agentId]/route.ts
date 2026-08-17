@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { runAgentTurnWithLead } from '@/lib/server/ai/orchestrator';
 import { splitAgentMessage, calculateTypingDelay } from '@/lib/server/ai/message-splitter';
+import { fetchAndTranscribeTelegramFile, saveBufferToSupabase } from '@/lib/server/media-stt';
 
 // Webhook processing must use a service-role Supabase client because the request
 // is unauthenticated and webhook events need cross-org access for leads/conversations/messages.
@@ -43,12 +44,9 @@ async function handleUpdate(update: any, agentId: string) {
     console.log('[TG webhook] No message in update, skipping');
     return;
   }
-  
-  const text = message.text;
-  if (!text) {
-    console.log('[TG webhook] No text in message, skipping');
-    return;
-  }
+
+  let text = message.text;
+  let mediaPath: string | null = null;
 
   const chatId = String(message.chat.id);
   const userName = [message.from?.first_name, message.from?.last_name].filter(Boolean).join(' ') || 'Клиент';
@@ -104,6 +102,49 @@ async function handleUpdate(update: any, agentId: string) {
 
     if (existingMsg) {
       console.log('[TG webhook] Duplicate message, skipping:', externalMessageId);
+      return;
+    }
+
+    // If no text but voice/audio exist — download and transcribe
+    if (!text && (message.voice || message.audio)) {
+      try {
+        const fileId = message.voice?.file_id ?? message.audio?.file_id;
+        if (fileId) {
+          const { text: transcribed, buffer, mimeType } = await fetchAndTranscribeTelegramFile(botToken, fileId);
+          if (transcribed) text = transcribed;
+          try {
+            const storagePath = `telegram/${agentId}/${chatId}/${message.message_id}.${(mimeType?.split('/')[1] ?? 'ogg')}`;
+            await saveBufferToSupabase(admin, 'messages-media', storagePath, buffer, mimeType);
+            mediaPath = storagePath;
+          } catch (e) {
+            console.error('[TG webhook] failed to upload media', e);
+          }
+        }
+      } catch (err) {
+        console.error('[TG webhook] failed to download/transcribe voice', err);
+        try {
+          await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: chatId, text: 'Извините, не получилось распознать голосовое, напишите, пожалуйста, текстом' }),
+          });
+        } catch (sendErr) {
+          console.error('[TG webhook] failed to notify user about STT error', sendErr);
+        }
+        return;
+      }
+    }
+
+    if (!text) {
+      try {
+        await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: chatId, text: 'Извините, пока могу отвечать только на текст и голосовые сообщения. Пожалуйста, напишите текстом.' }),
+        });
+      } catch (e) {
+        console.error('[TG webhook] failed to notify user about unsupported media', e);
+      }
       return;
     }
 
@@ -189,6 +230,7 @@ async function handleUpdate(update: any, agentId: string) {
       conversation_id: conversation.id,
       sender: 'user',
       content: text,
+      media_url: mediaPath,
       external_message_id: externalMessageId,
     }).select('id').single();
     const currentUserMessageId = insertedUserMessage?.id ?? null;
