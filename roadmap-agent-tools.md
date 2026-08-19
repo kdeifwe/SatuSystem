@@ -1,58 +1,59 @@
-Roadmap: Agent tools audit and fixes
+﻿Roadmap: Agent tools audit and fixes
 
-Что найдено:
-- В `lib/ai/tools/registry.ts` были объявлены только 4 инструмента для function-calling, в то время как `executor.ts` реализовывал больше инструментов. Из-за этого некоторые инструменты были недостижимы для LLM.
-- Найдена уязвимость: функции обновления лида (`updateLeadInfo`, `addLeadNote`, `scheduleMessage`) использовали `args.lead_id` из входных данных модели для операций записи. Модель может прислать произвольный `lead_id` — это давало возможность изменить/добавить данные к чужому лид-идентификатору.
+Р§С‚Рѕ РЅР°Р№РґРµРЅРѕ:
+- Р’ `lib/ai/tools/registry.ts` Р±С‹Р»Рё РѕР±СЉСЏРІР»РµРЅС‹ С‚РѕР»СЊРєРѕ 4 РёРЅСЃС‚СЂСѓРјРµРЅС‚Р° РґР»СЏ function-calling, РІ С‚Рѕ РІСЂРµРјСЏ РєР°Рє `executor.ts` СЂРµР°Р»РёР·РѕРІС‹РІР°Р» Р±РѕР»СЊС€Рµ РёРЅСЃС‚СЂСѓРјРµРЅС‚РѕРІ. РР·-Р·Р° СЌС‚РѕРіРѕ РЅРµРєРѕС‚РѕСЂС‹Рµ РёРЅСЃС‚СЂСѓРјРµРЅС‚С‹ Р±С‹Р»Рё РЅРµРґРѕСЃС‚РёР¶РёРјС‹ РґР»СЏ LLM.
+- РќР°Р№РґРµРЅР° СѓСЏР·РІРёРјРѕСЃС‚СЊ: С„СѓРЅРєС†РёРё РѕР±РЅРѕРІР»РµРЅРёСЏ Р»РёРґР° (`updateLeadInfo`, `addLeadNote`, `scheduleMessage`) РёСЃРїРѕР»СЊР·РѕРІР°Р»Рё `args.lead_id` РёР· РІС…РѕРґРЅС‹С… РґР°РЅРЅС‹С… РјРѕРґРµР»Рё РґР»СЏ РѕРїРµСЂР°С†РёР№ Р·Р°РїРёСЃРё. РњРѕРґРµР»СЊ РјРѕР¶РµС‚ РїСЂРёСЃР»Р°С‚СЊ РїСЂРѕРёР·РІРѕР»СЊРЅС‹Р№ `lead_id` вЂ” СЌС‚Рѕ РґР°РІР°Р»Рѕ РІРѕР·РјРѕР¶РЅРѕСЃС‚СЊ РёР·РјРµРЅРёС‚СЊ/РґРѕР±Р°РІРёС‚СЊ РґР°РЅРЅС‹Рµ Рє С‡СѓР¶РѕРјСѓ Р»РёРґ-РёРґРµРЅС‚РёС„РёРєР°С‚РѕСЂСѓ.
 
-Что сделано:
-- Исправлена логика в `lib/ai/tools/executor.ts`: теперь все операции, которые должны работать с текущим лидом диалога, используют доверенный `ctx.leadId` (серверный контекст) и валидируют его присутствие. Удалены зависимости от `args.lead_id` в сигнатурах и обработке.
-- Восстановлены декларации инструментов `update_lead_info` и `add_lead_note` в `lib/ai/tools/registry.ts`, при этом из схемы убран параметр `lead_id` (модели не нужно его передавать).
-- Обновлён контракт вызовов в `executor.ts` (dispatch теперь передаёт `call.args` без `lead_id` для этих инструментов).
+Р§С‚Рѕ СЃРґРµР»Р°РЅРѕ:
+- РСЃРїСЂР°РІР»РµРЅР° Р»РѕРіРёРєР° РІ `lib/ai/tools/executor.ts`: С‚РµРїРµСЂСЊ РІСЃРµ РѕРїРµСЂР°С†РёРё, РєРѕС‚РѕСЂС‹Рµ РґРѕР»Р¶РЅС‹ СЂР°Р±РѕС‚Р°С‚СЊ СЃ С‚РµРєСѓС‰РёРј Р»РёРґРѕРј РґРёР°Р»РѕРіР°, РёСЃРїРѕР»СЊР·СѓСЋС‚ РґРѕРІРµСЂРµРЅРЅС‹Р№ `ctx.leadId` (СЃРµСЂРІРµСЂРЅС‹Р№ РєРѕРЅС‚РµРєСЃС‚) Рё РІР°Р»РёРґРёСЂСѓСЋС‚ РµРіРѕ РїСЂРёСЃСѓС‚СЃС‚РІРёРµ. РЈРґР°Р»РµРЅС‹ Р·Р°РІРёСЃРёРјРѕСЃС‚Рё РѕС‚ `args.lead_id` РІ СЃРёРіРЅР°С‚СѓСЂР°С… Рё РѕР±СЂР°Р±РѕС‚РєРµ.
+- Р’РѕСЃСЃС‚Р°РЅРѕРІР»РµРЅС‹ РґРµРєР»Р°СЂР°С†РёРё РёРЅСЃС‚СЂСѓРјРµРЅС‚РѕРІ `update_lead_info` Рё `add_lead_note` РІ `lib/ai/tools/registry.ts`, РїСЂРё СЌС‚РѕРј РёР· СЃС…РµРјС‹ СѓР±СЂР°РЅ РїР°СЂР°РјРµС‚СЂ `lead_id` (РјРѕРґРµР»Рё РЅРµ РЅСѓР¶РЅРѕ РµРіРѕ РїРµСЂРµРґР°РІР°С‚СЊ).
+- РћР±РЅРѕРІР»С‘РЅ РєРѕРЅС‚СЂР°РєС‚ РІС‹Р·РѕРІРѕРІ РІ `executor.ts` (dispatch С‚РµРїРµСЂСЊ РїРµСЂРµРґР°С‘С‚ `call.args` Р±РµР· `lead_id` РґР»СЏ СЌС‚РёС… РёРЅСЃС‚СЂСѓРјРµРЅС‚РѕРІ).
 
-Текущее состояние:
-- 6 инструментов теперь доступны для function-calling (после включения в `allowed_tools`):
+РўРµРєСѓС‰РµРµ СЃРѕСЃС‚РѕСЏРЅРёРµ:
+- 6 РёРЅСЃС‚СЂСѓРјРµРЅС‚РѕРІ С‚РµРїРµСЂСЊ РґРѕСЃС‚СѓРїРЅС‹ РґР»СЏ function-calling (РїРѕСЃР»Рµ РІРєР»СЋС‡РµРЅРёСЏ РІ `allowed_tools`):
   - `searchKnowledgeBase`
   - `sendKaspiPay`
   - `updateLeadStatus`
   - `redirectToOperator`
   - `update_lead_info`
   - `add_lead_note`
-- `getCurrentDate` и `getMediaFiles` — решено: `getCurrentDate` добавим в контекст (не как tool), `getMediaFiles` — через существующий поиск и `source_metadata` (не новый тул сейчас).
-- `sendCustomNotification`, `scheduleMessage`, `callPhoneNumber` — оставлены вне function-calling (сценарии/Фазы 4/7).
+- `getCurrentDate` Рё `getMediaFiles` вЂ” СЂРµС€РµРЅРѕ: `getCurrentDate` РґРѕР±Р°РІРёРј РІ РєРѕРЅС‚РµРєСЃС‚ (РЅРµ РєР°Рє tool), `getMediaFiles` вЂ” С‡РµСЂРµР· СЃСѓС‰РµСЃС‚РІСѓСЋС‰РёР№ РїРѕРёСЃРє Рё `source_metadata` (РЅРµ РЅРѕРІС‹Р№ С‚СѓР» СЃРµР№С‡Р°СЃ).
+- `sendCustomNotification`, `scheduleMessage`, `callPhoneNumber` вЂ” РѕСЃС‚Р°РІР»РµРЅС‹ РІРЅРµ function-calling (СЃС†РµРЅР°СЂРёРё/Р¤Р°Р·С‹ 4/7).
 
-Финальная сводная таблица по тулам (после фиксов):
+Р¤РёРЅР°Р»СЊРЅР°СЏ СЃРІРѕРґРЅР°СЏ С‚Р°Р±Р»РёС†Р° РїРѕ С‚СѓР»Р°Рј (РїРѕСЃР»Рµ С„РёРєСЃРѕРІ):
 
-| Имя инструмента | В `registry.ts` | В `executor.ts` | У кого в `allowed_tools` (примеры) | Статус после фикса |
+| РРјСЏ РёРЅСЃС‚СЂСѓРјРµРЅС‚Р° | Р’ `registry.ts` | Р’ `executor.ts` | РЈ РєРѕРіРѕ РІ `allowed_tools` (РїСЂРёРјРµСЂС‹) | РЎС‚Р°С‚СѓСЃ РїРѕСЃР»Рµ С„РёРєСЃР° |
 |---|---:|---:|---|---|
-| add_lead_note | Да (`add_lead_note`) | Да (`case 'add_lead_note'`) | Айгерим, Самат, многие агенты | OK — декларация + реализация совпадают |
-| advanceFunnelStep | Динамически: строится через `buildAdvanceFunnelStepDeclaration` при наличии в allowed_tools | Да (`case 'advanceFunnelStep'`) | Самат, несколько агентов | OK — теперь декларация генерируется при необходимости |
-| getCurrentDate | Да (`getCurrentDate`) | Да (`case 'getCurrentDate'`) | Многие агенты (напр., Айгерим, Самат) | OK — объявлен и доступен для function-calling |
-| recordLeadSignal | Нет | Нет | Одна remaining: `sb-natural-signal-agent-1784700221073` | Оставлен в БД только где нужен; удалён из Айгерим/Самат |
-| redirectToOperator | Да (`redirectToOperator`) | Да (`case 'redirectToOperator'`) | Большинство агентов | OK |
-| scheduleMessage | Да (`scheduleMessage`) | Да (`case 'scheduleMessage'`) | Многие агенты | OK — объявлен и доступен |
-| searchKnowledgeBase | Да (`searchKnowledgeBase`) | Да (`case 'searchKnowledgeBase'`) | Все агенты с KB-доступом | OK |
-| sendKaspiPay | Да (`sendKaspiPay`) — фильтруется capability | Да (`case 'sendKaspiPay'`) | Только агенты с `kaspi_invoice_enabled` | OK — фильтрация по capability сохранена |
-| update_lead_info | Да (`update_lead_info`) | Да (`case 'update_lead_info'`) | Многие агенты | OK — схема без `lead_id`, сервер использует `ctx.leadId` |
-| update_lead_status / updateLeadStatus | Нормализовано: `updateLeadStatus` объявлено, registry теперь устойчив к snake/camel | Да (`case 'updateLeadStatus'` и `case 'update_lead_status'`) | Ранее snake_case в DB; теперь заменено на `updateLeadStatus` в allowed_tools | OK — нормализация + DB-миграция выполнены |
+| add_lead_note | Р”Р° (`add_lead_note`) | Р”Р° (`case 'add_lead_note'`) | РђР№РіРµСЂРёРј, РЎР°РјР°С‚, РјРЅРѕРіРёРµ Р°РіРµРЅС‚С‹ | OK вЂ” РґРµРєР»Р°СЂР°С†РёСЏ + СЂРµР°Р»РёР·Р°С†РёСЏ СЃРѕРІРїР°РґР°СЋС‚ |
+| advanceFunnelStep | Р”РёРЅР°РјРёС‡РµСЃРєРё: СЃС‚СЂРѕРёС‚СЃСЏ С‡РµСЂРµР· `buildAdvanceFunnelStepDeclaration` РїСЂРё РЅР°Р»РёС‡РёРё РІ allowed_tools | Р”Р° (`case 'advanceFunnelStep'`) | РЎР°РјР°С‚, РЅРµСЃРєРѕР»СЊРєРѕ Р°РіРµРЅС‚РѕРІ | OK вЂ” С‚РµРїРµСЂСЊ РґРµРєР»Р°СЂР°С†РёСЏ РіРµРЅРµСЂРёСЂСѓРµС‚СЃСЏ РїСЂРё РЅРµРѕР±С…РѕРґРёРјРѕСЃС‚Рё |
+| getCurrentDate | Р”Р° (`getCurrentDate`) | Р”Р° (`case 'getCurrentDate'`) | РњРЅРѕРіРёРµ Р°РіРµРЅС‚С‹ (РЅР°РїСЂ., РђР№РіРµСЂРёРј, РЎР°РјР°С‚) | OK вЂ” РѕР±СЉСЏРІР»РµРЅ Рё РґРѕСЃС‚СѓРїРµРЅ РґР»СЏ function-calling |
+| recordLeadSignal | РќРµС‚ | РќРµС‚ | РћРґРЅР° remaining: `sb-natural-signal-agent-1784700221073` | РћСЃС‚Р°РІР»РµРЅ РІ Р‘Р” С‚РѕР»СЊРєРѕ РіРґРµ РЅСѓР¶РµРЅ; СѓРґР°Р»С‘РЅ РёР· РђР№РіРµСЂРёРј/РЎР°РјР°С‚ |
+| redirectToOperator | Р”Р° (`redirectToOperator`) | Р”Р° (`case 'redirectToOperator'`) | Р‘РѕР»СЊС€РёРЅСЃС‚РІРѕ Р°РіРµРЅС‚РѕРІ | OK |
+| scheduleMessage | Р”Р° (`scheduleMessage`) | Р”Р° (`case 'scheduleMessage'`) | РњРЅРѕРіРёРµ Р°РіРµРЅС‚С‹ | OK вЂ” РѕР±СЉСЏРІР»РµРЅ Рё РґРѕСЃС‚СѓРїРµРЅ |
+| searchKnowledgeBase | Р”Р° (`searchKnowledgeBase`) | Р”Р° (`case 'searchKnowledgeBase'`) | Р’СЃРµ Р°РіРµРЅС‚С‹ СЃ KB-РґРѕСЃС‚СѓРїРѕРј | OK |
+| sendKaspiPay | Р”Р° (`sendKaspiPay`) вЂ” С„РёР»СЊС‚СЂСѓРµС‚СЃСЏ capability | Р”Р° (`case 'sendKaspiPay'`) | РўРѕР»СЊРєРѕ Р°РіРµРЅС‚С‹ СЃ `kaspi_invoice_enabled` | OK вЂ” С„РёР»СЊС‚СЂР°С†РёСЏ РїРѕ capability СЃРѕС…СЂР°РЅРµРЅР° |
+| update_lead_info | Р”Р° (`update_lead_info`) | Р”Р° (`case 'update_lead_info'`) | РњРЅРѕРіРёРµ Р°РіРµРЅС‚С‹ | OK вЂ” СЃС…РµРјР° Р±РµР· `lead_id`, СЃРµСЂРІРµСЂ РёСЃРїРѕР»СЊР·СѓРµС‚ `ctx.leadId` |
+| update_lead_status / updateLeadStatus | РќРѕСЂРјР°Р»РёР·РѕРІР°РЅРѕ: `updateLeadStatus` РѕР±СЉСЏРІР»РµРЅРѕ, registry С‚РµРїРµСЂСЊ СѓСЃС‚РѕР№С‡РёРІ Рє snake/camel | Р”Р° (`case 'updateLeadStatus'` Рё `case 'update_lead_status'`) | Р Р°РЅРµРµ snake_case РІ DB; С‚РµРїРµСЂСЊ Р·Р°РјРµРЅРµРЅРѕ РЅР° `updateLeadStatus` РІ allowed_tools | OK вЂ” РЅРѕСЂРјР°Р»РёР·Р°С†РёСЏ + DB-РјРёРіСЂР°С†РёСЏ РІС‹РїРѕР»РЅРµРЅС‹ |
 
-Статусы и примечания:
-- Нормализация имён защищает от будущих рассинхроний между БД и кодом.
-- `recordLeadSignal` — мёртвая строка в большинстве агентов; удалена из Айгерим и Самат. Осталась только у специального агента `sb-natural-signal-agent-1784700221073`.
-- `getCurrentDate` добавлен в декларации как tool (чтобы не ломать существующие конфиги); но TODO: обсуждение — возможно стоит вместо этого пробрасывать дату в контекст (отдельный таск).
+РЎС‚Р°С‚СѓСЃС‹ Рё РїСЂРёРјРµС‡Р°РЅРёСЏ:
+- РќРѕСЂРјР°Р»РёР·Р°С†РёСЏ РёРјС‘РЅ Р·Р°С‰РёС‰Р°РµС‚ РѕС‚ Р±СѓРґСѓС‰РёС… СЂР°СЃСЃРёРЅС…СЂРѕРЅРёР№ РјРµР¶РґСѓ Р‘Р” Рё РєРѕРґРѕРј.
+- `recordLeadSignal` вЂ” РјС‘СЂС‚РІР°СЏ СЃС‚СЂРѕРєР° РІ Р±РѕР»СЊС€РёРЅСЃС‚РІРµ Р°РіРµРЅС‚РѕРІ; СѓРґР°Р»РµРЅР° РёР· РђР№РіРµСЂРёРј Рё РЎР°РјР°С‚. РћСЃС‚Р°Р»Р°СЃСЊ С‚РѕР»СЊРєРѕ Сѓ СЃРїРµС†РёР°Р»СЊРЅРѕРіРѕ Р°РіРµРЅС‚Р° `sb-natural-signal-agent-1784700221073`.
+- `getCurrentDate` РґРѕР±Р°РІР»РµРЅ РІ РґРµРєР»Р°СЂР°С†РёРё РєР°Рє tool (С‡С‚РѕР±С‹ РЅРµ Р»РѕРјР°С‚СЊ СЃСѓС‰РµСЃС‚РІСѓСЋС‰РёРµ РєРѕРЅС„РёРіРё); РЅРѕ TODO: РѕР±СЃСѓР¶РґРµРЅРёРµ вЂ” РІРѕР·РјРѕР¶РЅРѕ СЃС‚РѕРёС‚ РІРјРµСЃС‚Рѕ СЌС‚РѕРіРѕ РїСЂРѕР±СЂР°СЃС‹РІР°С‚СЊ РґР°С‚Сѓ РІ РєРѕРЅС‚РµРєСЃС‚ (РѕС‚РґРµР»СЊРЅС‹Р№ С‚Р°СЃРє).
 
-Дальше выполненные шаги в этом PR/коммите:
-- registry: добавлена нормализация имён и динамическая генерация `advanceFunnelStep`.
-- registry: добавлены декларации `getCurrentDate` и `scheduleMessage`.
-- DB: выполнена миграция — `update_lead_status` → `updateLeadStatus` для агентов; `recordLeadSignal` удалён из Айгерим и Самат.
-- Сборка: пересобраны системные промпты для всех активных агентов и проверены декларации для Айгерим и Самат.
+Р”Р°Р»СЊС€Рµ РІС‹РїРѕР»РЅРµРЅРЅС‹Рµ С€Р°РіРё РІ СЌС‚РѕРј PR/РєРѕРјРјРёС‚Рµ:
+- registry: РґРѕР±Р°РІР»РµРЅР° РЅРѕСЂРјР°Р»РёР·Р°С†РёСЏ РёРјС‘РЅ Рё РґРёРЅР°РјРёС‡РµСЃРєР°СЏ РіРµРЅРµСЂР°С†РёСЏ `advanceFunnelStep`.
+- registry: РґРѕР±Р°РІР»РµРЅС‹ РґРµРєР»Р°СЂР°С†РёРё `getCurrentDate` Рё `scheduleMessage`.
+- DB: РІС‹РїРѕР»РЅРµРЅР° РјРёРіСЂР°С†РёСЏ вЂ” `update_lead_status` в†’ `updateLeadStatus` РґР»СЏ Р°РіРµРЅС‚РѕРІ; `recordLeadSignal` СѓРґР°Р»С‘РЅ РёР· РђР№РіРµСЂРёРј Рё РЎР°РјР°С‚.
+- РЎР±РѕСЂРєР°: РїРµСЂРµСЃРѕР±СЂР°РЅС‹ СЃРёСЃС‚РµРјРЅС‹Рµ РїСЂРѕРјРїС‚С‹ РґР»СЏ РІСЃРµС… Р°РєС‚РёРІРЅС‹С… Р°РіРµРЅС‚РѕРІ Рё РїСЂРѕРІРµСЂРµРЅС‹ РґРµРєР»Р°СЂР°С†РёРё РґР»СЏ РђР№РіРµСЂРёРј Рё РЎР°РјР°С‚.
 
 
-Дальше (по вашему запросу):
-1) SELECT текущих `general_capabilities` для указанных агентов (ниже). Жду ОК, чтобы выполнить UPDATE и записать `allowed_tools` в БД.
-2) После вашей ОК — выполню UPDATE, затем пересоберу системные промпты для всех активных агентов и проверю, что `update_lead_info` присутствует в сгенерированном `system_prompt_compiled` для Айгерим.
+Р”Р°Р»СЊС€Рµ (РїРѕ РІР°С€РµРјСѓ Р·Р°РїСЂРѕСЃСѓ):
+1) SELECT С‚РµРєСѓС‰РёС… `general_capabilities` РґР»СЏ СѓРєР°Р·Р°РЅРЅС‹С… Р°РіРµРЅС‚РѕРІ (РЅРёР¶Рµ). Р–РґСѓ РћРљ, С‡С‚РѕР±С‹ РІС‹РїРѕР»РЅРёС‚СЊ UPDATE Рё Р·Р°РїРёСЃР°С‚СЊ `allowed_tools` РІ Р‘Р”.
+2) РџРѕСЃР»Рµ РІР°С€РµР№ РћРљ вЂ” РІС‹РїРѕР»РЅСЋ UPDATE, Р·Р°С‚РµРј РїРµСЂРµСЃРѕР±РµСЂСѓ СЃРёСЃС‚РµРјРЅС‹Рµ РїСЂРѕРјРїС‚С‹ РґР»СЏ РІСЃРµС… Р°РєС‚РёРІРЅС‹С… Р°РіРµРЅС‚РѕРІ Рё РїСЂРѕРІРµСЂСЋ, С‡С‚Рѕ `update_lead_info` РїСЂРёСЃСѓС‚СЃС‚РІСѓРµС‚ РІ СЃРіРµРЅРµСЂРёСЂРѕРІР°РЅРЅРѕРј `system_prompt_compiled` РґР»СЏ РђР№РіРµСЂРёРј.
 
 Known gap:
-- `sandbox preview` (frontend: app/dashboard/[agentId]/sandbox → POST /api/chat) uses the legacy tool-building path in `lib/ai/orchestrator.ts` (it builds `allowedToolDeclarations` from the static `AGENT_TOOLS` array) rather than `lib/ai/tools/registry.ts` and `buildToolDeclarationsForAgent`. As a result, the sandbox preview can show a different set of callable tools than the live webhook path (`lib/server/ai/orchestrator.ts` → `buildToolDeclarationsForAgent`). This is a documentation-only note; do NOT change behavior now.
+- `sandbox preview` (frontend: app/dashboard/[agentId]/sandbox в†’ POST /api/chat) uses the legacy tool-building path in `lib/ai/orchestrator.ts` (it builds `allowedToolDeclarations` from the static `AGENT_TOOLS` array) rather than `lib/ai/tools/registry.ts` and `buildToolDeclarationsForAgent`. As a result, the sandbox preview can show a different set of callable tools than the live webhook path (`lib/server/ai/orchestrator.ts` в†’ `buildToolDeclarationsForAgent`). This is a documentation-only note; do NOT change behavior now.
 
 ---
-Product decision recorded: ������� has dialogue_flow but no advanceFunnelStep in allowed_tools � requires product confirmation before any config change.
+Product decision recorded: Айгерим имеет dialogue_flow, но в allowed_tools отсутствует advanceFunnelStep — требуется решение продукта перед любыми изменениями конфигурации.
+
