@@ -51,4 +51,7 @@ Roadmap: Agent tools audit and fixes
 1) SELECT текущих `general_capabilities` для указанных агентов (ниже). Жду ОК, чтобы выполнить UPDATE и записать `allowed_tools` в БД.
 2) После вашей ОК — выполню UPDATE, затем пересоберу системные промпты для всех активных агентов и проверю, что `update_lead_info` присутствует в сгенерированном `system_prompt_compiled` для Айгерим.
 
+Known gap:
+- `sandbox preview` (frontend: app/dashboard/[agentId]/sandbox → POST /api/chat) uses the legacy tool-building path in `lib/ai/orchestrator.ts` (it builds `allowedToolDeclarations` from the static `AGENT_TOOLS` array) rather than `lib/ai/tools/registry.ts` and `buildToolDeclarationsForAgent`. As a result, the sandbox preview can show a different set of callable tools than the live webhook path (`lib/server/ai/orchestrator.ts` → `buildToolDeclarationsForAgent`). This is a documentation-only note; do NOT change behavior now.
+
 ---
