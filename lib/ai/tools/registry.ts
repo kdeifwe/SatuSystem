@@ -87,7 +87,12 @@ function buildAdvanceFunnelStepDeclaration(flow: unknown): GeminiFunctionDeclara
 }
 
 export function buildToolDeclarationsForAgent(allowedToolNames: string[], generalCapabilities: unknown, _flow: unknown): GeminiFunctionDeclaration[] {
+  function normalizeToolName(name: string): string {
+    return String(name).replace(/[^a-z0-9]+/gi, '').toLowerCase();
+  }
+
   const allowedNames = new Set(allowedToolNames);
+  const normalizedAllowed = new Set(Array.from(allowedNames).map((n) => normalizeToolName(n)));
   const capabilities = (generalCapabilities as Record<string, unknown> | null) ?? {};
 
   const kaspiServiceConfigured = Boolean(
@@ -101,7 +106,7 @@ export function buildToolDeclarationsForAgent(allowedToolNames: string[], genera
     allowedNames.delete('sendKaspiPay');
   }
 
-  return ALL_TOOL_DECLARATIONS.filter((declaration) => allowedNames.has(declaration.name))
+  const decls = ALL_TOOL_DECLARATIONS.filter((declaration) => normalizedAllowed.has(normalizeToolName(declaration.name)))
     .map((declaration) => ({
       ...declaration,
       parameters: {
@@ -109,6 +114,23 @@ export function buildToolDeclarationsForAgent(allowedToolNames: string[], genera
         properties: { ...declaration.parameters.properties },
       },
     }));
+
+  // If funnel step advance is allowed, build a dynamic declaration from the flow
+  const advanceNormalized = normalizeToolName('advanceFunnelStep');
+  if (normalizedAllowed.has(advanceNormalized)) {
+    try {
+      const adv = buildAdvanceFunnelStepDeclaration(_flow);
+      // Avoid duplicates
+      if (!decls.find((d) => d.name === adv.name)) decls.push(adv);
+    } catch (e) {
+      console.warn('[TOOLS] Failed to build advanceFunnelStep declaration', e);
+    }
+  }
+
+  // Also include scheduleMessage/getCurrentDate if requested (executor implements them)
+  // (They will be matched via normalized names)
+
+  return decls;
 }
 
 export const PRODUCTION_TOOL_DECLARATIONS: GeminiFunctionDeclaration[] = [
@@ -135,6 +157,26 @@ export const PRODUCTION_TOOL_DECLARATIONS: GeminiFunctionDeclaration[] = [
         comment: { type: 'STRING', description: 'Комментарий к счёту.' },
       },
       required: ['phone', 'amount'],
+    },
+  },
+  {
+    name: 'getCurrentDate',
+    description: 'Возвращает текущую дату и день недели в часовом поясе организации. Используй ТОЛЬКО для отображения текущей даты/времени пользователю, не полагайся на модель для принятия временных решений.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {},
+    },
+  },
+  {
+    name: 'scheduleMessage',
+    description: 'Запланировать отправку сообщения клиенту в указанное время. ИСПОЛЬЗУЙ ТОЛЬКО когда нужно отправить follow-up или напоминание; не используйте для немедленных ответов.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        message: { type: 'STRING', description: 'Текст сообщения для отправки.' },
+        send_at: { type: 'STRING', description: 'UTC-время отправки в ISO 8601 формате.' },
+      },
+      required: ['message', 'send_at'],
     },
   },
   {
@@ -202,6 +244,9 @@ export type ToolName =
   | 'searchKnowledgeBase'
   | 'sendKaspiPay'
   | 'updateLeadStatus'
+  | 'advanceFunnelStep'
+  | 'getCurrentDate'
+  | 'scheduleMessage'
   | 'update_lead_info'
   | 'add_lead_note'
   | 'redirectToOperator';
