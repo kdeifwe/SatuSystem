@@ -100,13 +100,13 @@ async function dispatch(call: ToolCall, ctx: ToolContext): Promise<unknown> {
     case 'createKaspiInvoice':
       return createKaspiInvoice(call.args as { phone: string; amount: number; comment?: string }, ctx);
     case 'update_lead_info':
-      return updateLeadInfo(call.args as { lead_id: string; fields: Record<string, unknown> }, ctx);
+      return updateLeadInfo(call.args as { fields: Record<string, unknown> }, ctx);
     case 'add_lead_note':
-      return addLeadNote(call.args as { lead_id: string; note: string }, ctx);
+      return addLeadNote(call.args as { note: string }, ctx);
     case 'sendCustomNotification':
       return sendCustomNotification(call.args as { message: string; target: string }, ctx);
     case 'scheduleMessage':
-      return scheduleMessage(call.args as { lead_id: string; message: string; send_at: string }, ctx);
+      return scheduleMessage(call.args as { message: string; send_at: string }, ctx);
     default:
       throw new Error(`Неизвестный инструмент: ${call.name}`);
   }
@@ -469,8 +469,10 @@ async function updateLeadStatus(args: { lead_id: string; status: string }, ctx: 
   };
 }
 
-async function updateLeadInfo(args: { lead_id: string; fields: Record<string, unknown> }, ctx: ToolContext) {
+async function updateLeadInfo(args: { fields: Record<string, unknown> }, ctx: ToolContext) {
   const supabase = createServiceClient();
+  const targetLeadId = ctx.leadId;
+  if (!targetLeadId) throw new Error('lead_id is required in the conversation context');
   const SAFE_DIRECT_FIELDS = ['name', 'email'];
   const directUpdate: Record<string, unknown> = {};
   const attributesUpdate: Record<string, unknown> = {};
@@ -483,7 +485,7 @@ async function updateLeadInfo(args: { lead_id: string; fields: Record<string, un
     }
   }
 
-  const { data: current, error: currentError } = await supabase.from('leads').select('attributes').eq('id', args.lead_id).eq('org_id', ctx.orgId).single();
+  const { data: current, error: currentError } = await supabase.from('leads').select('attributes').eq('id', targetLeadId).eq('org_id', ctx.orgId).single();
   if (currentError) throw new Error(`Ошибка получения данных лида: ${currentError.message}`);
 
   const mergedAttributes = {
@@ -495,7 +497,7 @@ async function updateLeadInfo(args: { lead_id: string; fields: Record<string, un
     ...directUpdate,
     attributes: mergedAttributes,
     updated_at: new Date().toISOString(),
-  }).eq('id', args.lead_id).eq('org_id', ctx.orgId);
+  }).eq('id', targetLeadId).eq('org_id', ctx.orgId);
 
   if (error) throw new Error(`Ошибка обновления данных лида: ${error.message}`);
 
@@ -505,10 +507,10 @@ async function updateLeadInfo(args: { lead_id: string; fields: Record<string, un
   if (phone || email) {
     for (const contactType of ['phone', 'email']) {
       if ((contactType === 'phone' && phone) || (contactType === 'email' && email)) {
-        await enqueueNotification('contact_received', args.lead_id, ctx.agentId, {
+        await enqueueNotification('contact_received', targetLeadId, ctx.agentId, {
           phone: contactType === 'phone' ? phone : undefined,
           email: contactType === 'email' ? email : undefined,
-          lead_id: args.lead_id,
+          lead_id: targetLeadId,
           lead_name: directUpdate.name || args.fields.name || '—',
         }, { orgId: ctx.orgId });
       }
@@ -518,13 +520,16 @@ async function updateLeadInfo(args: { lead_id: string; fields: Record<string, un
   return { success: true, updated_fields: Object.keys(args.fields) };
 }
 
-async function addLeadNote(args: { lead_id: string; note: string }, ctx: ToolContext) {
+async function addLeadNote(args: { note: string }, ctx: ToolContext) {
   const supabase = createServiceClient();
-  const { data: lead, error: leadError } = await supabase.from('leads').select('id').eq('id', args.lead_id).eq('org_id', ctx.orgId).single();
+  const targetLeadId = ctx.leadId;
+  if (!targetLeadId) throw new Error('lead_id is required in the conversation context');
+
+  const { data: lead, error: leadError } = await supabase.from('leads').select('id').eq('id', targetLeadId).eq('org_id', ctx.orgId).single();
   if (leadError || !lead) throw new Error('Лид не найден или нет доступа');
 
   const { error } = await supabase.from('lead_notes').insert({
-    lead_id: args.lead_id,
+    lead_id: targetLeadId,
     note: `🤖 [AI] ${args.note}`,
     author_id: null,
   });
@@ -790,22 +795,24 @@ async function createKaspiInvoice(args: { phone: string; amount: number; comment
   return payload;
 }
 
-async function scheduleMessage(args: { lead_id: string; message: string; send_at: string }, ctx: ToolContext) {
+async function scheduleMessage(args: { message: string; send_at: string }, ctx: ToolContext) {
   const supabase = createServiceClient();
   const sendAt = new Date(args.send_at);
+  const targetLeadId = ctx.leadId;
+  if (!targetLeadId) throw new Error('lead_id is required in the conversation context');
   if (Number.isNaN(sendAt.getTime())) throw new Error('Некорректный формат времени send_at');
   if (sendAt.getTime() < Date.now()) throw new Error('Время отправки не может быть в прошлом');
 
   await supabase.from('messages').insert({
     conversation_id: ctx.conversationId,
     sender: 'system',
-    content: `⏰ Запланированное сообщение для ${args.lead_id}: ${args.message}`,
+    content: `⏰ Запланированное сообщение для ${targetLeadId}: ${args.message}`,
     origin: 'followup',
   });
 
   return {
     success: true,
     send_at: args.send_at,
-    lead_id: args.lead_id,
+    lead_id: targetLeadId,
   };
 }

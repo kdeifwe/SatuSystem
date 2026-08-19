@@ -150,6 +150,28 @@ export const PRODUCTION_TOOL_DECLARATIONS: GeminiFunctionDeclaration[] = [
     },
   },
   {
+    name: 'update_lead_info',
+    description: 'Обновляет свойства лида (имя, email, телефон и др.). ИСПОЛЬЗУЙ ТОЛЬКО когда нужно изменить структурированные поля лида или его контактную информацию. Не изменяй статус лида с помощью этого инструмента (используй updateLeadStatus для смены статуса). Сервер использует ID лида из контекста диалога; не передавай lead_id в аргументах.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        fields: { type: 'OBJECT', description: 'Объект с парами ключ:значение для обновления (напр., name, phone, email и т.д.).' },
+      },
+      required: ['fields'],
+    },
+  },
+  {
+    name: 'add_lead_note',
+    description: 'Добавляет текстовую заметку в `lead_notes`. ИСПОЛЬЗУЙ ТОЛЬКО для записи заметок/комментариев. Сервер использует ID лида из контекста диалога; не передавай lead_id в аргументах. Заметки должны соответствовать Spec.md раздел 3 и сохраняться в lead_notes.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        note: { type: 'STRING', description: 'Текст заметки, кратко и по делу.' },
+      },
+      required: ['note'],
+    },
+  },
+  {
     name: 'redirectToOperator',
     description: `Передать разговор живому оператору. ИСПОЛЬЗУЙ ТОЛЬКО если клиент явно просит человека фразами: "дайте оператора", "хочу поговорить с человеком", "переключите на оператора", "нужен живой сотрудник". ЗАПРЕЩЕНО вызывать этот инструмент если ты не знаешь цену, характеристику товара или условия доставки. В случае отсутствия знаний ответь клиенту из CORE_KNOWLEDGE или скажи "Сейчас уточню информацию и вернусь с ответом".`,
     parameters: {
@@ -180,6 +202,8 @@ export type ToolName =
   | 'searchKnowledgeBase'
   | 'sendKaspiPay'
   | 'updateLeadStatus'
+  | 'update_lead_info'
+  | 'add_lead_note'
   | 'redirectToOperator';
 
 export interface ToolCall {
