@@ -57,4 +57,3 @@ Known gap:
 ---
 Product decision recorded: Айгерим имеет dialogue_flow, но в allowed_tools отсутствует advanceFunnelStep — требуется решение продукта перед любыми изменениями конфигурации.
 Product decision recorded: Айгерим имеет dialogue_flow, но в allowed_tools отсутствует advanceFunnelStep — требуется решение продукта перед любыми изменениями конфигурации.
-
