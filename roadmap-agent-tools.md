@@ -55,3 +55,4 @@ Known gap:
 - `sandbox preview` (frontend: app/dashboard/[agentId]/sandbox β†’ POST /api/chat) uses the legacy tool-building path in `lib/ai/orchestrator.ts` (it builds `allowedToolDeclarations` from the static `AGENT_TOOLS` array) rather than `lib/ai/tools/registry.ts` and `buildToolDeclarationsForAgent`. As a result, the sandbox preview can show a different set of callable tools than the live webhook path (`lib/server/ai/orchestrator.ts` β†’ `buildToolDeclarationsForAgent`). This is a documentation-only note; do NOT change behavior now.
 
 ---
+Product decision recorded: ΐιγεπθμ has dialogue_flow but no advanceFunnelStep in allowed_tools — requires product confirmation before any config change.
