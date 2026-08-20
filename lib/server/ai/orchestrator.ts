@@ -859,8 +859,11 @@ function extractTextFromParts(parts: Array<Record<string, unknown>> | undefined)
     .trim();
 }
 
-const SUMMARY_TOKEN_THRESHOLD = Infinity;
-const SUMMARY_TAIL_MESSAGES = 30;
+// Keep a deeper conversation window available for real history loading,
+// but still reserve a compact tail for summary/compression.
+const CONVERSATION_LOAD_LIMIT = 120;
+const SUMMARY_TOKEN_THRESHOLD = 8000;
+const SUMMARY_TAIL_MESSAGES = 25;
 
 function serializeMessagesForSummary(messages: Array<{ role: 'user' | 'model'; text: string }>) {
   return messages
@@ -903,7 +906,7 @@ async function loadConversationMessages(
   admin: ReturnType<typeof createAdminClient>,
   conversationId: string,
   excludeMessageId?: string | null,
-  limit = 30,
+  limit = CONVERSATION_LOAD_LIMIT,
 ) {
   let query = admin
     .from('messages')
@@ -1164,12 +1167,13 @@ async function buildConversationContext(
     }));
 
   const recentMessages = formattedMessages.slice(-10);
-  const tokenContents = serializeContentForTokenCount(conversation?.summary, recentMessages);
+  const tokenContents = serializeContentForTokenCount(conversation?.summary, formattedMessages);
   const { tokens: totalTokens, fallback: tokenEstimateFallback } = await estimateContentTokens(tokenContents);
   if (totalTokens <= SUMMARY_TOKEN_THRESHOLD) {
+    const fullHistoryMessages = formattedMessages.length > 0 ? formattedMessages : recentMessages;
     return {
       conversationSummary: conversation?.summary ?? null,
-      messagesAfterSummary: recentMessages,
+      messagesAfterSummary: fullHistoryMessages,
       summaryUpToMessageId,
       contextTokenCount: totalTokens,
       contextTokenCountFallback: tokenEstimateFallback,
