@@ -8,6 +8,8 @@ Roadmap: Agent tools audit and fixes
 - Исправлена логика в `lib/ai/tools/executor.ts`: теперь все операции, которые должны работать с текущим лидом диалога, используют доверенный `ctx.leadId` (серверный контекст) и валидируют его присутствие. Удалены зависимости от `args.lead_id` в сигнатурах и обработке.
 - Восстановлены декларации инструментов `update_lead_info` и `add_lead_note` в `lib/ai/tools/registry.ts`, при этом из схемы убран параметр `lead_id` (модели не нужно его передавать).
 - Обновлён контракт вызовов в `executor.ts` (dispatch теперь передаёт `call.args` без `lead_id` для этих инструментов).
+ - `broadcasts`: пункт навигации в `app/dashboard/[agentId]/layout.tsx` задаёт `href: 'broadcasts'` (формирует ссылку `/dashboard/:agentId/broadcasts`), но в кодовой базе отсутствует соответствующий route/page — в UI это dead link (незавершённая фича), не баг валидации.
+ - `sendCustomNotification`: реализована в `lib/ai/tools/executor.ts` и делает реальную попытку отправки через `sendTelegramNotification` (которая вызывает Telegram API при наличии токена). При этом функция сразу записывает сообщение в таблицу `messages` перед подтверждением успешной отправки Telegram — небольшое несоответствие по порядку действий (низкий приоритет).
 
 Текущее состояние:
 - 6 инструментов теперь доступны для function-calling (после включения в `allowed_tools`):
