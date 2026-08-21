@@ -44,3 +44,8 @@ TODO / открытые задачи:
 - Продуктовое решение по advanceFunnelStep для Айгерим.
 - Переход getCurrentDate → context injection (RFC / отдельная задача).
 - Sandbox preview использует legacy tool-building path (см. Known gap выше) — рассмотреть миграцию sandbox на `buildToolDeclarationsForAgent` при планировании релиза.
+
+Экстренные меры (применено):
+- **scheduleMessage — dead-path**: `scheduleMessage` записывал `messages` с `origin='followup'`, но в репозитории нет воркера/cron, который бы читал эти строки и выполнял отправку. Это делало функцию бесполезной и вводило в заблуждение (модель могла пообещать напоминание, которое никогда не будет доставлено).
+- **Митигирование**: временно удалили `scheduleMessage` из `allowed_tools` для всех затронутых агентов (16 агентов) чтобы предотвратить дальнейшие обещания доставки до решения (реализовать воркер доставки или переключить на `notification_log` паттерн).
+- **Рекомендация**: либо реализовать воркер, читающий `messages` с `origin='followup'` и отправляющий через существующие каналы (reuse `notification_log` + `send-notifications`), либо перепроектировать `scheduleMessage` на запись в `scheduled_messages` и использовать централизованный планировщик.
