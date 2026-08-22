@@ -238,6 +238,18 @@ export function buildSystemPrompt(
   customTools: Array<{ name?: string | null }> = [],
   inlineKnowledgeSources: Array<{ title?: string | null; raw_content?: string | null }> = []
 ): string {
+  const dateInOrg = (() => {
+    try {
+      const now = new Date();
+      const tz = org?.timezone || 'UTC';
+      const dateFormatter = new Intl.DateTimeFormat('ru-RU', { timeZone: tz, year: 'numeric', month: 'long', day: 'numeric' });
+      const weekdayFormatter = new Intl.DateTimeFormat('ru-RU', { timeZone: tz, weekday: 'long' });
+      return `${dateFormatter.format(now)} (${weekdayFormatter.format(now)})`;
+    } catch (e) {
+      return new Date().toISOString().split('T')[0];
+    }
+  })();
+
   const customToolNames = customTools.map((t) => t.name).filter(Boolean) as string[];
   const availableToolNames = [...ALL_TOOL_DECLARATIONS.map((d) => d.name), ...customToolNames];
   const defaults = (org.agent_defaults ?? {}) as Record<string, unknown>;
@@ -294,6 +306,8 @@ export function buildSystemPrompt(
 
   return `
 Ты — ${agent.name}, консультант ${company}.
+
+Текущая дата: ${dateInOrg}.
 
 Продаёшь: ${products}.
 

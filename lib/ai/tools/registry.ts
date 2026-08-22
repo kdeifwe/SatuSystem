@@ -160,14 +160,6 @@ export const PRODUCTION_TOOL_DECLARATIONS: GeminiFunctionDeclaration[] = [
     },
   },
   {
-    name: 'getCurrentDate',
-    description: 'Возвращает текущую дату и день недели в часовом поясе организации. Используй ТОЛЬКО для отображения текущей даты/времени пользователю, не полагайся на модель для принятия временных решений.',
-    parameters: {
-      type: 'OBJECT',
-      properties: {},
-    },
-  },
-  {
     name: 'scheduleMessage',
     description: 'Запланировать отправку сообщения клиенту в указанное время. ИСПОЛЬЗУЙ ТОЛЬКО когда нужно отправить follow-up или напоминание; не используйте для немедленных ответов.',
     parameters: {
@@ -245,7 +237,6 @@ export type ToolName =
   | 'sendKaspiPay'
   | 'updateLeadStatus'
   | 'advanceFunnelStep'
-  | 'getCurrentDate'
   | 'scheduleMessage'
   | 'update_lead_info'
   | 'add_lead_note'
