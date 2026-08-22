@@ -8,8 +8,8 @@ Roadmap: Agent tools audit and fixes
 - Исправлена логика в `lib/ai/tools/executor.ts`: теперь все операции, которые должны работать с текущим лидом диалога, используют доверенный `ctx.leadId` (серверный контекст) и валидируют его присутствие. Удалены зависимости от `args.lead_id` в сигнатурах и обработке.
 - Восстановлены декларации инструментов `update_lead_info` и `add_lead_note` в `lib/ai/tools/registry.ts`, при этом из схемы убран параметр `lead_id` (модели не нужно его передавать).
 - Обновлён контракт вызовов в `executor.ts` (dispatch теперь передаёт `call.args` без `lead_id` для этих инструментов).
-- `broadcasts`: пункт навигации в `app/dashboard/[agentId]/layout.tsx` задаёт `href: 'broadcasts'` (формирует ссылку `/dashboard/:agentId/broadcasts`), но в кодовой базе отсутствует соответствующий route/page — в UI это dead link (незавершённая фича), не баг валидации.
-- `sendCustomNotification`: реализована в `lib/ai/tools/executor.ts` и делает реальную попытку отправки через `sendTelegramNotification` (которая вызывает Telegram API при наличии токена). При этом функция сразу записывает сообщение в таблицу `messages` перед подтверждением успешной отправки Telegram — небольшое несоответствие по порядку действий (низкий приоритет).
+- `broadcasts`: пункт навигации в `app/dashboard/[agentId]/layout.tsx` задаёт `href: 'broadcasts'` (формирует ссылку `/dashboard/:agentId/broadcasts`), но в кодовой базе отсутствовал соответствующий route/page — это dead link. STATUS: DONE — ссылка удалена из навигации.
+- `sendCustomNotification`: реализована в `lib/ai/tools/executor.ts` и делает реальную попытку отправки через `sendTelegramNotification`. STATUS: DONE — порядок операций исправлен, сообщение в `messages` пишется только после подтверждённой отправки. Известное ограничение: если сам insert в `messages` упадёт ПОСЛЕ успешной Telegram-отправки, функция ошибочно вернёт `reason:'send_failed'`, хотя сообщение реально было доставлено (маловероятный edge case, не блокирует).
 
 Текущее состояние:
 - 6 инструментов теперь доступны для function-calling (после включения в `allowed_tools`):
@@ -27,11 +27,11 @@ Roadmap: Agent tools audit and fixes
 | Имя инструмента | Registry / декларация | Executor / реализация | Где включено (allowed_tools) | Статус |
 |---|---|---|---|---|
 | `add_lead_note` | Да (`add_lead_note`) | Да (`case 'add_lead_note'`) | Айгерим, Самат, многие агенты | OK — декларация и реализация совпадают |
-| `advanceFunnelStep` | Динамически: строится через `buildAdvanceFunnelStepDeclaration` при наличии dialogue_flow | Да (`case 'advanceFunnelStep'`) | Самат и другие агенты с dialogue_flow, у кого явно включён allowed_tools; Айгерим сознательно не включён | OK для Самат (и других агентов с dialogue_flow, у кого явно включён allowed_tools); для Айгерим сознательно не включён — см. Product decision ниже |
-| `getCurrentDate` | Да (`getCurrentDate`) | Да (`case 'getCurrentDate'`) | Много агентов (контекст) | OK — декларация добавлена сегодня и доступна через function-calling; переход на context-injection вместо tool-based подхода отложен как отдельная задача (см. TODO ниже) |
+| `advanceFunnelStep` | Динамически: строится через `buildAdvanceFunnelStepDeclaration` при наличии dialogue_flow | Да (`case 'advanceFunnelStep'`) | Самат и другие агенты с dialogue_flow, у кого явно включён allowed_tools; Айгерим сознательно оставлен выключенным | DONE — решение принято, оставлено выключенным по умолчанию для Айгерим. |
+| `getCurrentDate` | (migrated) | removed from production tool declarations | Context injection used in `compile-system-prompt` | DONE — переведено на context injection, тул удалён. |
 | `recordLeadSignal` | Нет (DB-only helper) | Нет | Специальный агент: `sb-natural-signal-agent-1784700221073` | Мёртвая функциональность — нет ни в `registry.ts`, ни в `executor.ts`; оставлен в БД только у `sb-natural-signal-agent-1784700221073`, удалён из allowed_tools у Айгерим и Самата |
 | `redirectToOperator` | Да (`redirectToOperator`) | Да (`case 'redirectToOperator'`) | Большинство агентов | OK |
-| `scheduleMessage` | Да (`scheduleMessage`) | Да (`case 'scheduleMessage'`) | Многие агенты | OK — декларация добавлена сегодня, доступен через function-calling везде, где включён в `allowed_tools` |
+| `scheduleMessage` | Да (`scheduleMessage`) | Да (`case 'scheduleMessage'`) | Многие агенты | IN PROGRESS — запись перенесена в `notification_log` (вместо прямой вставки в `messages`), но доставка клиенту ещё НЕ реализована. Cron-stub создан, но не содержит логики; клиенты не получат напоминание, пока не доделан `app/api/cron/send-scheduled-reminders/route.ts`. |
 | `searchKnowledgeBase` | Да (`searchKnowledgeBase`) | Да (`case 'searchKnowledgeBase'`) | Все агенты с KB | OK |
 | `sendKaspiPay` | Да (`sendKaspiPay`) — capability-gated | Да (`case 'sendKaspiPay'`) | Только агенты с `kaspi_invoice_enabled` | OK — capability проверяется |
 | `update_lead_info` | Да (`update_lead_info`) | Да (`case 'update_lead_info'`) | Многие агенты | OK — схема убрана от `lead_id`, используется `ctx.leadId` |
