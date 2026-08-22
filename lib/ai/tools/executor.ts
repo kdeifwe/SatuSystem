@@ -803,12 +803,23 @@ async function scheduleMessage(args: { message: string; send_at: string }, ctx: 
   if (Number.isNaN(sendAt.getTime())) throw new Error('Некорректный формат времени send_at');
   if (sendAt.getTime() < Date.now()) throw new Error('Время отправки не может быть в прошлом');
 
-  await supabase.from('messages').insert({
-    conversation_id: ctx.conversationId,
-    sender: 'system',
-    content: `⏰ Запланированное сообщение для ${targetLeadId}: ${args.message}`,
-    origin: 'followup',
+  // Persist scheduled reminder in notification_log so the notifications worker
+  // can route/deliver it via the appropriate channel. Use `sent_at` to store
+  // the scheduled send time (existing column used by notification workers).
+  const { error } = await supabase.from('notification_log').insert({
+    org_id: ctx.orgId || null,
+    agent_id: ctx.agentId || null,
+    lead_id: targetLeadId,
+    event_type: 'scheduled_reminder',
+    payload: { lead_id: targetLeadId, message: args.message },
+    delivery_status: 'pending',
+    attempts: 0,
+    sent_at: sendAt.toISOString(),
   });
+
+  if (error) {
+    throw new Error(`Failed to schedule message: ${error.message}`);
+  }
 
   return {
     success: true,
