@@ -1,7 +1,7 @@
 import { createAdminClient } from '../supabase/admin.ts';
 import { llmClient } from '../server/ai/llm-client';
 import { GEMINI_CHAT_MODEL } from '../server/ai/gemini-client.ts';
-import { AGENT_TOOLS, mergeAllowedToolNames, type ToolCall } from './tools/registry.ts';
+import { AGENT_TOOLS, mergeAllowedToolNames, buildToolDeclarationsForAgent, type ToolCall } from './tools/registry.ts';
 import { executeTool, type ToolContext } from './tools/executor.ts';
 import { validateAgentAnswer } from './validate-output.ts';
 import { compileAndSaveSystemPrompt } from './compile-system-prompt.ts';
@@ -430,15 +430,12 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
     ? (generalCapabilities.allowed_tools as string[]).filter((name) => typeof name === 'string')
     : [];
 
-  const availableToolNames = AGENT_TOOLS[0].functionDeclarations?.map((f) => f.name) ?? [];
-  const allowedToolNames = (configuredAllowedTools.length > 0
+  const allowedToolNames = configuredAllowedTools.length > 0
     ? mergeAllowedToolNames(configuredAllowedTools, [])
-    : mergeAllowedToolNames(availableToolNames, []))
-    .filter((name) => availableToolNames.includes(name));
-
-  const allowedToolDeclarations = allowedToolNames.length > 0
-    ? [{ functionDeclarations: AGENT_TOOLS[0].functionDeclarations.filter((f) => allowedToolNames.includes(f.name)) }]
     : [];
+
+  const toolDecls = buildToolDeclarationsForAgent(allowedToolNames, generalCapabilities, agent.dialogue_flow);
+  const allowedToolDeclarations = toolDecls.length > 0 ? [{ functionDeclarations: toolDecls }] : [];
 
   const typingSimulation = Boolean((generalCapabilities?.typing_simulation) ?? true);
 
