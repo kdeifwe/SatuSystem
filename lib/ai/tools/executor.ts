@@ -541,11 +541,6 @@ async function addLeadNote(args: { note: string }, ctx: ToolContext) {
 async function sendCustomNotification(args: { message: string; target: string }, ctx: ToolContext) {
   const supabase = createServiceClient();
 
-  await supabase.from('messages').insert({
-    conversation_id: ctx.conversationId,
-    sender: 'system',
-    content: `📢 Уведомление команде (${args.target}): ${args.message}`,
-  });
 
   if (ctx.isSandbox) {
     console.log('[TOOL] sendCustomNotification: sandbox mode, skipping Telegram send', {
@@ -610,6 +605,11 @@ async function sendCustomNotification(args: { message: string; target: string },
 
     try {
       await sendTelegramNotification(profile.telegram_chat_id, args.message);
+      await supabase.from('messages').insert({
+        conversation_id: ctx.conversationId,
+        sender: 'system',
+        content: `📢 Уведомление команде (${args.target}): ${args.message}`,
+      });
       return { success: true, telegram_sent: true, reason: 'sent' };
     } catch (error) {
       console.error('[TOOL] sendCustomNotification: failed to send Telegram notification', error);
@@ -647,6 +647,11 @@ async function sendCustomNotification(args: { message: string; target: string },
 
     try {
       await sendTelegramNotification(profile.telegram_chat_id, args.message);
+      await supabase.from('messages').insert({
+        conversation_id: ctx.conversationId,
+        sender: 'system',
+        content: `📢 Уведомление команде (${args.target}): ${args.message}`,
+      });
       return { success: true, telegram_sent: true, reason: 'sent' };
     } catch (error) {
       console.error('[TOOL] sendCustomNotification: failed to send Telegram notification', error);
@@ -697,6 +702,14 @@ async function sendCustomNotification(args: { message: string; target: string },
         console.error('[TOOL] sendCustomNotification: failed to send Telegram notification', error);
         failed += 1;
       }
+    }
+
+    if (delivered > 0) {
+      await supabase.from('messages').insert({
+        conversation_id: ctx.conversationId,
+        sender: 'system',
+        content: `📢 Уведомление команде (${args.target}): ${args.message}`,
+      });
     }
 
     return {
