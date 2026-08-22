@@ -29,7 +29,6 @@ const navSections = [
       { href: 'knowledge', icon: BookOpen, label: 'База знаний' },
       { href: 'sandbox', icon: FlaskConical, label: 'Тестирование' },
       { href: 'improve', icon: Sparkles, label: 'Улучшение' },
-      { href: 'broadcasts', icon: Send, label: 'Рассылки' },
       { href: 'scenarios', icon: GitBranch, label: 'Сценарии' },
       { href: 'settings', icon: Settings, label: 'Настройки' },
     ],
