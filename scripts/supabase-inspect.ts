@@ -1,5 +1,4 @@
 import dotenv from 'dotenv';
-import fetch from 'node-fetch';
 
 dotenv.config({ path: '.env.local' });
 
@@ -36,7 +35,7 @@ function parseTablesArg(): string[] {
 const candidateTables = parseTablesArg();
 
 function apiUrl(path: string) {
-  return `${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/${path}`;
+  return `${SUPABASE_URL!.replace(/\/$/, '')}/rest/v1/${path}`;
 }
 
 async function getCount(table: string) {
@@ -45,8 +44,8 @@ async function getCount(table: string) {
     const res = await fetch(url, {
       method: 'GET',
       headers: {
-        apikey: KEY,
-        Authorization: `Bearer ${KEY}`,
+        apikey: KEY!,
+        Authorization: `Bearer ${KEY!}`,
         Prefer: 'count=exact',
       },
     });
@@ -71,8 +70,8 @@ async function getMinMax(table: string) {
     const minUrl = `${apiUrl(table)}?select=created_at&order=created_at.asc&limit=1`;
     const maxUrl = `${apiUrl(table)}?select=created_at&order=created_at.desc&limit=1`;
     const [minRes, maxRes] = await Promise.all([
-      fetch(minUrl, { headers: { apikey: KEY, Authorization: `Bearer ${KEY}` } }),
-      fetch(maxUrl, { headers: { apikey: KEY, Authorization: `Bearer ${KEY}` } }),
+      fetch(minUrl, { headers: { apikey: KEY!, Authorization: `Bearer ${KEY!}` } }),
+      fetch(maxUrl, { headers: { apikey: KEY!, Authorization: `Bearer ${KEY!}` } }),
     ]);
     if (!minRes.ok || !maxRes.ok) return { error: `Failed min/max request: ${minRes.status}/${maxRes.status}` };
     const minData = await minRes.json().catch(() => null);
@@ -86,7 +85,7 @@ async function getMinMax(table: string) {
 async function getLastRows(table: string) {
   try {
     const url = `${apiUrl(table)}?select=*&order=created_at.desc&limit=5`;
-    const res = await fetch(url, { headers: { apikey: KEY, Authorization: `Bearer ${KEY}` } });
+    const res = await fetch(url, { headers: { apikey: KEY!, Authorization: `Bearer ${KEY!}` } });
     if (!res.ok) return { error: `Request failed: ${res.status}` };
     const data = await res.json();
     return { rows: data };
