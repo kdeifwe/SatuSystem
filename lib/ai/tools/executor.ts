@@ -7,6 +7,8 @@ import { type ToolCall, type ToolResult } from './registry.ts';
 import { isSandboxToolAllowed } from './sandbox-allowlist';
 import { getLinkedKBChunks, searchKnowledgeBaseBilingual } from '../../knowledge-base/search.ts';
 import { normalizeFunnelFlow } from '../../funnel/normalize.ts';
+import { sendWhatsAppMedia } from '@/lib/channels/baileys-client';
+import { sendTelegramMedia } from '@/lib/channels/telegram-client';
 import type { FunnelFlow } from '../../funnel/types.ts';
 
 export interface ToolContext {
@@ -91,8 +93,8 @@ async function dispatch(call: ToolCall, ctx: ToolContext): Promise<unknown> {
       return advanceFunnelStep(call.args as { stepId: string; reason: string }, ctx);
     case 'getCurrentDate':
       return getCurrentDate(ctx);
-    case 'getMediaFiles':
-      return getMediaFiles(call.args as { category: string; search_query?: string }, ctx);
+    case 'sendMediaToClient':
+      return sendMediaToClient(call.args as { category: string; caption?: string }, ctx);
     case 'update_lead_status':
       return updateLeadStatus(call.args as { lead_id: string; status: string }, ctx);
     case 'updateLeadStatus':
@@ -406,37 +408,82 @@ async function getCurrentDate(ctx: ToolContext) {
   };
 }
 
-async function getMediaFiles(args: { category: string; search_query?: string }, ctx: ToolContext) {
+
+
+async function sendMediaToClient(args: { category: string; caption?: string }, ctx: ToolContext) {
   const supabase = createServiceClient();
-  let query = supabase.from('kb_sources').select('id, title, metadata').eq('agent_id', ctx.agentId).eq('status', 'done').eq('type', 'file');
 
-  if (args.category !== 'other') {
-    query = query.contains('metadata', { category: args.category });
+  // Find the most recent file for this agent with exact media_category match
+  const { data: sources, error: sourcesError } = await supabase
+    .from('kb_sources')
+    .select('id, title, metadata, file_path')
+    .eq('agent_id', ctx.agentId)
+    .eq('status', 'done')
+    .eq('type', 'file')
+    .filter("metadata->>media_category", 'eq', args.category)
+    .order('created_at', { ascending: false })
+    .limit(1);
+
+  if (sourcesError) {
+    return { success: false, reason: `db_error: ${sourcesError.message}` };
   }
 
-  const { data, error } = await query.limit(5);
-  if (error) throw new Error(`Ошибка получения файлов: ${error.message}`);
-  if (!data || data.length === 0) {
-    return { found: false, message: 'Файлы по запросу не найдены' };
+  const source = Array.isArray(sources) && sources.length > 0 ? sources[0] : null;
+  if (!source) {
+    return { success: false, reason: 'not_found' };
   }
 
-  const filesWithUrls = await Promise.all(
-    data.map(async (file: { metadata?: { storage_path?: string }; title?: string }) => {
-      const storagePath = file.metadata?.storage_path;
-      if (!storagePath) return null;
-      const { data: urlData } = await supabase.storage.from('knowledge').createSignedUrl(storagePath, 3600);
-      return {
-        title: file.title,
-        url: urlData?.signedUrl ?? null,
-        category: args.category,
-      };
-    })
-  );
+  const storagePath = source.metadata?.storage_path ?? source.file_path;
+  if (!storagePath) return { success: false, reason: 'no_storage_path' };
 
-  return {
-    found: true,
-    files: filesWithUrls.filter(Boolean),
-  };
+  // Create signed URL for delivery
+  const { data: urlData, error: urlError } = await supabase.storage.from('knowledge').createSignedUrl(storagePath, 3600);
+  if (urlError || !urlData?.signedUrl) {
+    return { success: false, reason: `sign_url_failed: ${urlError?.message ?? 'unknown'}` };
+  }
+
+  // Resolve conversation -> lead -> channel -> external id
+  const { data: conv } = await supabase.from('conversations').select('lead_id').eq('id', ctx.conversationId).single();
+  if (!conv?.lead_id) return { success: false, reason: 'no_conversation' };
+
+  const { data: lead } = await supabase.from('leads').select('external_id, channel_id').eq('id', conv.lead_id).single();
+  if (!lead?.external_id || !lead?.channel_id) return { success: false, reason: 'no_recipient' };
+
+  const { data: channel } = await supabase.from('channels').select('type').eq('id', lead.channel_id).single();
+  const channelType = channel?.type ?? null;
+
+  if (ctx.isSandbox) {
+    // In sandbox mode, skip actual sends but return the signed URL
+    return { success: true, sandbox_mode: true, url: urlData.signedUrl };
+  }
+
+  try {
+    if (channelType === 'whatsapp') {
+      // sendWhatsAppMedia will download the URL into Buffer and send
+      await sendWhatsAppMedia(ctx.agentId, String(lead.external_id), { url: urlData.signedUrl, mimeType: source.metadata?.mime_type, caption: args.caption });
+    } else if (channelType === 'telegram') {
+      await sendTelegramMedia(lead.channel_id, String(lead.external_id), { url: urlData.signedUrl, mimeType: source.metadata?.mime_type, caption: args.caption });
+    } else {
+      return { success: false, reason: 'unsupported_channel' };
+    }
+  } catch (err: any) {
+    return { success: false, reason: `send_failed: ${err?.message ?? String(err)}` };
+  }
+
+  // Log outgoing message
+  try {
+    await supabase.from('messages').insert({
+      conversation_id: ctx.conversationId,
+      sender: 'ai',
+      content: args.caption ?? null,
+      media_url: urlData.signedUrl,
+    });
+  } catch (e) {
+    // non-fatal
+    console.warn('[TOOL] Failed to log outgoing media message', e);
+  }
+
+  return { success: true, url: urlData.signedUrl };
 }
 
 async function updateLeadStatus(args: { lead_id: string; status: string }, ctx: ToolContext) {

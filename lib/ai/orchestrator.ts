@@ -781,7 +781,7 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
     finalReply = finalReply || 'Сейчас подключу коллегу, пожалуйста, подождите.';
   }
 
-  const READONLY_TOOLS = ['searchKnowledgeBase', 'getCurrentDate', 'getMediaFiles'];
+  const READONLY_TOOLS = ['searchKnowledgeBase', 'getCurrentDate'];
   const usedMutatingTool = toolsUsed.some((name) => !READONLY_TOOLS.includes(name));
 
   if (!finalReply.trim() && !handoffTriggered && usedMutatingTool) {

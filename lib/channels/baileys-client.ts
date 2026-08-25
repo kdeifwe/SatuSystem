@@ -405,6 +405,47 @@ export async function sendWhatsAppText(agentId: string, remoteJid: string, conte
   await entry.sock.sendMessage(remoteJid, { text: content });
 }
 
+// Baileys v7 media message shape: media passed directly, mimetype as sibling
+// field (per AnyMediaMessageContent)
+export async function sendWhatsAppMedia(
+  agentId: string,
+  remoteJid: string,
+  opts: { url?: string; buffer?: Buffer; mimeType?: string; caption?: string },
+) {
+  const entry = clientStore.get(agentId);
+  if (!entry?.sock) {
+    throw new Error('WhatsApp client is not initialized');
+  }
+
+  if (entry.status !== 'connected') {
+    throw new Error('WhatsApp is not connected');
+  }
+
+  let data: Buffer | undefined = opts.buffer;
+  if (!data && opts.url) {
+    const res = await fetch(opts.url);
+    if (!res.ok) throw new Error(`Failed to download media: ${res.status}`);
+    data = Buffer.from(await res.arrayBuffer());
+  }
+
+  if (!data) throw new Error('No media buffer provided');
+
+  const mime = opts.mimeType ?? 'application/octet-stream';
+  let message: any;
+
+  if (mime.startsWith('image/')) {
+    // common pattern: { image: <Buffer>, mimetype: 'image/..', caption }
+    message = { image: data, mimetype: mime, caption: opts.caption ?? undefined };
+  } else if (mime.startsWith('video/')) {
+    message = { video: data, mimetype: mime, caption: opts.caption ?? undefined };
+  } else {
+    // documents (including PDF) as document buffer with filename
+    message = { document: data, mimetype: mime, fileName: 'file', caption: opts.caption ?? undefined };
+  }
+
+  await entry.sock.sendMessage(remoteJid, message);
+}
+
 export async function getBaileysStatus(agentId: string): Promise<BaileysClientInfo> {
   const existing = clientStore.get(agentId);
   if (existing) {
