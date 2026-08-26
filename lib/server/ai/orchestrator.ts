@@ -1546,7 +1546,10 @@ export async function runAgentTurn(
   }
   // === End Script Path ===
   
-  const deterministicFactAnswer = tryBuildDeterministicFactAnswerWithLogging(userMessage, chunks, leadGrade);
+  const deterministicFactsEnabled = Boolean(generalCapabilities?.deterministic_facts_enabled);
+  const deterministicFactAnswer = deterministicFactsEnabled
+    ? tryBuildDeterministicFactAnswerWithLogging(userMessage, chunks, leadGrade)
+    : null;
   if (deterministicFactAnswer) {
     console.log('[FACT_FALLBACK] using deterministic KB fact answer for user message', { agentId, userMessage });
     const splitMessages = Boolean((generalCapabilities?.split_messages) ?? true);
