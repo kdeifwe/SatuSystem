@@ -384,13 +384,23 @@ export async function processIncomingWhatsAppMessage(body: any) {
         return;
       }
 
-      const { data: insertedUserMessage } = await admin.from('messages').insert({
+      const { data: insertedUserMessage, error: insertUserMessageError } = await admin.from('messages').insert({
         conversation_id: conversation.id,
         sender: 'user',
         content: text,
         media_url: mediaPath,
         external_message_id: externalMessageId,
       }).select('id').single();
+
+      if (insertUserMessageError) {
+        if (insertUserMessageError.code === '23505') {
+          console.log('[webhook] Duplicate message caught at insert (race condition), skipping:', externalMessageId);
+          return;
+        }
+        console.error('[webhook] Failed to insert user message:', insertUserMessageError);
+        return;
+      }
+
       const currentUserMessageId = insertedUserMessage?.id ?? null;
 
       if (!lead.ai_enabled) {
