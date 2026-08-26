@@ -62,7 +62,7 @@ const channelsSchema = z.object({
 });
 
 const advancedSchema = z.object({
-  model: z.string().default(process.env.FALLBACK_LLM_MODEL ?? 'gpt-5.4-2026-03-05'),
+  model: z.string().default(process.env.FALLBACK_LLM_MODEL ?? 'gpt-5.4-mini'),
   temperature: z.number().min(0).max(1).default(0.4),
   topP: z.number().min(0).max(1).default(0.9),
 });
