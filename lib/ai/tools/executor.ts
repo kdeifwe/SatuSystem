@@ -437,7 +437,7 @@ async function sendMediaToClient(args: { category: string; caption?: string }, c
   if (!storagePath) return { success: false, reason: 'no_storage_path' };
 
   // Create signed URL for delivery
-  const { data: urlData, error: urlError } = await supabase.storage.from('knowledge').createSignedUrl(storagePath, 3600);
+  const { data: urlData, error: urlError } = await supabase.storage.from('kb-files').createSignedUrl(storagePath, 3600);
   if (urlError || !urlData?.signedUrl) {
     return { success: false, reason: `sign_url_failed: ${urlError?.message ?? 'unknown'}` };
   }
