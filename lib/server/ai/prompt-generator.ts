@@ -245,7 +245,7 @@ export async function generateAgentPrompt(
   kbSources: string[],
 ): Promise<GeneratedPrompt> {
   const effectiveAdvanced = {
-    model: info.advanced?.model || (process.env.FALLBACK_LLM_MODEL ?? 'gpt-5.4-mini'),
+    model: info.advanced?.model || (process.env.FALLBACK_LLM_MODEL ?? 'gemini-3.5-flash'),
     temperature: typeof info.advanced?.temperature === 'number' ? info.advanced.temperature : inferScenarioTemperature(info.business.scenario),
     topP: typeof info.advanced?.topP === 'number' ? info.advanced.topP : 0.9,
   };
