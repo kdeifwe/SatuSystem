@@ -1545,50 +1545,7 @@ export async function runAgentTurn(
     };
   }
   // === End Script Path ===
-
-  const pricePatterns = [
-    /қанша\b/i,
-    /баға/i,
-    /багас/i,
-    /стоимост/i,
-    /цен/i,
-    /сколько стоит/i,
-    /нарх/i,
-    /price/i,
-  ];
-  const isPriceQuestion = pricePatterns.some((pattern) => pattern.test(userMessage));
-
-  if (isPriceQuestion) {
-    const priceAnswer = 'Бағасы — 150 000 теңге/ай. Бағаға толық дайын ИИ-агент, қажетті арналарға қосылу, диалогтарды жүргізу, есептер және техникалық баптау кіреді.';
-    const splitMessages = Boolean((generalCapabilities?.split_messages) ?? true);
-    const splitMaxParts = Math.min(3, Math.max(1, Number(generalCapabilities?.split_max_parts ?? 3)));
-    const typingSimulation = Boolean((generalCapabilities?.typing_simulation) ?? true);
-    const messageParts = splitAgentMessage(priceAnswer, splitMessages, splitMaxParts).map((part, index) => ({
-      text: part.text,
-      delayMs: typingSimulation
-        ? Math.max(2000 * index, calculateTypingDelay(part.text) + part.delayMs)
-        : Math.max(2000 * index, part.delayMs),
-    }));
-
-    if (conversationId) {
-      await appendMessage(admin, conversationId, 'ai', priceAnswer);
-    }
-
-    return {
-      answer: priceAnswer,
-      usedChunks: [],
-      messageParts,
-      splitMessages,
-      typingSimulation,
-      handoffMessage: undefined,
-      toolsUsed: [],
-      tokensInput: 0,
-      tokensOutput: 0,
-      latencyMs: Date.now() - startTime,
-      retrievalDebug: { primaryChunks: [], linkedChunks: [] },
-    };
-  }
-
+  
   const deterministicFactAnswer = tryBuildDeterministicFactAnswerWithLogging(userMessage, chunks, leadGrade);
   if (deterministicFactAnswer) {
     console.log('[FACT_FALLBACK] using deterministic KB fact answer for user message', { agentId, userMessage });
