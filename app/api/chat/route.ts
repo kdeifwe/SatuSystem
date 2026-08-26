@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient, getServerUser } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { runAgentTurn } from '@/lib/ai/orchestrator';
+import { runAgentTurn } from '@/lib/server/ai/orchestrator';
 import { splitAgentMessage, calculateTypingDelay } from '@/lib/server/ai/message-splitter';
 
 export async function POST(req: NextRequest) {
