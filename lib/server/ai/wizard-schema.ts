@@ -62,7 +62,7 @@ const channelsSchema = z.object({
 });
 
 const advancedSchema = z.object({
-  model: z.string().default(process.env.FALLBACK_LLM_MODEL ?? 'gpt-5.4-mini'),
+  model: z.string().default(process.env.FALLBACK_LLM_MODEL ?? 'gpt-5.4'),
   temperature: z.number().min(0).max(1).default(0.4),
   topP: z.number().min(0).max(1).default(0.9),
 });
@@ -100,7 +100,7 @@ export const wizardPayloadSchema = z.object({
     },
   }),
   advanced: advancedSchema.default({
-    model: process.env.FALLBACK_LLM_MODEL ?? 'gpt-5.4-mini',
+    model: process.env.FALLBACK_LLM_MODEL ?? 'gpt-5.4',
     temperature: 0.4,
     topP: 0.9,
   }),
