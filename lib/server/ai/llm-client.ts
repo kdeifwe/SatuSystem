@@ -130,7 +130,7 @@ export class UnifiedLLMClient {
 
     if (providerName === 'gemini') return process.env.GEMINI_CHAT_MODEL ?? 'gemini-2.5-flash';
     if (providerName === 'deepseek') return process.env.PRIMARY_LLM_MODEL ?? 'deepseek-v4-flash';
-    if (providerName === 'openai') return process.env.FALLBACK_LLM_MODEL ?? 'gpt-5.4-mini';
+    if (providerName === 'openai') return process.env.FALLBACK_LLM_MODEL ?? 'gpt-5.4-2026-03-05';
     if (providerName === 'groq') return 'llama-3.3-70b-versatile';
 
     return requestedModel;

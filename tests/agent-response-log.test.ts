@@ -6,7 +6,7 @@ const meta = buildAgentResponseLogMeta({
   llmResponse: {
     provider: 'openai',
     usage: { promptTokens: 110, completionTokens: 90, totalTokens: 200 },
-    rawResponse: { model: 'gpt-5.4-mini' },
+    rawResponse: { model: 'gpt-5.4-2026-03-05' },
   },
 });
 

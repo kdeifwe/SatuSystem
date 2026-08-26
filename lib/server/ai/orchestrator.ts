@@ -984,7 +984,7 @@ async function callGemini(
     const hasLlmText = typeof llmResponse.text === 'string' && llmResponse.text.trim().length > 0;
     const hasLlmToolCalls = Array.isArray(llmResponse.toolCalls) && llmResponse.toolCalls.length > 0;
     if (llmResponse.provider === 'gemini' && !hasLlmText && !hasLlmToolCalls) {
-      const fallbackModel = process.env.FALLBACK_LLM_MODEL ?? 'gpt-5.4-mini';
+      const fallbackModel = process.env.FALLBACK_LLM_MODEL ?? 'gpt-5.4-2026-03-05';
       console.warn('[GEMINI] empty reply from Gemini provider, trying fallback LLM', { activeModel, fallbackModel });
       try {
         const fallbackResponse = await llmClient.generate({
