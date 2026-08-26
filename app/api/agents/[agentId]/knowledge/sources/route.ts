@@ -154,7 +154,14 @@ export async function POST(request: NextRequest, { params }: { params: { agentId
         })
         .eq('id', sourceId);
 
-      setImmediate(() => processSource(sourceId, params.agentId, useAI).catch((err) => console.error('[processSource] failed:', err)));
+      // If a media_category was provided, skip Kb text extraction/processing
+      // (images/videos are stored as media and should not run the text extractor).
+      if (!mediaCategory) {
+        setImmediate(() => processSource(sourceId, params.agentId, useAI).catch((err) => console.error('[processSource] failed:', err)));
+      } else {
+        console.log(`[KB] Skipping processing for media source ${sourceId} (media_category=${mediaCategory})`);
+      }
+
       return NextResponse.json({ sourceId, status: 'processing' });
     }
 
