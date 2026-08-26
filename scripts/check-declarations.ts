@@ -12,7 +12,18 @@ async function main() {
   }
   const generalCapabilities = data.general_capabilities ?? {};
   const allowed = Array.isArray(generalCapabilities?.allowed_tools) ? generalCapabilities.allowed_tools : [];
-  const decls = buildToolDeclarationsForAgent(allowed, generalCapabilities, data.dialogue_flow);
+  // Fetch available media categories for the agent so the declaration can be built dynamically
+  const { data: mediaRows } = await supabase
+    .from('kb_sources')
+    .select("category:metadata->>media_category")
+    .eq('agent_id', agentId)
+    .eq('status', 'done')
+    .not('metadata->>media_category', 'is', null);
+  const availableMediaCategories = Array.isArray(mediaRows)
+    ? Array.from(new Set(mediaRows.map((r: any) => String((r?.category ?? '')).trim()).filter(Boolean)))
+    : [];
+
+  const decls = buildToolDeclarationsForAgent(allowed, generalCapabilities, data.dialogue_flow, availableMediaCategories);
   console.log('Allowed tools from DB:', allowed);
   console.log('Declaration names:');
   for (const d of decls) console.log('-', d.name);

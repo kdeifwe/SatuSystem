@@ -434,7 +434,18 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
     ? mergeAllowedToolNames(configuredAllowedTools, [])
     : [];
 
-  const toolDecls = buildToolDeclarationsForAgent(allowedToolNames, generalCapabilities, agent.dialogue_flow);
+  // Gather available media categories for this agent (used to dynamically build sendMediaToClient)
+  const { data: mediaRows } = await admin
+    .from('kb_sources')
+    .select("category:metadata->>media_category")
+    .eq('agent_id', agentId)
+    .eq('status', 'done')
+    .not('metadata->>media_category', 'is', null);
+  const availableMediaCategories = Array.isArray(mediaRows)
+    ? Array.from(new Set(mediaRows.map((r: any) => String((r?.category ?? '')).trim()).filter(Boolean)))
+    : [];
+
+  const toolDecls = buildToolDeclarationsForAgent(allowedToolNames, generalCapabilities, agent.dialogue_flow, availableMediaCategories);
   const allowedToolDeclarations = toolDecls.length > 0 ? [{ functionDeclarations: toolDecls }] : [];
 
   const typingSimulation = Boolean((generalCapabilities?.typing_simulation) ?? true);

@@ -1307,7 +1307,18 @@ export async function runAgentTurn(
     : [];
 
   // Формируем toolDeclarations только для разрешённых тулов
-  const toolDeclarations = buildToolDeclarationsForAgent(allowedToolNames, generalCapabilities, agentData?.dialogue_flow);
+  // Собираем доступные категории медиа для агента — используются для динамической декларации sendMediaToClient
+  const { data: mediaRows } = await admin
+    .from('kb_sources')
+    .select("category:metadata->>media_category")
+    .eq('agent_id', agentId)
+    .eq('status', 'done')
+    .not('metadata->>media_category', 'is', null);
+  const availableMediaCategories = Array.isArray(mediaRows)
+    ? Array.from(new Set(mediaRows.map((r: any) => String((r?.category ?? '')).trim()).filter(Boolean)))
+    : [];
+
+  const toolDeclarations = buildToolDeclarationsForAgent(allowedToolNames, generalCapabilities, agentData?.dialogue_flow, availableMediaCategories);
   const toolPayload = toolDeclarations.length > 0 ? (toolDeclarations as unknown as Array<Record<string, unknown>>) : [];
   console.log(`[AGENT_TOOLS] Agent ${agentId}: allowed tools: [${allowedToolNames.join(', ')}], declarations: [${toolDeclarations.map((d) => d.name).join(', ')}]`);
 

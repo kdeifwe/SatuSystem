@@ -1,4 +1,5 @@
 import { normalizeFunnelFlow } from '../../funnel/normalize.ts';
+import { MEDIA_CATEGORIES } from '../../media/categories.ts';
 
 export interface GeminiFunctionDeclaration {
   name: string;
@@ -7,6 +8,34 @@ export interface GeminiFunctionDeclaration {
     type: string;
     properties: Record<string, unknown>;
     required?: string[];
+  };
+}
+
+function buildSendMediaDeclaration(availableCategories: string[]): GeminiFunctionDeclaration | null {
+  const cats = Array.isArray(availableCategories) ? availableCategories.map((c) => String(c).trim()).filter(Boolean) : [];
+  const matched = MEDIA_CATEGORIES.filter((mc) => cats.includes(mc.id));
+  if (matched.length === 0) return null;
+
+  const enumValues = matched.map((m) => m.id);
+
+  const categoryProperty: Record<string, unknown> = {
+    type: 'STRING',
+    description: `Категория медиа. Доступные значения: ${matched.map((m) => `${m.label} (${m.id})`).join(', ')}`,
+  };
+
+  if (enumValues.length > 0) categoryProperty.enum = enumValues;
+
+  return {
+    name: 'sendMediaToClient',
+    description: 'Отправляет клиенту файл из указанной категории из базы знаний агента.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        category: categoryProperty,
+        caption: { type: 'STRING', description: 'Подпись/комментарий для отправляемого файла.' },
+      },
+      required: ['category'],
+    },
   };
 }
 
@@ -86,7 +115,12 @@ function buildAdvanceFunnelStepDeclaration(flow: unknown): GeminiFunctionDeclara
   };
 }
 
-export function buildToolDeclarationsForAgent(allowedToolNames: string[], generalCapabilities: unknown, _flow: unknown): GeminiFunctionDeclaration[] {
+export function buildToolDeclarationsForAgent(
+  allowedToolNames: string[],
+  generalCapabilities: unknown,
+  _flow: unknown,
+  availableMediaCategories: string[] = [],
+): GeminiFunctionDeclaration[] {
   function normalizeToolName(name: string): string {
     return String(name).replace(/[^a-z0-9]+/gi, '').toLowerCase();
   }
@@ -124,6 +158,30 @@ export function buildToolDeclarationsForAgent(allowedToolNames: string[], genera
       if (!decls.find((d) => d.name === adv.name)) decls.push(adv);
     } catch (e) {
       console.warn('[TOOLS] Failed to build advanceFunnelStep declaration', e);
+    }
+  }
+
+  // If sendMediaToClient is allowed and we have available media categories, build a dynamic declaration
+  const sendMediaNormalized = normalizeToolName('sendMediaToClient');
+  if (normalizedAllowed.has(sendMediaNormalized)) {
+    try {
+      if (Array.isArray(availableMediaCategories) && availableMediaCategories.length > 0) {
+        const sendDecl = buildSendMediaDeclaration(availableMediaCategories);
+        // buildSendMediaDeclaration may return null if none of the available categories
+        // match known MEDIA_CATEGORIES — in that case do not add the tool.
+        if (sendDecl) {
+          if (!decls.find((d) => d.name === sendDecl.name)) decls.push(sendDecl);
+        } else {
+          const idx = decls.findIndex((d) => d.name === 'sendMediaToClient');
+          if (idx !== -1) decls.splice(idx, 1);
+        }
+      } else {
+        // If allowed but there are no categories, ensure tool is not present
+        const idx = decls.findIndex((d) => d.name === 'sendMediaToClient');
+        if (idx !== -1) decls.splice(idx, 1);
+      }
+    } catch (e) {
+      console.warn('[TOOLS] Failed to build sendMediaToClient declaration', e);
     }
   }
 
@@ -235,6 +293,7 @@ export const AGENT_TOOLS: GeminiTool[] = [
 export type ToolName =
   | 'searchKnowledgeBase'
   | 'sendKaspiPay'
+  | 'sendMediaToClient'
   | 'updateLeadStatus'
   | 'advanceFunnelStep'
   | 'scheduleMessage'
