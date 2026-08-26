@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { processSource, embedText } from '@/lib/server/knowledge/processor';
+import MEDIA_CATEGORIES from '@/lib/media/categories';
 
 const ALLOWED_TYPES = ['product', 'qa', 'procedure', 'contacts', 'file', 'other'];
 
@@ -81,6 +82,7 @@ export async function POST(request: NextRequest, { params }: { params: { agentId
       type = getType(formData.get('type'));
       useAI = String(formData.get('useAI') || 'true') !== 'false';
       inlineInPrompt = String(formData.get('inlineInPrompt') || 'false') === 'true';
+      mediaCategory = String(formData.get('media_category') || '').trim() || null;
     } else {
       const body = await request.json();
       file = null;
@@ -90,6 +92,11 @@ export async function POST(request: NextRequest, { params }: { params: { agentId
       type = getType(body.type);
       useAI = body.useAI !== false;
       inlineInPrompt = body.inlineInPrompt === true;
+      mediaCategory = String(body.media_category || '').trim() || null;
+    }
+
+    if (mediaCategory && !MEDIA_CATEGORIES.some((c) => c.id === mediaCategory)) {
+      return NextResponse.json({ error: `Invalid media_category: ${mediaCategory}` }, { status: 400 });
     }
 
     if (file) {
@@ -108,6 +115,7 @@ export async function POST(request: NextRequest, { params }: { params: { agentId
               storage_path: `${params.agentId}/${sourceTitle}/${sanitizedName}`,
               use_ai: useAI,
               mime_type: file.type,
+              ...(mediaCategory ? { media_category: mediaCategory } : {}),
             },
           },
         ])
@@ -140,6 +148,7 @@ export async function POST(request: NextRequest, { params }: { params: { agentId
             storage_path: storagePath,
             use_ai: useAI,
             mime_type: file.type,
+            ...(mediaCategory ? { media_category: mediaCategory } : {}),
           },
         })
         .eq('id', sourceId);
@@ -170,6 +179,7 @@ export async function POST(request: NextRequest, { params }: { params: { agentId
             metadata: {
               url: normalizedUrl,
               use_ai: useAI,
+              ...(mediaCategory ? { media_category: mediaCategory } : {}),
             },
           },
         ])
@@ -202,6 +212,7 @@ export async function POST(request: NextRequest, { params }: { params: { agentId
               type: sourceType,
               title: sourceTitle,
               source_name: sourceTitle,
+              ...(mediaCategory ? { media_category: mediaCategory } : {}),
             },
           },
         ])

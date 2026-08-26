@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
 import { extractTextFromBuffer } from '@/lib/knowledge-base/extractor';
+import MEDIA_CATEGORIES from '@/lib/media/categories';
 import { processKBSource } from '@/lib/knowledge-base/processor';
 
 const MAX_FILE_SIZE_MB = 20;
@@ -30,6 +31,8 @@ export async function POST(req: NextRequest) {
   const formData = await req.formData();
   const file = formData.get('file') as File | null;
   const agentId = formData.get('agentId') as string | null;
+  const mediaCategoryRaw = String(formData.get('media_category') || '').trim();
+  const mediaCategory = mediaCategoryRaw === '' ? null : mediaCategoryRaw;
 
   if (!file || !agentId) {
     return NextResponse.json({ error: 'file and agentId are required' }, { status: 400 });
@@ -49,6 +52,11 @@ export async function POST(req: NextRequest) {
     // 1. Extract text immediately so we can store raw_content
     const rawText = await extractTextFromBuffer(buffer, file.type, file.name);
 
+    // Validate media_category before uploading to avoid orphaned storage objects
+    if (mediaCategory && !MEDIA_CATEGORIES.some((c) => c.id === mediaCategory)) {
+      return NextResponse.json({ error: `Invalid media_category: ${mediaCategory}` }, { status: 400 });
+    }
+
     // 2. Upload original file to Supabase Storage
     const storagePath = `kb/${agentId}/${Date.now()}-${file.name}`;
     const { error: storageErr } = await supabase.storage
@@ -57,7 +65,6 @@ export async function POST(req: NextRequest) {
 
     if (storageErr) throw storageErr;
 
-    // 3. Create kb_source record
     const { data: source, error: sourceErr } = await supabase
       .from('kb_sources')
       .insert({
@@ -66,7 +73,7 @@ export async function POST(req: NextRequest) {
         title: file.name,
         raw_content: rawText,
         status: 'pending',
-        metadata: { storage_path: storagePath, mime_type: file.type, size_bytes: file.size },
+        metadata: { storage_path: storagePath, mime_type: file.type, size_bytes: file.size, ...(mediaCategory ? { media_category: mediaCategory } : {}) },
       })
       .select()
       .single();

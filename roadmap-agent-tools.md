@@ -53,3 +53,20 @@ TODO / открытые задачи:
 - **Рекомендация**: либо реализовать воркер, читающий `messages` с `origin='followup'` и отправляющий через существующие каналы (reuse `notification_log` + `send-notifications`), либо перепроектировать `scheduleMessage` на запись в `scheduled_messages` и использовать централизованный планировщик.
 
 **КРИТИЧНО обнаружено и исправлено:** scheduleMessage писал `event_type='scheduled_reminder'` в `notification_log`, которого не было в CHECK constraint — INSERT падал бы с ошибкой при каждом реальном вызове. Constraint расширен миграцией `db/migrations/20260823000000_add_scheduled_reminder_to_notification_log_event_type_check.sql`. Проверено: тул сейчас не в `allowed_tools` ни у одного агента (удалён ранее в этой сессии), поэтому реальных сбоев на живом трафике не зафиксировано.
+
+**Отправка медиа клиенту (sendMediaToClient)**
+
+Что сделано:
+- Добавлен `MEDIA_CATEGORIES` в `lib/media/categories.ts` — централизованный список допустимых категорий для медиа.
+- Реализованы отправки для каналов: `sendWhatsAppMedia` и `sendTelegramMedia` (реализация в `lib/channels/baileys-client.ts` и `lib/channels/telegram-client.ts`) и интегрированы в `executor`.
+- Динамическая декларация инструмента `sendMediaToClient` добавлена в трех местах: `lib/ai/orchestrator.ts`, `lib/server/ai/orchestrator.ts`, `scripts/check-declarations.ts` — декларация строится на основе доступных категорий (динамически читает `MEDIA_CATEGORIES`).
+- Обновлён код загрузки/создания `kb_sources` (upload endpoints) так, чтобы при создании источника можно было передать `media_category` и сохранить его в `metadata.media_category`.
+
+Что проверено:
+- Формат отправки для Baileys (WhatsApp) проверен по официальной документации Baileys/WhatsApp Cloud API: payload соответствует required fields для отправки медиа и метаданных (content-type, file id / URL).
+- PostgREST / PostgREST-like alias-синтаксис для выборки `category:metadata->>media_category` подтверждён по официальной документации Supabase/postgrest-js — НЕ проверен на реальных данных ввиду отсутствия размеченных файлов в БД на момент разработки.
+
+TODO:
+- Нужен UI/API для разметки файлов категорией на фронтенде; сейчас доступно только прямое SQL UPDATE `metadata` (админский путь) или подача `media_category` в момент загрузки через расширенный endpoint. План: добавить поле в форму загрузки KB и в UI менеджера источников.
+
+Статус: готово к ревью. Дальше — добавить миграцию/проверку data-fix для уже существующих `kb_sources`, у которых `metadata.media_category` отсутствует и которые можно автоматически сопоставить по имени/типу файла.
