@@ -38,19 +38,28 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'file and agentId are required' }, { status: 400 });
   }
 
-  // Validate
+  // Validate size first
   if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
     return NextResponse.json({ error: `Файл превышает ${MAX_FILE_SIZE_MB} МБ` }, { status: 413 });
   }
-  if (!ALLOWED_TYPES[file.type]) {
-    return NextResponse.json({ error: `Неподдерживаемый тип файла: ${file.type}` }, { status: 415 });
+
+  // If a media_category was provided, allow media (images/videos) regardless of ALLOWED_TYPES.
+  // Otherwise, enforce allowed text/document MIME types for KB text extraction.
+  if (!mediaCategory) {
+    if (!ALLOWED_TYPES[file.type]) {
+      return NextResponse.json({ error: `Неподдерживаемый тип файла: ${file.type}` }, { status: 415 });
+    }
   }
 
   try {
     const buffer = await file.arrayBuffer();
 
-    // 1. Extract text immediately so we can store raw_content
-    const rawText = await extractTextFromBuffer(buffer, file.type, file.name);
+    // 1. Extract text immediately so we can store raw_content for KB-processing when applicable
+    // For media-category uploads (images/videos), skip text extraction — these files are stored as-is.
+    let rawText = '';
+    if (!mediaCategory) {
+      rawText = await extractTextFromBuffer(buffer, file.type, file.name);
+    }
 
     // Validate media_category before uploading to avoid orphaned storage objects
     if (mediaCategory && !MEDIA_CATEGORIES.some((c) => c.id === mediaCategory)) {
