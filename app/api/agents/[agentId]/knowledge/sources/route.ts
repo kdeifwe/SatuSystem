@@ -72,6 +72,7 @@ export async function POST(request: NextRequest, { params }: { params: { agentId
     let type = 'other';
     let useAI = true;
     let inlineInPrompt = false;
+    let mediaCategory: string | null = null;
 
     if (contentType.includes('multipart/form-data')) {
       const formData = await request.formData();
