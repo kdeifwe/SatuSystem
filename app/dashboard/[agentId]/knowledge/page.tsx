@@ -17,6 +17,7 @@ import {
   RefreshCw,
   Instagram,
 } from 'lucide-react';
+import MEDIA_CATEGORIES from '@/lib/media/categories';
 
 type Source = {
   id: string;
@@ -157,6 +158,7 @@ export default function KnowledgePage() {
   const [instagramProfileUrl, setInstagramProfileUrl] = useState('');
   const [uploadGDocUrl, setUploadGDocUrl] = useState('');
   const [uploadUseAI, setUploadUseAI] = useState(true);
+  const [uploadMediaCategory, setUploadMediaCategory] = useState<string>('');
   const [manualInlineInPrompt, setManualInlineInPrompt] = useState(false);
   const [manualTitle, setManualTitle] = useState('');
   const [manualType, setManualType] = useState('product');
@@ -422,6 +424,7 @@ export default function KnowledgePage() {
       const formData = new FormData();
       formData.append('file', uploadFile);
       formData.append('useAI', String(uploadUseAI));
+      if (uploadMediaCategory) formData.append('media_category', uploadMediaCategory);
       const response = await fetch(`/api/agents/${agentId}/knowledge/sources`, {
         method: 'POST',
         body: formData,
@@ -432,6 +435,7 @@ export default function KnowledgePage() {
       }
       setUploadModal(false);
       setUploadFile(null);
+      setUploadMediaCategory('');
       setUploadGDocUrl('');
       setUploadUseAI(true);
       fetchSources();
@@ -850,6 +854,20 @@ export default function KnowledgePage() {
                   />
                   <span className="text-sm text-gray-600">Использовать интеллектуальную обработку с ИИ</span>
                 </label>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mt-2">Категория медиа (необязательно)</label>
+                  <select
+                    value={uploadMediaCategory}
+                    onChange={(e) => setUploadMediaCategory(e.target.value)}
+                    className="mt-2 w-full border border-gray-200 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="">— Не выбрано —</option>
+                    {MEDIA_CATEGORIES.map((cat) => (
+                      <option key={cat.id} value={cat.id}>{cat.label}</option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-gray-400 mt-1">Категория нужна, если хотите, чтобы агент мог отправлять этот файл клиенту как медиа-вложение (необязательно).</p>
+                </div>
                 <button
                   onClick={handleFileUpload}
                   disabled={!uploadFile || isUploading}
