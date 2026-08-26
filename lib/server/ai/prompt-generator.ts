@@ -1,34 +1,8 @@
 import { BusinessInfo, GeneratedPrompt } from './types';
 import { BASE_POLICY } from '../../ai/base-policy.ts';
+import { llmClient } from './llm-client';
 
-async function callGemini(apiKey: string, prompt: string, temp = 0.7, maxOutputTokens = 32768): Promise<string> {
-  const models = ['gemini-2.5-flash', 'gemini-2.5-pro'];
-  for (const model of models) {
-    try {
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ role: 'user', parts: [{ text: prompt }] }],
-            generationConfig: { temperature: temp, maxOutputTokens },
-          }),
-        }
-      );
-      if (!res.ok) {
-        console.warn(`[prompt-gen] ${model} ${res.status}`);
-        continue;
-      }
-      const data = await res.json();
-      const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-      if (text.length > 50) return text;
-    } catch (e) {
-      console.warn(`[prompt-gen] ${model} error:`, e);
-    }
-  }
-  throw new Error('Все модели Gemini недоступны');
-}
+// Use unified llmClient for prompt generation (OpenAI path preferred)
 
 function repairJsonText(candidate: string): string {
   let repaired = '';
@@ -175,13 +149,19 @@ function extractJSON(text: string): Record<string, any> {
 }
 
 async function generateStructuredJson(
-  apiKey: string,
+  model: string,
   prompt: string,
   temp: number,
   maxOutputTokens = 32768,
 ): Promise<Record<string, any>> {
   try {
-    const text = await callGemini(apiKey, prompt, temp, maxOutputTokens);
+    const resp = await llmClient.generate({
+      model,
+      messages: [{ role: 'user', content: prompt }],
+      temperature: temp,
+      maxTokens: maxOutputTokens,
+    });
+    const text = resp.text ?? '';
 
     try {
       return extractJSON(text);
@@ -194,12 +174,17 @@ async function generateStructuredJson(
         throw firstError;
       }
 
-      console.warn('[prompt-generator] Gemini response looked truncated, retrying once with a stricter JSON instruction');
+      console.warn('[prompt-generator] LLM response looked truncated, retrying once with a stricter JSON instruction');
       const retryPrompt = `${prompt}\n\nPrevious response was truncated. Return ONLY the complete JSON object, no extra text.`;
-      const retriedText = await callGemini(apiKey, retryPrompt, 0.3, maxOutputTokens);
+      const retried = await llmClient.generate({
+        model,
+        messages: [{ role: 'user', content: retryPrompt }],
+        temperature: 0.3,
+        maxTokens: maxOutputTokens,
+      });
 
       try {
-        return extractJSON(retriedText);
+        return extractJSON(retried.text ?? '');
       } catch (retryError) {
         throw firstError;
       }
@@ -259,11 +244,8 @@ export async function generateAgentPrompt(
   info: BusinessInfo,
   kbSources: string[],
 ): Promise<GeneratedPrompt> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error('GEMINI_API_KEY не задан');
-
   const effectiveAdvanced = {
-    model: info.advanced?.model || 'gemini-2.5-flash',
+    model: info.advanced?.model || (process.env.FALLBACK_LLM_MODEL ?? 'gpt-5.4-mini'),
     temperature: typeof info.advanced?.temperature === 'number' ? info.advanced.temperature : inferScenarioTemperature(info.business.scenario),
     topP: typeof info.advanced?.topP === 'number' ? info.advanced.topP : 0.9,
   };
@@ -305,7 +287,7 @@ Return raw JSON only (no markdown, start with {):
 }`;
 
   console.log('[prompt-gen] Step 1: Analyzing business...');
-  const analysis = await generateStructuredJson(apiKey, analysisPrompt, 0.4);
+  const analysis = await generateStructuredJson(effectiveAdvanced.model, analysisPrompt, 0.4);
 
   const generationPrompt = `You are an expert AI prompt engineer specializing in HUMAN-LIKE sales agents for CIS market.
 
@@ -353,7 +335,7 @@ Return raw JSON only (no markdown, start with {):
 }`;
 
   console.log('[prompt-gen] Step 2: Generating human-like prompt...');
-  const generated = await generateStructuredJson(apiKey, generationPrompt, effectiveAdvanced.temperature);
+  const generated = await generateStructuredJson(effectiveAdvanced.model, generationPrompt, effectiveAdvanced.temperature);
 
   const funnelSteps = Array.isArray(generated.dialogue_flow) && generated.dialogue_flow.length > 0
     ? generated.dialogue_flow.map((step: any, index: number) => ({

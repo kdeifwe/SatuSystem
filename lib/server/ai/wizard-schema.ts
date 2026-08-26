@@ -17,7 +17,8 @@ const timezoneEnum = z.enum(['Asia/Almaty', 'Europe/Moscow', 'UTC']);
 const writingStyleEnum = z.enum(['Формальный', 'Дружелюбный', 'Нейтральный']);
 const addressStyleEnum = z.enum(['Адаптивное', 'На "вы"', 'На "ты"']);
 const scenarioEnum = z.enum(['sales', 'consultant', 'support']);
-const modelEnum = z.enum(['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-3.5-flash']);
+// Allow configuring OpenAI fallback model; remove Gemini-only enum to avoid exposing Gemini in the UI
+const modelEnum = z.string();
 
 const funnelStepSchema = z.object({
   id: z.string().min(1),
@@ -61,7 +62,7 @@ const channelsSchema = z.object({
 });
 
 const advancedSchema = z.object({
-  model: z.string().default('gemini-2.5-flash'),
+  model: z.string().default(process.env.FALLBACK_LLM_MODEL ?? 'gpt-5.4-mini'),
   temperature: z.number().min(0).max(1).default(0.4),
   topP: z.number().min(0).max(1).default(0.9),
 });
@@ -99,7 +100,7 @@ export const wizardPayloadSchema = z.object({
     },
   }),
   advanced: advancedSchema.default({
-    model: 'gemini-2.5-flash',
+    model: process.env.FALLBACK_LLM_MODEL ?? 'gpt-5.4-mini',
     temperature: 0.4,
     topP: 0.9,
   }),
