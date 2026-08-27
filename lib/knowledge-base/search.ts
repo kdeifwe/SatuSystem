@@ -13,6 +13,49 @@ type BilingualTermRule = {
 
 const bilingualConfigCache = new Map<string, { termMap?: BilingualTermRule[]; expiresAt: number }>();
 
+// Cache provider checks per-agent to avoid hitting kb_chunks on every search call
+const providerCheckCache = new Map<string, { providers: Set<string | null>; expiresAt: number }>();
+
+async function checkAndLogEmbeddingProviders(agentId: string): Promise<void> {
+  const cached = providerCheckCache.get(agentId);
+  if (cached && cached.expiresAt > Date.now()) return;
+
+  const supabase = getAdminClient();
+  try {
+    const { data: providerRows, error: providerError } = await supabase.rpc(
+      'get_embedding_providers_for_agent',
+      { p_agent_id: agentId }
+    );
+
+    if (providerError) {
+      return;
+    }
+
+    if (!Array.isArray(providerRows) || providerRows.length === 0) {
+      providerCheckCache.set(agentId, { providers: new Set(), expiresAt: Date.now() + SEARCH_CACHE_TTL_MS });
+      return;
+    }
+
+    const providers = new Set<string | null>();
+    for (const row of providerRows) {
+      const val = row?.provider;
+      const normalized = (typeof val === 'string' && val.trim().length > 0) ? val.trim() : null;
+      providers.add(normalized);
+    }
+
+    if (providers.size > 1) {
+      const list = Array.from(providers).map((p) => (p === null ? 'null' : p));
+      // eslint-disable-next-line no-console
+      console.error(`[KB] Embedding provider mismatch for agent ${agentId}: ${list.join(', ')}`);
+    }
+
+    providerCheckCache.set(agentId, { providers, expiresAt: Date.now() + SEARCH_CACHE_TTL_MS });
+  } catch (e) {
+    // Don't let provider check failures affect normal search flow
+    return;
+  }
+}
+
 function getCacheKey(agentId: string, query: string): string {
   return `${agentId}:${query.toLowerCase().trim()}`;
 }
@@ -289,6 +332,10 @@ async function searchKnowledgeBaseSingleQuery(
 ): Promise<KBSearchResult[]> {
   const supabase = getAdminClient();
   const queryEmbedding = queryEmbeddingOverride ?? await generateQueryEmbedding(originalQuery ?? queryVariant);
+
+  // Fire-and-forget check of embedding providers for this agent (cached by TTL)
+  // Do not await — this must not block the hot search path.
+  void checkAndLogEmbeddingProviders(agentId).catch(() => { /* ignore errors */ });
 
   let data: any = null;
   try {
