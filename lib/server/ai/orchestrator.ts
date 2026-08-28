@@ -567,15 +567,27 @@ async function ensureLeadContext(
       conversation = createdConversation;
     }
 
-    const insertedMessage = existingUserMessageId
+    let insertedMessage: { data?: { id?: string | null } } | null = existingUserMessageId
       ? { data: { id: existingUserMessageId } }
-      : conversation?.id
-        ? await admin.from('messages').insert({
-            conversation_id: conversation.id,
-            sender: 'user',
-            content: userMessage,
-          }).select('id').single()
-        : null;
+      : null;
+
+    if (!existingUserMessageId && conversation?.id) {
+      const { data, error } = await admin.from('messages').insert({
+        conversation_id: conversation.id,
+        sender: 'user',
+        content: userMessage,
+      }).select('id').single();
+
+      if (error) {
+        console.error('[orchestrator] failed to insert user message', {
+          conversationId: conversation.id,
+          sender: 'user',
+          error: error.message,
+        });
+      } else {
+        insertedMessage = { data: { id: data?.id ?? null } };
+      }
+    }
 
     return {
       leadId: externalLeadId,
@@ -605,6 +617,7 @@ async function ensureLeadContext(
       .select('id')
       .eq('lead_id', lead.id)
       .eq('agent_id', agentId)
+      .eq('is_sandbox', true)
       .order('started_at', { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -658,13 +671,25 @@ async function ensureLeadContext(
     resolvedConversation = createdConversation as { id?: string } | null;
   }
 
-  const insertedMessage = resolvedConversation?.id
-    ? await admin.from('messages').insert({
-        conversation_id: resolvedConversation.id,
+  let insertedMessage: { data?: { id?: string | null } } | null = null;
+
+  if (resolvedConversation?.id) {
+    const { data, error } = await admin.from('messages').insert({
+      conversation_id: resolvedConversation.id,
+      sender: 'user',
+      content: userMessage,
+    }).select('id').single();
+
+    if (error) {
+      console.error('[orchestrator] failed to insert sandbox user message', {
+        conversationId: resolvedConversation.id,
         sender: 'user',
-        content: userMessage,
-      }).select('id').single()
-    : null;
+        error: error.message,
+      });
+    } else {
+      insertedMessage = { data: { id: data?.id ?? null } };
+    }
+  }
 
   return {
     leadId: lead.id,
@@ -680,11 +705,19 @@ async function ensureLeadContext(
 async function appendMessage(admin: ReturnType<typeof createAdminClient>, conversationId: string | null, sender: 'ai' | 'system', content: string) {
   if (!conversationId) return;
 
-  await admin.from('messages').insert({
+  const { error } = await admin.from('messages').insert({
     conversation_id: conversationId,
     sender,
     content,
   });
+
+  if (error) {
+    console.error('[orchestrator] failed to append message', {
+      conversationId,
+      sender,
+      error: error.message,
+    });
+  }
 }
 
 export function buildFunnelStepInstruction(currentFunnelStep: string | null | undefined): string {
@@ -1288,12 +1321,21 @@ export async function runAgentTurnWithLead(
 
       resolvedConversationId = conversation?.id ?? null;
       if (!resolvedUserMessageId && resolvedConversationId) {
-        const { data: insertedMessage } = await admin.from('messages').insert({
+        const { data: insertedMessage, error } = await admin.from('messages').insert({
           conversation_id: resolvedConversationId,
           sender: 'user',
           content: userMessage,
         }).select('id').single();
-        resolvedUserMessageId = insertedMessage?.id ?? undefined;
+
+        if (error) {
+          console.error('[orchestrator] failed to insert pre-turn user message', {
+            conversationId: resolvedConversationId,
+            sender: 'user',
+            error: error.message,
+          });
+        } else {
+          resolvedUserMessageId = insertedMessage?.id ?? undefined;
+        }
       }
     }
   }
@@ -1887,6 +1929,33 @@ export async function runAgentTurn(
 
   handoffTriggered = handoffTriggered || routingResult.handoffTriggered;
   finalAnswer = sanitizeAgentReply(routingResult.finalAnswer);
+  // Extract reasoning marker (if present) from the exact finalAnswer string
+  // Marker format (anchored at start, allowing leading whitespace):
+  // <!--REASONING:{...}-->
+  let extractedReasoning: Record<string, unknown> | null = null;
+  try {
+    const anchoredRegex = /^\s*<!--REASONING:\s*(\{[\s\S]*?\})\s*-->/i;
+    const match = anchoredRegex.exec(finalAnswer);
+    if (match) {
+      const jsonText = String(match[1]).trim();
+      try {
+        const parsed = JSON.parse(jsonText) as Record<string, unknown>;
+        const valid = parsed && typeof parsed.stage === 'string' && typeof parsed.next_best_action === 'string' && Array.isArray(parsed.known_facts_to_not_repeat);
+        if (valid) {
+          extractedReasoning = parsed;
+          // remove the exact matched prefix from finalAnswer so client never sees the marker
+          finalAnswer = finalAnswer.slice(match[0].length).trim();
+          console.log('[REASONING_EXTRACTED]', { agentId, conversationId, extractedReasoning });
+        } else {
+          console.warn('[REASONING_PARSE] validation failed', { agentId, conversationId, parsed });
+        }
+      } catch (err) {
+        console.warn('[REASONING_PARSE] JSON.parse failed', { agentId, conversationId, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+  } catch (err) {
+    console.warn('[REASONING_PARSE] regex error', { agentId, conversationId, error: err instanceof Error ? err.message : String(err) });
+  }
   // === End Routing ===
 
   if (conversationId && routingResult.shouldAppendMessage) {
