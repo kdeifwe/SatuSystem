@@ -2,7 +2,7 @@ import { geminiFetch } from '../gemini-client';
 import type { LLMRequest, LLMResponse, LLMProvider, LLMResponseToolCall } from '../llm-client';
 import { parseFinishReasonFromResponse } from '../llm-client';
 
-const DEFAULT_MAX_OUTPUT_TOKENS = 512;
+const DEFAULT_MAX_OUTPUT_TOKENS = 2048;
 const GEMINI_FALLBACK_MODEL = 'gemini-2.5-flash';
 
 function buildGeminiBody(request: LLMRequest): Record<string, unknown> {
@@ -10,7 +10,8 @@ function buildGeminiBody(request: LLMRequest): Record<string, unknown> {
   const contents = request.messages
     .filter((message) => message.role !== 'system')
     .map((message) => ({
-      role: message.role,
+      // Gemini accepts roles 'user' and 'model' — map assistant -> model
+      role: message.role === 'assistant' ? 'model' : message.role,
       parts: [{ text: message.content }],
     }));
 
@@ -21,6 +22,11 @@ function buildGeminiBody(request: LLMRequest): Record<string, unknown> {
       temperature: request.temperature ?? 0.7,
       topP: 0.9,
       maxOutputTokens: request.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+      // Disable Gemini "thinking" by default for fast dialog responses.
+      // If you want thinking enabled later, adjust this value (e.g. 256).
+      thinkingConfig: {
+        thinkingBudget: 0,
+      },
     },
   };
 

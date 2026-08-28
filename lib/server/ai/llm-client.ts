@@ -83,8 +83,19 @@ export function parseToolCallsFromResponse(data: any): LLMResponseToolCall[] {
 }
 
 export function parseFinishReasonFromResponse(data: any): string | undefined {
+  // Gemini responses: data.candidates[0].finishReason (or finish_reason)
+  if (Array.isArray(data?.candidates) && data.candidates.length > 0) {
+    return (
+      data.candidates[0]?.finishReason ??
+      data.candidates[0]?.finish_reason ??
+      data?.finishReason ??
+      data?.finish_reason
+    );
+  }
+
+  // OpenAI-style responses: data.choices[0].finish_reason
   const choice = Array.isArray(data?.choices) ? data.choices[0] : undefined;
-  return choice?.finish_reason ?? data?.finish_reason;
+  return choice?.finish_reason ?? data?.finish_reason ?? data?.finishReason;
 }
 
 export class UnifiedLLMClient {

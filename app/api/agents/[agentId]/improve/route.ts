@@ -49,8 +49,62 @@ export async function POST(
   const currentPrompt = agent.system_prompt_compiled ??
     `Ты ${agent.name}. Роль: ${agent.role}. Цель: ${agent.goal}.`;
 
+  // Fetch recent example dialogues for this agent to provide concrete failure examples to the critic.
+  // Use the canonical schema from migrations: conversations(id, agent_id, started_at) and messages(conversation_id, sender, content, created_at)
+  let exampleDialoguesText = '';
+  try {
+    const { data: recentConvs } = await admin
+      .from('conversations')
+      .select('id')
+      .eq('agent_id', params.agentId)
+      .order('started_at', { ascending: false })
+      .limit(3);
+
+    const convIds = Array.isArray(recentConvs) ? recentConvs.map((c: any) => c.id).filter(Boolean) : [];
+    if (convIds.length > 0) {
+      const { data: msgs } = await admin
+        .from('messages')
+        .select('conversation_id, sender, content, created_at')
+        .in('conversation_id', convIds)
+        .order('created_at', { ascending: false })
+        .limit(50);
+
+      if (Array.isArray(msgs) && msgs.length > 0) {
+        const grouped: Record<string, any[]> = {};
+        for (const m of msgs) {
+          if (!grouped[m.conversation_id]) grouped[m.conversation_id] = [];
+          grouped[m.conversation_id].push(m);
+        }
+
+        let idx = 1;
+        for (const cid of convIds) {
+          const bucket = grouped[cid] ?? [];
+          if (bucket.length === 0) continue;
+          // take up to 3 most recent messages and reverse to chronological order
+          const slice = bucket.slice(0, 3).reverse();
+          exampleDialoguesText += `--- Conversation ${idx} ---\n`;
+          for (const m of slice) {
+            const role = m.sender === 'ai' ? 'Agent' : m.sender === 'user' ? 'User' : String(m.sender);
+            const content = (m.content ?? '').replace(/\n/g, ' ');
+            exampleDialoguesText += `${role}: ${content}\n`;
+          }
+          exampleDialoguesText += '\n';
+          idx += 1;
+        }
+      }
+    }
+  } catch (e) {
+    // Non-fatal: if we can't fetch examples, proceed without them
+    console.warn('[improve] failed to fetch example dialogues for critic', e);
+  }
+
   try {
     console.log('[improve] Step 1: Critic analysis...');
+    let criticExamplesSection = '';
+    if (exampleDialoguesText && exampleDialoguesText.trim().length > 0) {
+      criticExamplesSection = `\n\nEXAMPLE DIALOGUES:\n${exampleDialoguesText}`;
+    }
+
     const criticPrompt = `You are an expert AI sales agent prompt critic.
 
 CURRENT AGENT PROMPT:
@@ -58,6 +112,7 @@ ${currentPrompt}
 
 USER COMPLAINT:
 "${feedback}"
+${criticExamplesSection}
 
 Your task: deeply analyze why this problem occurs in the prompt and find the exact sections causing it.
 
@@ -170,7 +225,7 @@ Rules:
 
     const generated = generatorResult.parsedJson;
 
-    const patches = Array.isArray(generated.patches)
+    let patches = Array.isArray(generated.patches)
       ? generated.patches.filter((value): value is PromptPatch => Boolean(value) && typeof value === 'object' && typeof (value as PromptPatch).search === 'string' && typeof (value as PromptPatch).replace === 'string' && typeof (value as PromptPatch).reason === 'string')
       : [];
 
@@ -183,7 +238,64 @@ Rules:
       proposedPrompt = applyPromptPatches(currentPrompt, patches);
     } catch (patchError) {
       const message = patchError instanceof Error ? patchError.message : String(patchError);
-      throw new Error(`Patch application failed: ${message}`);
+
+      // If failure is due to search fragment mismatch, attempt one retry by asking the generator
+      // to produce corrected patches or a full improved_prompt fallback. This prevents immediate
+      // failure when the generator quoted the prompt slightly differently (whitespace/quotes/etc).
+      if (/search fragment must appear exactly once|search fragment must not be empty/i.test(message)) {
+        console.warn('[improve] Patch application failed, attempting one retry with generator feedback:', message);
+        const failureNote = `NOTE: Applying the previously generated patches failed because at least one 'search' fragment did not match the current prompt exactly. Current prompt:\n${currentPrompt}\n\nFailed patches:\n${JSON.stringify(patches, null, 2)}\n\nPlease return either corrected patches that will apply unambiguously, or return a single field \"improved_prompt\" with the full updated prompt.`;
+        const retryPrompt = `${generatorPrompt}\n\n${failureNote}`;
+
+        const retryValidate = (obj: unknown) => {
+          if (!obj || typeof obj !== 'object') return false;
+          const o = obj as Record<string, unknown>;
+          if (Array.isArray(o.patches)) {
+            for (const p of o.patches as unknown[]) {
+              if (!p || typeof p !== 'object') return false;
+              const pp = p as Record<string, unknown>;
+              if (typeof pp.search !== 'string' || typeof pp.replace !== 'string' || typeof pp.reason !== 'string') return false;
+            }
+            return true;
+          }
+          if (typeof o.improved_prompt === 'string' && o.improved_prompt.trim().length > 0) return true;
+          return false;
+        };
+
+        const retryResult = await callOpenAIForImproveWithRetry(
+          generatorSystemInstruction,
+          retryPrompt,
+          0.5,
+          buildGeneratorSchema(),
+          {
+            admin,
+            agentId: params.agentId,
+            feedback,
+            phase: 'generator',
+          },
+          retryValidate,
+          1
+        );
+
+        const retryParsed = retryResult.parsedJson;
+        if (Array.isArray(retryParsed.patches) && retryParsed.patches.length > 0) {
+          const newPatches = retryParsed.patches as PromptPatch[];
+          try {
+            proposedPrompt = applyPromptPatches(currentPrompt, newPatches);
+            patches = newPatches;
+          } catch (secondErr) {
+            const m2 = secondErr instanceof Error ? secondErr.message : String(secondErr);
+            throw new Error(`Patch application failed after retry: ${m2}`);
+          }
+        } else if (typeof retryParsed.improved_prompt === 'string' && retryParsed.improved_prompt.trim().length > 0) {
+          proposedPrompt = retryParsed.improved_prompt as string;
+          patches = [];
+        } else {
+          throw new Error(`Patch application failed: ${message}`);
+        }
+      } else {
+        throw new Error(`Patch application failed: ${message}`);
+      }
     }
 
     console.log('[improve] Step 3: Validating improvement...');
