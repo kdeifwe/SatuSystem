@@ -151,12 +151,23 @@ export class OpenAIProvider implements LLMProvider {
     }
 
     const text = parseText(data);
+    const toolCalls = parseToolCallsFromResponse(data);
+    const finishReason = parseFinishReasonFromResponse(data);
+
+    if (!text && toolCalls.length === 0) {
+      console.warn('[OpenAI] successful response returned empty text and no tool calls', {
+        model: request.model,
+        finishReason,
+        rawResponse: data,
+      });
+    }
+
     return {
       text,
       usage: parseUsage(data),
       provider: this.name,
-      toolCalls: parseToolCallsFromResponse(data),
-      finishReason: parseFinishReasonFromResponse(data),
+      toolCalls,
+      finishReason,
       rawResponse: data,
     };
   }

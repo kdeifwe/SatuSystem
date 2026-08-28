@@ -983,30 +983,50 @@ async function callGemini(
 
     const hasLlmText = typeof llmResponse.text === 'string' && llmResponse.text.trim().length > 0;
     const hasLlmToolCalls = Array.isArray(llmResponse.toolCalls) && llmResponse.toolCalls.length > 0;
-    if (llmResponse.provider === 'gemini' && !hasLlmText && !hasLlmToolCalls) {
+    if (!hasLlmText && !hasLlmToolCalls) {
       const fallbackModel = process.env.FALLBACK_LLM_MODEL ?? 'gpt-5.4-mini';
-      console.warn('[GEMINI] empty reply from Gemini provider, trying fallback LLM', { activeModel, fallbackModel });
-      try {
-        const fallbackResponse = await llmClient.generate({
-          model: fallbackModel,
-          messages,
-          temperature: (generationConfig as any)?.temperature ?? 0.7,
-          maxTokens: (generationConfig as any)?.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
-          tools: Array.isArray(tools) && tools.length > 0 ? tools : undefined,
-        });
+      const isAlreadyFallback = activeModel === fallbackModel;
 
-        const fallbackHasText = typeof fallbackResponse.text === 'string' && fallbackResponse.text.trim().length > 0;
-        const fallbackHasToolCalls = Array.isArray(fallbackResponse.toolCalls) && fallbackResponse.toolCalls.length > 0;
-        if (fallbackHasText || fallbackHasToolCalls) {
-          console.warn('[GEMINI] fallback LLM succeeded', { provider: fallbackResponse.provider });
-          llmResponse = fallbackResponse;
-        } else {
-          console.warn('[GEMINI] fallback LLM returned empty response too', { provider: fallbackResponse.provider });
-        }
-      } catch (fallbackError) {
-        console.warn('[GEMINI] fallback LLM failed', {
-          error: fallbackError instanceof Error ? fallbackError.message : String(fallbackError),
+      if (isAlreadyFallback) {
+        console.warn('[LLM] fallback model returned empty response; stopping recursive fallback', {
+          activeModel,
+          fallbackModel,
+          provider: llmResponse.provider,
         });
+      } else {
+        console.warn('[LLM] empty reply from provider, trying fallback LLM', {
+          provider: llmResponse.provider,
+          activeModel,
+          fallbackModel,
+        });
+        try {
+          const fallbackResponse = await llmClient.generate({
+            model: fallbackModel,
+            messages,
+            temperature: (generationConfig as any)?.temperature ?? 0.7,
+            maxTokens: (generationConfig as any)?.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+            tools: Array.isArray(tools) && tools.length > 0 ? tools : undefined,
+          });
+
+          const fallbackHasText = typeof fallbackResponse.text === 'string' && fallbackResponse.text.trim().length > 0;
+          const fallbackHasToolCalls = Array.isArray(fallbackResponse.toolCalls) && fallbackResponse.toolCalls.length > 0;
+          if (fallbackHasText || fallbackHasToolCalls) {
+            console.warn('[LLM] fallback LLM succeeded', { provider: fallbackResponse.provider, model: fallbackModel });
+            llmResponse = fallbackResponse;
+          } else {
+            console.warn('[LLM] fallback LLM returned empty response too', {
+              provider: fallbackResponse.provider,
+              model: fallbackModel,
+            });
+          }
+        } catch (fallbackError) {
+          console.warn('[LLM] fallback LLM failed', {
+            provider: llmResponse.provider,
+            activeModel,
+            fallbackModel,
+            error: fallbackError instanceof Error ? fallbackError.message : String(fallbackError),
+          });
+        }
       }
     }
 
