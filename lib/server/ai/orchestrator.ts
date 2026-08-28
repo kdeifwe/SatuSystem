@@ -432,6 +432,64 @@ export function resolveLeadContextMode(externalLeadId: string | null | undefined
   return 'sandbox';
 }
 
+async function mergeReasoningIntoLeadState(
+  admin: ReturnType<typeof createAdminClient>,
+  leadId: string | null,
+  reasoning: Record<string, unknown> | null,
+): Promise<Record<string, unknown> | null> {
+  if (!leadId || !reasoning) {
+    return null;
+  }
+
+  const { data: leadRow, error: leadError } = await admin
+    .from('leads')
+    .select('attributes')
+    .eq('id', leadId)
+    .maybeSingle();
+
+  if (leadError || !leadRow) {
+    console.warn('[REASONING_MERGE] could not load lead attributes', {
+      leadId,
+      error: leadError?.message ?? 'lead_not_found',
+    });
+    return null;
+  }
+
+  const currentAttributes = leadRow.attributes && typeof leadRow.attributes === 'object' && !Array.isArray(leadRow.attributes)
+    ? (leadRow.attributes as Record<string, unknown>)
+    : {};
+
+  const currentDealState = currentAttributes.deal_state && typeof currentAttributes.deal_state === 'object' && !Array.isArray(currentAttributes.deal_state)
+    ? (currentAttributes.deal_state as Record<string, unknown>)
+    : {};
+
+  const nextDealState = {
+    ...currentDealState,
+    ...reasoning,
+  };
+
+  const nextAttributes = {
+    ...currentAttributes,
+    deal_state: nextDealState,
+  };
+
+  const { error: updateError } = await admin
+    .from('leads')
+    .update({ attributes: nextAttributes })
+    .eq('id', leadId);
+
+  if (updateError) {
+    console.warn('[REASONING_MERGE] could not persist deal_state', {
+      leadId,
+      error: updateError.message,
+      nextDealState,
+    });
+    return null;
+  }
+
+  return nextDealState;
+}
+
 async function ensureLeadContext(
   admin: ReturnType<typeof createAdminClient>,
   agentId: string,
@@ -1940,21 +1998,84 @@ export async function runAgentTurn(
       const jsonText = String(match[1]).trim();
       try {
         const parsed = JSON.parse(jsonText) as Record<string, unknown>;
-        const valid = parsed && typeof parsed.stage === 'string' && typeof parsed.next_best_action === 'string' && Array.isArray(parsed.known_facts_to_not_repeat);
+        const valid = parsed
+          && typeof parsed.stage === 'string'
+          && typeof parsed.customer_signal === 'string'
+          && typeof parsed.next_best_action === 'string'
+          && Array.isArray(parsed.known_facts_to_not_repeat);
+
         if (valid) {
           extractedReasoning = parsed;
           // remove the exact matched prefix from finalAnswer so client never sees the marker
           finalAnswer = finalAnswer.slice(match[0].length).trim();
           console.log('[REASONING_EXTRACTED]', { agentId, conversationId, extractedReasoning });
+
+          if (leadId) {
+            try {
+              const mergedState = await mergeReasoningIntoLeadState(admin, leadId, extractedReasoning);
+              if (mergedState) {
+                console.log('[REASONING_MERGED]', { agentId, conversationId, leadId, mergedState });
+              }
+            } catch (mergeError) {
+              console.warn('[REASONING_MERGE] unexpected error', {
+                agentId,
+                conversationId,
+                leadId,
+                error: mergeError instanceof Error ? mergeError.message : String(mergeError),
+              });
+            }
+          }
         } else {
           console.warn('[REASONING_PARSE] validation failed', { agentId, conversationId, parsed });
+          await admin.from('ai_call_logs').insert({
+            conversation_id: conversationId ?? null,
+            request: {
+              type: 'reasoning_marker_parse_error',
+              agent_id: agentId,
+              lead_id: leadId ?? null,
+              raw_marker: match[0],
+            },
+            response: {
+              parse_error: 'reasoning_marker_validation_failed',
+              parsed: parsed ?? null,
+              final_answer_preview: finalAnswer.slice(0, 400),
+            },
+          });
         }
       } catch (err) {
         console.warn('[REASONING_PARSE] JSON.parse failed', { agentId, conversationId, error: err instanceof Error ? err.message : String(err) });
+        await admin.from('ai_call_logs').insert({
+          conversation_id: conversationId ?? null,
+          request: {
+            type: 'reasoning_marker_parse_error',
+            agent_id: agentId,
+            lead_id: leadId ?? null,
+            raw_marker: match?.[0] ?? null,
+            raw_json: String(match?.[1] ?? '').trim(),
+          },
+          response: {
+            parse_error: 'reasoning_marker_json_parse_failed',
+            error: err instanceof Error ? err.message : String(err),
+            final_answer_preview: finalAnswer.slice(0, 400),
+          },
+        });
       }
     }
   } catch (err) {
     console.warn('[REASONING_PARSE] regex error', { agentId, conversationId, error: err instanceof Error ? err.message : String(err) });
+    await admin.from('ai_call_logs').insert({
+      conversation_id: conversationId ?? null,
+      request: {
+        type: 'reasoning_marker_parse_error',
+        agent_id: agentId,
+        lead_id: leadId ?? null,
+      },
+      response: {
+        parse_error: 'reasoning_marker_regex_failed',
+        error: err instanceof Error ? err.message : String(err),
+        final_answer_preview: finalAnswer.slice(0, 400),
+      },
+    });
   }
   // === End Routing ===
 
