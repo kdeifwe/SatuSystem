@@ -72,3 +72,25 @@ TODO:
 - Нужен UI/API для разметки файлов категорией на фронтенде; сейчас доступно только прямое SQL UPDATE `metadata` (админский путь) или подача `media_category` в момент загрузки через расширенный endpoint. План: добавить поле в форму загрузки KB и в UI менеджера источников.
 
 Статус: готово к ревью. Дальше — добавить миграцию/проверку data-fix для уже существующих `kb_sources`, у которых `metadata.media_category` отсутствует и которые можно автоматически сопоставить по имени/типу файла.
+
+### Reasoning marker and lead state sync — VERIFIED / DONE
+
+Что сделано:
+- В `lib/ai/compile-system-prompt.ts` добавлена явная инструкция для агента вставлять скрытый `<!--REASONING:...-->`-маркер в начало финального ответа.
+- В `lib/server/ai/orchestrator.ts` добавлена логика разбора маркера, валидации обязательных полей (`stage`, `customer_signal`, `next_best_action`, `known_facts_to_not_repeat`) и слияния данных в `leads.attributes.deal_state`.
+- Добавлено логирование в `ai_call_logs` при неудачном парсинге/валидации reasoning-маркера.
+- Сервисный env в Railway подтверждён: `EMBEDDINGS_PROVIDER=openai`.
+- Промпт пересобран для всех активных агентов через реальный `compileAndSaveSystemPrompt`, после чего выполнена проверка по БД — у всех активных агентов `system_prompt_compiled` содержит `REASONING`.
+
+Что подтверждено живым тестом:
+- В реальном sandbox-диалоге ответ содержит скрытый `<!--REASONING:...-->` в `response.raw`.
+- В `response.final` маркер удалён перед показом клиенту.
+- Значения из маркера успешно перенесены в `leads.attributes.deal_state`.
+- При ошибочном формате маркера пишется запись в `ai_call_logs`.
+
+Финальные доказательства:
+- Railway variable check: `EMBEDDINGS_PROVIDER openai`
+- Проверка всех активных агентов: 8/8 `hasReasoning = true`
+- Сборка проекта: `npm run build` завершился успешно.
+
+Статус: закрыто и подтверждено на живой среде; основная причина инцидента была не только отсутствием env, но и stale `system_prompt_compiled`/неполной синхронизации runtime-пути и prompt-пути.
