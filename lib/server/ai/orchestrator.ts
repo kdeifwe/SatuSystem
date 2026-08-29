@@ -1401,6 +1401,46 @@ export async function runAgentTurnWithLead(
   return runAgentTurn(agentId, systemPrompt, userMessage, history, resolvedLeadId ?? undefined, resolvedConversationId ?? undefined, resolvedUserMessageId);
 }
 
+const NUMBER_CLAIM_REGEX = /\d[\d\s]{1,7}(?:тг|₸|kzt|тенге|тыс|млн|см|мм|кг|г\b|шт|%|месяц\w*|дн\w*|дня|дней|лет|год\w*)/gi;
+
+function extractNumberClaims(text: string): string[] {
+  const matches = text.match(NUMBER_CLAIM_REGEX) ?? [];
+  return matches.map((m) => m.replace(/\s+/g, ' ').trim().toLowerCase());
+}
+
+function normalizeForComparison(text: string): string {
+  return text.replace(/\s+/g, ' ').toLowerCase();
+}
+
+/**
+ * Soft groundedness check: does every numeric claim in the final answer
+ * literally appear somewhere in the source text (system prompt + retrieved chunks)?
+ * This ONLY logs suspicious cases — it never blocks or changes finalAnswer.
+ */
+function findUngroundedNumberClaims(finalAnswer: string, sourceText: string): string[] {
+  const claims = extractNumberClaims(finalAnswer);
+  if (claims.length === 0) return [];
+
+  const normalizedSource = normalizeForComparison(sourceText);
+  return claims.filter((claim) => !normalizedSource.includes(claim));
+}
+
+const ACTION_CLAIM_PATTERNS: Array<{ phrase: RegExp; expectedTool: string }> = [
+  { phrase: /записал|сохранил (ваш|ваши|номер|телефон|имя)/i, expectedTool: 'update_lead_info' },
+  { phrase: /оформил(а)? (заказ|счет|счёт)|отправил(а)? счет|отправил(а)? счёт/i, expectedTool: 'createKaspiInvoice' },
+  { phrase: /перевел(а)? на (оператора|менеджера|специалиста)|соединяю с оператором/i, expectedTool: 'redirectToOperator' },
+];
+
+function findUnverifiedActionClaims(finalAnswer: string, toolsUsedNames: string[]): string[] {
+  const unverified: string[] = [];
+  for (const { phrase, expectedTool } of ACTION_CLAIM_PATTERNS) {
+    if (phrase.test(finalAnswer) && !toolsUsedNames.includes(expectedTool)) {
+      unverified.push(expectedTool);
+    }
+  }
+  return unverified;
+}
+
 export async function runAgentTurn(
   agentId: string,
   systemPrompt: string,
@@ -2075,6 +2115,68 @@ export async function runAgentTurn(
         error: err instanceof Error ? err.message : String(err),
         final_answer_preview: finalAnswer.slice(0, 400),
       },
+    });
+  }
+
+  try {
+    const sourceTextForGroundingCheck = `${systemPrompt}\n\n${(chunks ?? []).map((c: any) => c?.content ?? '').join('\n')}`;
+    const ungroundedClaims = findUngroundedNumberClaims(finalAnswer, sourceTextForGroundingCheck);
+
+    if (ungroundedClaims.length > 0) {
+      console.warn('[HALLUCINATION_CHECK] ungrounded number claims detected', {
+        agentId,
+        conversationId,
+        ungroundedClaims,
+      });
+
+      if (conversationId) {
+        await admin.from('ai_call_logs').insert({
+          conversation_id: conversationId,
+          request: { type: 'hallucination_check' },
+          response: {
+            hallucination_suspected: true,
+            ungrounded_claims: ungroundedClaims,
+            final_answer_preview: finalAnswer.slice(0, 400),
+          },
+        });
+      }
+    }
+  } catch (err) {
+    console.warn('[HALLUCINATION_CHECK] check failed, ignoring', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  try {
+    const toolsUsedNames = Array.isArray(toolsUsed)
+      ? toolsUsed
+        .map((t: any) => (typeof t === 'string' ? t : t?.name))
+        .filter(Boolean)
+      : [];
+    const unverifiedClaims = findUnverifiedActionClaims(finalAnswer, toolsUsedNames);
+
+    if (unverifiedClaims.length > 0) {
+      console.warn('[ACTION_CLAIM_CHECK] agent claims an action it did not perform', {
+        agentId,
+        conversationId,
+        unverifiedClaims,
+      });
+
+      if (conversationId) {
+        await admin.from('ai_call_logs').insert({
+          conversation_id: conversationId,
+          request: { type: 'action_claim_check' },
+          response: {
+            action_claim_suspected: true,
+            unverified_tools: unverifiedClaims,
+            final_answer_preview: finalAnswer.slice(0, 400),
+          },
+        });
+      }
+    }
+  } catch (err) {
+    console.warn('[ACTION_CLAIM_CHECK] check failed, ignoring', {
+      error: err instanceof Error ? err.message : String(err),
     });
   }
   // === End Routing ===
