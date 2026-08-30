@@ -19,6 +19,10 @@ export interface ToolContext {
   isSandbox: boolean;
 }
 
+export function resolveLeadIdForTool(_leadIdFromModel: string | undefined, context: ToolContext): string {
+  return context.leadId;
+}
+
 export async function executeTool(call: ToolCall, context: ToolContext): Promise<ToolResult> {
   console.log(`[TOOL] Executing ${call.name}`, { args: call.args, leadId: context.leadId });
 
@@ -105,6 +109,8 @@ async function dispatch(call: ToolCall, ctx: ToolContext): Promise<unknown> {
       return updateLeadInfo(call.args as { fields: Record<string, unknown> }, ctx);
     case 'add_lead_note':
       return addLeadNote(call.args as { note: string }, ctx);
+    case 'recordLeadSignal':
+      return recordLeadSignal(call.args as { lead_id: string; signal_type: string; description: string; raw_quote?: string; suggested_follow_up_at?: string }, ctx);
     case 'sendCustomNotification':
       return sendCustomNotification(call.args as { message: string; target: string }, ctx);
     case 'scheduleMessage':
@@ -487,15 +493,10 @@ async function sendMediaToClient(args: { category: string; caption?: string }, c
 }
 
 async function updateLeadStatus(args: { lead_id: string; status: string }, ctx: ToolContext) {
-  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  if (!uuidPattern.test(args.lead_id)) {
-    throw new Error('Некорректный lead_id — используй ID лида из контекста диалога, а не из текста сообщения клиента');
-  }
-
   // Игнорируем lead_id из аргументов модели и всегда используем реальный ID
   // текущего лида из контекста диалога — модель не должна сама выбирать,
   // чей статус менять.
-  const targetLeadId = ctx.leadId;
+  const targetLeadId = resolveLeadIdForTool(args.lead_id, ctx);
 
   const supabase = createServiceClient();
   const { data: lead, error: leadError } = await supabase.from('leads').select('id, status, org_id').eq('id', targetLeadId).eq('org_id', ctx.orgId).single();
@@ -583,6 +584,33 @@ async function addLeadNote(args: { note: string }, ctx: ToolContext) {
 
   if (error) throw new Error(`Ошибка добавления заметки: ${error.message}`);
   return { success: true };
+}
+
+async function recordLeadSignal(args: { lead_id: string; signal_type: string; description: string; raw_quote?: string; suggested_follow_up_at?: string }, ctx: ToolContext) {
+  const supabase = createServiceClient();
+  const targetLeadId = resolveLeadIdForTool(args.lead_id, ctx);
+  const { data: lead, error: leadError } = await supabase.from('leads').select('id').eq('id', targetLeadId).eq('org_id', ctx.orgId).single();
+  if (leadError || !lead) throw new Error('Лид не найден или нет доступа');
+
+  const { data, error } = await supabase.from('lead_signals').insert({
+    org_id: ctx.orgId,
+    lead_id: targetLeadId,
+    signal_type: args.signal_type,
+    description: args.description,
+    raw_quote: args.raw_quote ?? null,
+    suggested_follow_up_at: args.suggested_follow_up_at ?? null,
+    status: 'active',
+  }).select('id').single();
+
+  if (error) throw new Error(`Ошибка сохранения сигнала: ${error.message}`);
+
+  return {
+    success: true,
+    signal_id: data?.id,
+    lead_id: targetLeadId,
+    signal_type: args.signal_type,
+    description: args.description,
+  };
 }
 
 async function sendCustomNotification(args: { message: string; target: string }, ctx: ToolContext) {
@@ -855,10 +883,10 @@ async function createKaspiInvoice(args: { phone: string; amount: number; comment
   return payload;
 }
 
-async function scheduleMessage(args: { message: string; send_at: string }, ctx: ToolContext) {
+async function scheduleMessage(args: { message: string; send_at: string; lead_id?: string }, ctx: ToolContext) {
   const supabase = createServiceClient();
+  const targetLeadId = resolveLeadIdForTool(args.lead_id, ctx);
   const sendAt = new Date(args.send_at);
-  const targetLeadId = ctx.leadId;
   if (!targetLeadId) throw new Error('lead_id is required in the conversation context');
   if (Number.isNaN(sendAt.getTime())) throw new Error('Некорректный формат времени send_at');
   if (sendAt.getTime() < Date.now()) throw new Error('Время отправки не может быть в прошлом');

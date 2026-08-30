@@ -4,6 +4,14 @@ export const GEMINI_PROMPT_MODEL = process.env.GEMINI_PROMPT_MODEL ?? 'gemini-2.
 export const GEMINI_EMBEDDING_MODEL = process.env.GEMINI_EMBEDDING_MODEL ?? 'gemini-embedding-2';
 export const GEMINI_EMBEDDING_OUTPUT_DIMENSIONALITY = Number(process.env.GEMINI_EMBEDDING_OUTPUT_DIM ?? '768');
 
+export function extractGeminiUsageMetadata(body: any): { tokensInput: number; tokensOutput: number } {
+  const usage = body?.usageMetadata ?? {};
+  return {
+    tokensInput: Number(usage.promptTokenCount ?? 0),
+    tokensOutput: Number(usage.candidatesTokenCount ?? 0),
+  };
+}
+
 const DEFAULT_RETRY_ATTEMPTS = 3;
 const BASE_RETRY_DELAY_MS = 1000;
 

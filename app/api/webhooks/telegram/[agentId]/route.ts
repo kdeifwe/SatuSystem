@@ -246,6 +246,15 @@ async function handleUpdate(update: any, agentId: string) {
 
     const currentUserMessageId = insertedUserMessage?.id ?? null;
 
+    // Mark smart broadcast recipients as replied if this lead was sent a broadcast
+    try {
+      const { markSmartBroadcastReplied } = await import('@/lib/smart-broadcasts/service');
+      await markSmartBroadcastReplied(lead.id, agent.org_id);
+    } catch (error) {
+      console.error('[TG webhook] Failed to mark smart broadcast as replied:', error);
+      // Don't fail the whole webhook processing if smart broadcast marking fails
+    }
+
     // 7. Если AI выключен для этого лида — не отвечаем
     if (!lead.ai_enabled) {
       console.log('[TG webhook] AI disabled for lead, skipping');

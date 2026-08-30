@@ -93,6 +93,6 @@ test('buildSystemPrompt includes uncertainty handling that preserves partial fac
     []
   );
 
-  assert.match(prompt, /Если данных нет вообще/i);
+  assert.match(prompt, /searchKnowledgeBase.*данных всё равно нет|не используй шаблонную фразу/i);
   assert.match(prompt, /для комбинации/i);
 });

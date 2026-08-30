@@ -62,6 +62,17 @@ export default function DialogsPage({ params }: { params: { agentId: string } })
   }, [params.agentId, leadIdFromUrl]);
 
   useEffect(() => {
+    const leadId = searchParams.get('leadId');
+    if (!leadId || leads.length === 0) return;
+
+    const leadExists = leads.some((item) => item.id === leadId);
+    if (leadExists) {
+      setSelectedLeadId(leadId);
+      void loadMessages(leadId);
+    }
+  }, [searchParams, leads]);
+
+  useEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
 
