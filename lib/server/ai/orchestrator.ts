@@ -666,6 +666,8 @@ async function ensureLeadContext(
     .eq('external_id', externalId)
     .maybeSingle();
 
+  console.log('[SANDBOX_LEAD_DEBUG] lookup', { externalId, orgId: agentData.org_id, found: Boolean((leadLookup as any)?.id), leadId: (leadLookup as any)?.id ?? null });
+
   let lead = leadLookup as { id?: string; attributes?: Record<string, unknown> | null } | null;
   let conversation: { id?: string } | null = null;
 
@@ -695,6 +697,8 @@ async function ensureLeadContext(
       .select('id, attributes')
       .single();
     lead = createdLead as { id?: string; attributes?: Record<string, unknown> | null } | null;
+
+    console.log('[SANDBOX_LEAD_DEBUG] after-insert-attempt', { wasCreated: !((leadLookup as any)?.id), createdLeadId: lead?.id ?? null });
   }
 
   if (lead?.id && !isSandboxLeadAttributes((lead.attributes as Record<string, unknown> | null) ?? null)) {
@@ -747,14 +751,35 @@ async function ensureLeadContext(
     } else {
       insertedMessage = { data: { id: data?.id ?? null } };
     }
+
+    console.log('[SANDBOX_LEAD_DEBUG] message-insert', {
+      conversationId: resolvedConversation?.id ?? null,
+      insertSucceeded: Boolean(insertedMessage?.data?.id),
+      insertedMessageId: insertedMessage?.data?.id ?? null,
+    });
   }
+
+  let leadAttributesResult: any = null;
+  let previousSummaryResult: any = null;
+  try {
+    if (lead.id) leadAttributesResult = await findLeadAttributes(lead.id);
+  } catch (e) {
+    console.error('[SANDBOX_LEAD_DEBUG] findLeadAttributes threw', { leadId: lead.id, error: e instanceof Error ? e.message : String(e) });
+  }
+  try {
+    if (lead.id) previousSummaryResult = await findPreviousConversationSummary(lead.id);
+  } catch (e) {
+    console.error('[SANDBOX_LEAD_DEBUG] findPreviousConversationSummary threw', { leadId: lead.id, error: e instanceof Error ? e.message : String(e) });
+  }
+
+  console.log('[SANDBOX_LEAD_DEBUG] final-return', { leadId: lead.id, conversationId: resolvedConversation?.id ?? null });
 
   return {
     leadId: lead.id,
     conversationId: resolvedConversation?.id ?? null,
     orgId: agentData.org_id,
-    leadAttributes: lead.id ? await findLeadAttributes(lead.id) : null,
-    previousConversationSummary: lead.id ? await findPreviousConversationSummary(lead.id) : null,
+    leadAttributes: leadAttributesResult,
+    previousConversationSummary: previousSummaryResult,
     userMessageId: insertedMessage?.data?.id ?? null,
     isSandbox: true,
   };
@@ -1077,7 +1102,6 @@ async function callGemini(
     if (!hasLlmText && !hasLlmToolCalls) {
       const fallbackModel = process.env.FALLBACK_LLM_MODEL ?? 'gpt-5.4-mini';
       const isAlreadyFallback = activeModel === fallbackModel;
-
       if (isAlreadyFallback) {
         console.warn('[LLM] fallback model returned empty response; stopping recursive fallback', {
           activeModel,
@@ -1486,10 +1510,17 @@ export async function runAgentTurn(
   let resolvedConversationId: string | null = conversationId ?? null;
   let resolvedUserMessageId: string | null = userMessageId ?? null;
 
-  const [contextData, retrieval] = await Promise.all([
-    ensureLeadContext(admin, agentId, userMessage, resolvedLeadId ?? undefined, resolvedUserMessageId ?? undefined),
-    searchKnowledgeBaseWithLinks(agentId, userMessage, 3, 0.5, undefined),
-  ]);
+  let contextData: any = null;
+  let retrieval: any = null;
+  try {
+    [contextData, retrieval] = await Promise.all([
+      ensureLeadContext(admin, agentId, userMessage, resolvedLeadId ?? undefined, resolvedUserMessageId ?? undefined),
+      searchKnowledgeBaseWithLinks(agentId, userMessage, 3, 0.5, undefined),
+    ]);
+  } catch (e) {
+    console.error('[SANDBOX_LEAD_DEBUG] Promise.all threw', { error: e instanceof Error ? e.message : String(e) });
+    throw e;
+  }
 
   resolvedLeadId = contextData.leadId ?? resolvedLeadId;
   resolvedConversationId = contextData.conversationId ?? resolvedConversationId;
