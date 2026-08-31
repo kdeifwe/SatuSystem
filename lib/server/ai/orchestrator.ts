@@ -1,4 +1,5 @@
- import { searchKnowledgeBaseWithLinks } from '@/lib/knowledge-base/search';
+import { searchKnowledgeBaseWithLinks } from '@/lib/knowledge-base/search';
+import type { KBSearchResult, LinkedKBChunkResult } from '@/lib/knowledge-base/search';
 import { geminiCountTokens, GEMINI_CHAT_MODEL, GEMINI_PROMPT_MODEL } from '@/lib/server/ai/gemini-client';
 import { llmClient, type LLMResponse } from './llm-client';
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -1546,7 +1547,7 @@ export async function runAgentTurn(
   const kbContext = retrieval.contextText;
 
   console.log(`[RAG] Agent ${agentId}: найдено ${chunks.length} чанков для запроса "${userMessage.slice(0, 50)}..."`);
-  console.log(`[RAG] Топ-3 чанка:`, chunks.slice(0, 3).map((chunk) => ({
+  console.log(`[RAG] Топ-3 чанка:`, chunks.slice(0, 3).map((chunk: KBSearchResult) => ({
     similarity: chunk.similarity.toFixed(2),
     preview: chunk.content.slice(0, 80),
   })));
@@ -1555,9 +1556,9 @@ export async function runAgentTurn(
       tool_calls: {
         retrieval: {
           query: userMessage,
-          primary_chunk_ids: chunks.map((chunk) => chunk.chunk_id),
-          linked_chunk_ids: linkedChunks.map((chunk) => chunk.id),
-          linked_chunk_types: linkedChunks.map((chunk) => ({ id: chunk.id, link_type: chunk.link_type, similarity: chunk.similarity })),
+          primary_chunk_ids: chunks.map((chunk: KBSearchResult) => chunk.chunk_id),
+          linked_chunk_ids: linkedChunks.map((chunk: LinkedKBChunkResult) => chunk.id),
+          linked_chunk_types: linkedChunks.map((chunk: LinkedKBChunkResult) => ({ id: chunk.id, link_type: chunk.link_type, similarity: chunk.similarity })),
         },
       },
     }).eq('id', persistedUserMessageId);
@@ -1707,13 +1708,13 @@ export async function runAgentTurn(
     // Return script result immediately, no Gemini call
     return {
       answer: finalAnswer,
-      usedChunks: chunks.map((chunk) => ({ id: chunk.chunk_id, similarity: chunk.similarity })),
+      usedChunks: chunks.map((chunk: KBSearchResult) => ({ id: chunk.chunk_id, similarity: chunk.similarity })),
       messageParts,
       splitMessages: false,
       typingSimulation: scriptTypingSimulation,
       handoffMessage: undefined,
       retrievalDebug: {
-        primaryChunks: chunks.map((chunk) => ({
+        primaryChunks: chunks.map((chunk: KBSearchResult) => ({
           id: chunk.chunk_id,
           content: chunk.content,
           similarity: chunk.similarity,
@@ -1722,7 +1723,7 @@ export async function runAgentTurn(
           sourceType: (chunk.metadata?.source_type as string | undefined) ?? undefined,
           postType: (chunk.metadata?.post_type as string | undefined) ?? undefined,
         })),
-        linkedChunks: linkedChunks.map((chunk) => ({
+        linkedChunks: linkedChunks.map((chunk: LinkedKBChunkResult) => ({
           id: chunk.id,
           content: chunk.content,
           similarity: chunk.similarity,
@@ -1763,9 +1764,9 @@ export async function runAgentTurn(
           user_message: userMessage,
           retrieval: {
             query: userMessage,
-            primary_chunk_ids: chunks.map((chunk) => chunk.chunk_id),
-            linked_chunk_ids: linkedChunks.map((chunk) => chunk.id),
-            linked_chunk_types: linkedChunks.map((chunk) => ({ id: chunk.id, link_type: chunk.link_type, similarity: chunk.similarity })),
+            primary_chunk_ids: chunks.map((chunk: KBSearchResult) => chunk.chunk_id),
+            linked_chunk_ids: linkedChunks.map((chunk: LinkedKBChunkResult) => chunk.id),
+            linked_chunk_types: linkedChunks.map((chunk: LinkedKBChunkResult) => ({ id: chunk.id, link_type: chunk.link_type, similarity: chunk.similarity })),
           },
         },
         response: {
@@ -1777,7 +1778,7 @@ export async function runAgentTurn(
 
     return {
       answer: deterministicFactAnswer,
-      usedChunks: chunks.map((chunk) => ({ id: chunk.chunk_id, similarity: chunk.similarity })),
+      usedChunks: chunks.map((chunk: KBSearchResult) => ({ id: chunk.chunk_id, similarity: chunk.similarity })),
       messageParts,
       splitMessages,
       typingSimulation,
@@ -1787,7 +1788,7 @@ export async function runAgentTurn(
       tokensOutput: 0,
       latencyMs: Date.now() - startTime,
       retrievalDebug: {
-        primaryChunks: chunks.map((chunk) => ({
+        primaryChunks: chunks.map((chunk: KBSearchResult) => ({
           id: chunk.chunk_id,
           content: chunk.content,
           similarity: chunk.similarity,
@@ -1796,7 +1797,7 @@ export async function runAgentTurn(
           sourceType: (chunk.metadata?.source_type as string | undefined) ?? undefined,
           postType: (chunk.metadata?.post_type as string | undefined) ?? undefined,
         })),
-        linkedChunks: linkedChunks.map((chunk) => ({
+        linkedChunks: linkedChunks.map((chunk: LinkedKBChunkResult) => ({
           id: chunk.id,
           content: chunk.content,
           similarity: chunk.similarity,
@@ -2236,11 +2237,11 @@ export async function runAgentTurn(
         iterations,
         context_token_count: conversationContext.contextTokenCount ?? null,
         context_token_count_fallback: conversationContext.contextTokenCountFallback ?? false,
-        retrieval: {
+          retrieval: {
           query: userMessage,
-          primary_chunk_ids: chunks.map((chunk) => chunk.chunk_id),
-          linked_chunk_ids: linkedChunks.map((chunk) => chunk.id),
-          linked_chunk_types: linkedChunks.map((chunk) => ({ id: chunk.id, link_type: chunk.link_type, similarity: chunk.similarity })),
+          primary_chunk_ids: chunks.map((chunk: KBSearchResult) => chunk.chunk_id),
+          linked_chunk_ids: linkedChunks.map((chunk: LinkedKBChunkResult) => chunk.id),
+          linked_chunk_types: linkedChunks.map((chunk: LinkedKBChunkResult) => ({ id: chunk.id, link_type: chunk.link_type, similarity: chunk.similarity })),
         },
         routing: routingResult.routingOutcome,
         lead_context: {
@@ -2279,7 +2280,7 @@ export async function runAgentTurn(
 
   return {
     answer: finalAnswer,
-    usedChunks: chunks.map((chunk) => ({ id: chunk.chunk_id, similarity: chunk.similarity })),
+    usedChunks: chunks.map((chunk: KBSearchResult) => ({ id: chunk.chunk_id, similarity: chunk.similarity })),
     messageParts,
     splitMessages,
     typingSimulation,
@@ -2289,7 +2290,7 @@ export async function runAgentTurn(
     tokensOutput,
     latencyMs: Date.now() - startTime,
     retrievalDebug: {
-      primaryChunks: chunks.map((chunk) => ({
+      primaryChunks: chunks.map((chunk: KBSearchResult) => ({
         id: chunk.chunk_id,
         content: chunk.content,
         similarity: chunk.similarity,
@@ -2298,7 +2299,7 @@ export async function runAgentTurn(
         sourceType: (chunk.metadata?.source_type as string | undefined) ?? undefined,
         postType: (chunk.metadata?.post_type as string | undefined) ?? undefined,
       })),
-      linkedChunks: linkedChunks.map((chunk) => ({
+      linkedChunks: linkedChunks.map((chunk: LinkedKBChunkResult) => ({
         id: chunk.id,
         content: chunk.content,
         similarity: chunk.similarity,

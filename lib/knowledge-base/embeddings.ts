@@ -1,4 +1,5 @@
 import { GEMINI_EMBEDDING_MODEL, GEMINI_EMBEDDING_OUTPUT_DIMENSIONALITY } from '@/lib/server/ai/gemini-client';
+import { isOpenAIFallbackAllowed } from '@/lib/server/ai/openai-fallback';
 
 const OPENAI_EMBEDDING_MODEL = process.env.OPENAI_EMBEDDING_MODEL ?? 'text-embedding-3-small';
 const OPENAI_EMBEDDING_DIMENSIONS = Number(process.env.OPENAI_EMBEDDING_DIMENSIONS ?? 768);
@@ -115,9 +116,19 @@ async function generateGeminiEmbeddingWithFallback(
       error.status = res.status;
       throw error;
     } catch (error) {
-      if (isGeminiAuthFailure(error) && process.env.OPENAI_API_KEY) {
-        console.error(`[KB] ⚠️ CRITICAL: Gemini ${modeLabel} embedding provider failed with auth/permission error. Falling back to OpenAI. Original error:`, error instanceof Error ? error.message : String(error));
-        return generateOpenAIEmbedding(text);
+      if (isGeminiAuthFailure(error)) {
+        const fallbackEnabled = isOpenAIFallbackAllowed() && !!process.env.OPENAI_API_KEY;
+        console.error(
+          `[KB] Gemini ${modeLabel} embedding provider failed with auth/permission error. ` +
+            `${fallbackEnabled ? 'OpenAI fallback is enabled and will be used.' : 'OpenAI fallback disabled by default (ALLOW_OPENAI_FALLBACK!=true).'} Original error:`,
+          error instanceof Error ? error.message : String(error),
+        );
+
+        if (fallbackEnabled) {
+          return generateOpenAIEmbedding(text);
+        }
+
+        throw error;
       }
 
       if (error instanceof Error && error.message.includes('Gemini')) {
