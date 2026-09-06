@@ -47,6 +47,11 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ ...result, messageParts });
   } catch (err) {
+    console.error('[SANDBOX_CHAT_ERROR]', {
+      agentId,
+      message: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : undefined,
+    });
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });
   }
 }
