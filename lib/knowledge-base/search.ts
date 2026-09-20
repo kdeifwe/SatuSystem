@@ -524,7 +524,11 @@ export function rankKnowledgeBaseChunks(chunks: KBSearchResult[], query = ''): K
     .map((chunk) => {
       const content = chunk.content.toLowerCase();
       const keywordBonus = queryWords.filter((word) => content.includes(word)).length * 0.05;
-      const rankingScore = chunk.similarity + keywordBonus + getChunkPriorityBoost(chunk);
+      // Metadata boosts should never pull in weakly related chunks. They only act as
+      // a secondary uplift once the chunk already looks semantically relevant.
+      const relevanceGate = Math.min(1, Math.max(0, (chunk.similarity - 0.15) / 0.2));
+      const priorityBoost = getChunkPriorityBoost(chunk) * relevanceGate;
+      const rankingScore = chunk.similarity + keywordBonus + priorityBoost;
       return { chunk, rankingScore };
     })
     .sort((a, b) => {
@@ -556,7 +560,7 @@ function buildContextText(primaryChunks: KBSearchResult[], linkedChunks: LinkedK
   let usedTokens = sections.join('\n\n').length > 0 ? estimateTokens(sections.join('\n\n')) : 0;
 
   for (const chunk of sortedLinked) {
-    const section = `Связанный фрагмент [${chunk.link_type} • ${Math.round(chunk.similarity * 100)}%]:\n${chunk.content}`;
+    const section = `Связанный фрагмент (сходство с другим документом, НЕ с текущим вопросом) [${chunk.link_type} • ${Math.round(chunk.similarity * 100)}%]:\n${chunk.content}`;
     const sectionTokens = estimateTokens(section);
     if (usedTokens + sectionTokens > maxTokens) {
       break;

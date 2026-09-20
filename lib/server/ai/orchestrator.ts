@@ -1542,7 +1542,7 @@ export async function runAgentTurn(
   try {
     [contextData, retrieval] = await Promise.all([
       ensureLeadContext(admin, agentId, userMessage, resolvedLeadId ?? undefined, resolvedUserMessageId ?? undefined),
-      searchKnowledgeBaseWithLinks(agentId, userMessage, 3, 0.5, undefined),
+      searchKnowledgeBaseWithLinks(agentId, userMessage, 5, 0.35, undefined),
     ]);
   } catch (e) {
     console.error('[SANDBOX_LEAD_DEBUG] Promise.all threw', { error: e instanceof Error ? e.message : String(e) });
