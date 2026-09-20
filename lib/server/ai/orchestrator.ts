@@ -660,12 +660,22 @@ async function ensureLeadContext(
   }
 
   const externalId = `sandbox:${agentId}`;
-  const { data: leadLookup } = await admin
+  const { data: leadLookup, error: leadLookupError } = await admin
     .from('leads')
     .select('id, attributes')
     .eq('org_id', agentData.org_id)
     .eq('external_id', externalId)
     .maybeSingle();
+
+  const shouldExpectLeadLookup = Boolean(existingUserMessageId);
+  if (leadLookupError || (!leadLookup && shouldExpectLeadLookup)) {
+    console.error('[LEAD_CONTEXT_SELECT_FAIL]', {
+      agentId,
+      externalId,
+      error: leadLookupError?.message ?? null,
+      hadLookup: !!leadLookup,
+    });
+  }
 
   console.log('[SANDBOX_LEAD_DEBUG] lookup', { externalId, orgId: agentData.org_id, found: Boolean((leadLookup as any)?.id), leadId: (leadLookup as any)?.id ?? null });
 
@@ -686,7 +696,7 @@ async function ensureLeadContext(
   }
 
   if (!lead) {
-    const { data: createdLead } = await admin
+    const { data: createdLead, error: createdLeadError } = await admin
       .from('leads')
       .insert({
         org_id: agentData.org_id,
@@ -697,6 +707,13 @@ async function ensureLeadContext(
       })
       .select('id, attributes')
       .single();
+    if (createdLeadError || !createdLead) {
+      console.error('[LEAD_CONTEXT_INSERT_FAIL]', {
+        agentId,
+        externalId,
+        error: createdLeadError?.message ?? null,
+      });
+    }
     lead = createdLead as { id?: string; attributes?: Record<string, unknown> | null } | null;
 
     console.log('[SANDBOX_LEAD_DEBUG] after-insert-attempt', { wasCreated: !((leadLookup as any)?.id), createdLeadId: lead?.id ?? null });
@@ -707,6 +724,7 @@ async function ensureLeadContext(
   }
 
   if (!lead?.id) {
+    console.error('[LEAD_CONTEXT_NULL_RETURN]', { agentId, externalId });
     return {
       leadId: null,
       conversationId: null,
@@ -722,7 +740,7 @@ async function ensureLeadContext(
   let resolvedConversation = existingConversation;
   if (!resolvedConversation) {
     const entryNodeId = getEntryNodeId(normalizeFunnelFlow(agentData?.dialogue_flow));
-    const { data: createdConversation } = await admin
+    const { data: createdConversation, error: conversationInsertError } = await admin
       .from('conversations')
       .insert(buildSandboxConversationInsertData({
         lead_id: lead.id,
@@ -731,6 +749,14 @@ async function ensureLeadContext(
       }))
       .select('id')
       .single();
+    if (conversationInsertError || !createdConversation) {
+      console.error('[LEAD_CONTEXT_CONVERSATION_INSERT_FAIL]', {
+        agentId,
+        externalId,
+        leadId: lead.id,
+        error: conversationInsertError?.message ?? null,
+      });
+    }
     resolvedConversation = createdConversation as { id?: string } | null;
   }
 
