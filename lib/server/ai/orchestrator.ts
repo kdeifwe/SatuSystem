@@ -15,6 +15,7 @@ import { buildConversationInsertData, buildSandboxConversationInsertData, buildS
 import { tryBuildDeterministicFactAnswer } from '@/lib/server/ai/deterministic-facts';
 import { isValidLeadName } from '@/lib/server/lead-name';
 import { sanitizeAgentReply } from '@/lib/ai/response-sanitizer';
+import { buildStickyFactsContextMessage, buildStickyFactsFromChunks, type StickyFact } from '@/lib/server/ai/sticky-facts';
 
 const ORCHESTRATOR_BUILD_TAG =
   process.env.ORCHESTRATOR_BUILD_TAG ||
@@ -1592,13 +1593,25 @@ export async function runAgentTurn(
   const flow = normalizeFunnelFlow(agentData?.dialogue_flow);
   const [conversationStateResult, leadFunnelStateResult] = await Promise.all([
     conversationId
-      ? admin.from('conversations').select('current_funnel_step').eq('id', conversationId).single()
-      : Promise.resolve({ data: null as { current_funnel_step?: string | null } | null }),
+      ? admin.from('conversations').select('current_funnel_step, sticky_facts').eq('id', conversationId).single()
+      : Promise.resolve({ data: null as { current_funnel_step?: string | null; sticky_facts?: unknown } | null }),
     leadId
       ? admin.from('lead_funnel_state').select('pending_script_node_id, pending_script_reply').eq('lead_id', leadId).eq('agent_id', agentId).maybeSingle()
       : Promise.resolve({ data: null as { pending_script_node_id?: unknown; pending_script_reply?: unknown } | null }),
   ]);
   const conversationState = conversationStateResult.data;
+
+  // --- Sticky facts: не даём диалогу "терять" уже надёжно найденный факт ---
+  const stickyFactsState = buildStickyFactsFromChunks(
+    conversationState?.sticky_facts,
+    chunks,
+    persistedUserMessageId,
+  );
+  const stickyFacts = stickyFactsState.stickyFacts;
+
+  if (stickyFactsState.addedCount > 0 && conversationId) {
+    await admin.from('conversations').update({ sticky_facts: stickyFacts }).eq('id', conversationId);
+  }
 
   let currentFunnelStep = conversationState?.current_funnel_step ?? flow?.entryNodeId ?? null;
   if (conversationId && !conversationState?.current_funnel_step && flow?.entryNodeId) {
@@ -1670,6 +1683,14 @@ export async function runAgentTurn(
     extraContextMessages.push({
       role: 'user',
       parts: [{ text: `Контекст из базы знаний:\n${kbContext}` }],
+    });
+  }
+
+  const stickyFactsContextMessage = buildStickyFactsContextMessage(stickyFacts);
+  if (stickyFactsContextMessage) {
+    extraContextMessages.push({
+      role: 'user',
+      parts: [{ text: stickyFactsContextMessage }],
     });
   }
 
