@@ -25,3 +25,32 @@ test('does not force a fallback when searchKnowledgeBase errors', () => {
 
   assert.equal(fallback, null);
 });
+
+test('does not force a fallback when only non-critical tools fail', () => {
+  const fallback = buildToolFailureFallbackMessage([
+    { name: 'searchKnowledgeBase', error: 'timeout' },
+    { name: 'updateLeadStatus', error: 'invalid status' },
+  ]);
+
+  assert.equal(fallback, null);
+});
+
+test('does not mask a successful invoice when a non-critical tool fails in the same turn', () => {
+  const toolResults = [
+    { name: 'sendKaspiPay', result: { invoiceId: '123' }, error: undefined },
+    { name: 'updateLeadStatus', result: null, error: 'Лид не найден или нет доступа' },
+  ];
+
+  assert.equal(buildToolFailureFallbackMessage(toolResults), null);
+});
+
+test('still reports failure when the critical tool itself fails and nothing critical succeeded', () => {
+  const toolResults = [
+    { name: 'sendKaspiPay', result: null, error: 'Kaspi bridge timeout' },
+  ];
+
+  assert.equal(
+    buildToolFailureFallbackMessage(toolResults),
+    'Счёт сейчас не получается оформить автоматически. Уточню данные и сразу напишу.',
+  );
+});

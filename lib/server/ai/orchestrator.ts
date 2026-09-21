@@ -141,23 +141,40 @@ export function getToolExecutionPolicy(toolName: string, toolUsageCounts: Record
   return { shouldExecute: true };
 }
 
+const CRITICAL_TOOL_NAMES = new Set(['createKaspiInvoice', 'sendKaspiPay']);
+
 export function buildToolFailureFallbackMessage(toolResults: Array<Record<string, unknown>>) {
   const failedResults = toolResults.filter((result) => Boolean(result.error));
-  const failedToolNames = failedResults
-    .map((result) => (typeof result.name === 'string' ? result.name : ''))
-    .filter(Boolean);
 
   const fallbackMessage = (() => {
     if (failedResults.length === 0) {
       return null;
     }
 
-    if (failedToolNames.includes('searchKnowledgeBase') && failedToolNames.length === 1) {
-      return null;
+    const failedToolNames = failedResults
+      .map((result) => (typeof result.name === 'string' ? result.name : ''))
+      .filter(Boolean);
+
+    const succeededCriticalNames = toolResults
+      .filter((result) => !result.error)
+      .map((result) => (typeof result.name === 'string' ? result.name : ''))
+      .filter((name) => CRITICAL_TOOL_NAMES.has(name));
+
+    const failedCriticalNames = failedToolNames.filter((name) => CRITICAL_TOOL_NAMES.has(name));
+
+    // Критичный (денежный) тул провалился, и ни один критичный тул в этом же
+    // ходе не выполнился успешно — только тогда честно говорим клиенту про счёт.
+    if (failedCriticalNames.length > 0 && succeededCriticalNames.length === 0) {
+      return 'Счёт сейчас не получается оформить автоматически. Уточню данные и сразу напишу.';
     }
 
-    if (failedToolNames.some((name) => ['createKaspiInvoice', 'sendKaspiPay'].includes(name))) {
-      return 'Счёт сейчас не получается оформить автоматически. Уточню данные и сразу напишу.';
+    // Упали только некритичные/служебные тулы (updateLeadStatus, update_lead_info,
+    // add_lead_note, searchKnowledgeBase и т.п.) — не подменяем финальный ответ.
+    // Даём модели увидеть ошибку через functionResponse и она сама сформулирует
+    // связный, честный ответ (в т.ч. учитывая, что критичный тул мог успеть отработать).
+    const onlyNonCriticalFailed = failedToolNames.every((name) => !CRITICAL_TOOL_NAMES.has(name));
+    if (onlyNonCriticalFailed) {
+      return null;
     }
 
     return 'Не удалось выполнить действие автоматически. Уточню детали и сразу напишу.';
@@ -166,7 +183,9 @@ export function buildToolFailureFallbackMessage(toolResults: Array<Record<string
   console.log('[BUILD_TOOL_FALLBACK]', {
     toolResults,
     failedResults,
-    failedToolNames,
+    failedToolNames: failedResults
+      .map((result) => (typeof result.name === 'string' ? result.name : ''))
+      .filter(Boolean),
     fallbackMessage,
   });
 

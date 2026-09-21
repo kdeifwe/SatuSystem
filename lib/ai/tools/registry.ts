@@ -264,6 +264,33 @@ export const PRODUCTION_TOOL_DECLARATIONS: GeminiFunctionDeclaration[] = [
     },
   },
   {
+    name: 'recordLeadSignal',
+    description: 'Сохраняет важный сигнал/подтверждение по лиду (например, клиент подтвердил интерес, дал контакты, отказался, или указал дополнительную информацию). Используй только по реальному событию из диалога и без навязывания клиенту лишних действий.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        lead_id: { type: 'STRING', description: 'ID лида из контекста диалога.' },
+        signal_type: { type: 'STRING', description: 'Тип сигнала: interest, objection, contact, refusal, detail, confirmation и т.п.' },
+        description: { type: 'STRING', description: 'Краткое описание события.' },
+        raw_quote: { type: 'STRING', description: 'Оригинальная цитата клиента по желанию.' },
+        suggested_follow_up_at: { type: 'STRING', description: 'Опционально, рекомендуемое время follow-up в ISO 8601.' },
+      },
+      required: ['lead_id', 'signal_type', 'description'],
+    },
+  },
+  {
+    name: 'sendCustomNotification',
+    description: 'Отправляет кастомное уведомление внутри системы или назначенному оператору по реальной потребности клиента/сценария. Используй только для важных и проверенных событий; не используй для обычного общения.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        message: { type: 'STRING', description: 'Текст уведомления.' },
+        target: { type: 'STRING', description: 'Цель уведомления: lead, operator, org, chat_id и т.п., когда это ясно из контекста.' },
+      },
+      required: ['message', 'target'],
+    },
+  },
+  {
     name: 'redirectToOperator',
     description: `Передать разговор живому оператору. ИСПОЛЬЗУЙ ТОЛЬКО если клиент явно просит человека фразами: "дайте оператора", "хочу поговорить с человеком", "переключите на оператора", "нужен живой сотрудник". ЗАПРЕЩЕНО вызывать этот инструмент если ты не знаешь цену, характеристику товара или условия доставки. В случае отсутствия знаний ответь клиенту из CORE_KNOWLEDGE или скажи "Сейчас уточню информацию и вернусь с ответом".`,
     parameters: {
@@ -299,6 +326,8 @@ export type ToolName =
   | 'scheduleMessage'
   | 'update_lead_info'
   | 'add_lead_note'
+  | 'recordLeadSignal'
+  | 'sendCustomNotification'
   | 'redirectToOperator';
 
 export interface ToolCall {
