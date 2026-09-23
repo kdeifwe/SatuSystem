@@ -15,7 +15,7 @@ export async function GET(req: NextRequest) {
 
   const { data: messages, error } = await admin
     .from('messages')
-    .select('conversation_id, created_at, sender, conversation!inner(lead_id)')
+    .select('conversation_id, created_at, sender, conversations!inner(lead_id)')
     .eq('sender', 'user')
     .lte('created_at', cutoff)
     .order('created_at', { ascending: false });
@@ -26,7 +26,7 @@ export async function GET(req: NextRequest) {
 
   const leadLastMessage: Record<string, string> = {};
   for (const message of messages ?? []) {
-    const leadId = (message as any).conversation?.lead_id;
+    const leadId = (message as any).conversations?.lead_id;
     if (!leadId || leadLastMessage[leadId]) continue;
     leadLastMessage[leadId] = message.created_at;
   }

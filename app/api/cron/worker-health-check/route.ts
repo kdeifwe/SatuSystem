@@ -58,10 +58,10 @@ export async function GET(req: NextRequest) {
         // Get pending user messages
         const { data: pendingData, error: pendingError } = await admin
           .from('messages')
-          .select('id, created_at, conversation!inner(lead_id, lead!inner(ai_enabled, ai_paused))')
+          .select('id, created_at, conversations!inner(lead_id, leads!inner(ai_enabled, ai_paused))')
           .eq('sender', 'user')
-          .eq('conversation.lead.ai_enabled', true)
-          .eq('conversation.lead.ai_paused', false)
+          .eq('conversations.leads.ai_enabled', true)
+          .eq('conversations.leads.ai_paused', false)
           .gt('created_at', new Date(Date.now() - 15 * 60 * 1000).toISOString())
           .limit(1);
 
