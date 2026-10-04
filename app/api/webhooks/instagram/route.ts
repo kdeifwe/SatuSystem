@@ -1,8 +1,11 @@
 import { NextRequest } from 'next/server';
+import pino from 'pino';
 import { createClient } from '@supabase/supabase-js';
 import { runAgentTurnWithLead } from '@/lib/server/ai/orchestrator';
 import { splitAgentMessage, calculateTypingDelay } from '@/lib/server/ai/message-splitter';
 import { verifyInstagramWebhookSignature, extractInstagramWebhookMessages, getInstagramExternalMessageId, resolveInstagramChannelByRecipientId } from '@/lib/server/instagram-webhook';
+
+const logger = pino({ level: process.env.NODE_ENV === 'development' ? 'info' : 'warn' });
 
 const admin = () => createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -85,7 +88,13 @@ export async function POST(req: NextRequest) {
   const signature = req.headers.get('x-hub-signature-256');
   const appSecret = process.env.INSTAGRAM_APP_SECRET;
 
-  if (!verifyInstagramWebhookSignature(rawBody, signature, appSecret)) {
+  logger.info({ bodySize: rawBody.length }, 'Instagram webhook POST received');
+  logger.info({ hasSignature: Boolean(signature) }, 'Instagram webhook signature header present');
+
+  const validSignature = verifyInstagramWebhookSignature(rawBody, signature, appSecret);
+  logger.info({ valid: validSignature, hasSignature: Boolean(signature) }, 'Instagram webhook signature result');
+
+  if (!validSignature) {
     return new Response('Unauthorized', { status: 403 });
   }
 
@@ -96,18 +105,28 @@ export async function POST(req: NextRequest) {
     return new Response('Bad Request', { status: 400 });
   }
 
+  const entryCount = Array.isArray(payload?.entry) ? payload.entry.length : 0;
+  const messagingCount = (payload?.entry ?? []).reduce((total: number, entry: any) => total + (Array.isArray(entry?.messaging) ? entry.messaging.length : 0), 0);
+  logger.info({ entryCount, messagingCount }, 'Instagram webhook payload summary');
+
   setImmediate(() => {
     void (async () => {
       try {
         const msgs = extractInstagramWebhookMessages(payload);
         for (const message of msgs) {
+          logger.info({ senderId: message.senderId, recipientId: message.recipientId, isEcho: false, textLength: message.text.length }, 'Instagram incoming message details');
+
           const channel = await resolveInstagramChannelByRecipientId(admin(), message.recipientId);
+          logger.info({ recipientId: message.recipientId, found: Boolean(channel) }, 'Instagram channel lookup result');
           if (!channel) continue;
 
           const externalMessageId = getInstagramExternalMessageId(message.mid);
           const db = admin();
           const { data: existing } = await db.from('messages').select('id').eq('external_message_id', externalMessageId).maybeSingle();
-          if (existing) continue;
+          if (existing) {
+            logger.info({ externalMessageId }, 'Instagram webhook duplicate skipped');
+            continue;
+          }
 
           const lead = await getLeadForInstagramChannel(channel.org_id ? '' : '', channel.id, message.senderId, null);
           if (!lead) continue;
@@ -146,35 +165,51 @@ export async function POST(req: NextRequest) {
           const { data: agent } = await db.from('agents').select('name, system_prompt_compiled, general_capabilities').eq('id', channel.credentials?.agent_id ?? '').single();
           if (!agent) continue;
 
-          const result = await runAgentTurnWithLead(
-            channel.credentials?.agent_id ?? '',
-            agent.system_prompt_compiled ?? `Ты ${agent.name}. Отвечай кратко и по-человечески.`,
-            message.text,
-            historyFormatted,
-            lead.id,
-            insertedUserMessage?.id ?? undefined
-          );
+          try {
+            const result = await runAgentTurnWithLead(
+              channel.credentials?.agent_id ?? '',
+              agent.system_prompt_compiled ?? `Ты ${agent.name}. Отвечай кратко и по-человечески.`,
+              message.text,
+              historyFormatted,
+              lead.id,
+              insertedUserMessage?.id ?? undefined
+            );
 
-          const caps = agent.general_capabilities ?? {};
-          const maxParts = Math.min(3, Math.max(1, Number(caps.split_max_parts ?? 2)));
-          const fallbackParts = splitAgentMessage(result.answer, caps.split_messages ?? true, maxParts).map((part, index) => ({
-            text: part.text,
-            delayMs: Math.max(2000 * index, calculateTypingDelay(part.text) + part.delayMs),
-          }));
-          const parts = (Array.isArray(result.messageParts) && result.messageParts.length > 0 ? result.messageParts : fallbackParts).slice(0, maxParts);
+            const caps = agent.general_capabilities ?? {};
+            const maxParts = Math.min(3, Math.max(1, Number(caps.split_max_parts ?? 2)));
+            const fallbackParts = splitAgentMessage(result.answer, caps.split_messages ?? true, maxParts).map((part, index) => ({
+              text: part.text,
+              delayMs: Math.max(2000 * index, calculateTypingDelay(part.text) + part.delayMs),
+            }));
+            const parts = (Array.isArray(result.messageParts) && result.messageParts.length > 0 ? result.messageParts : fallbackParts).slice(0, maxParts);
 
-          for (let i = 0; i < parts.length; i += 1) {
-            const part = parts[i];
-            const delayMs = i === 0 ? 2000 : Math.min(1000, Math.max(250, Number(part.delayMs || 500)));
-            if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
-            await fetch(`https://graph.instagram.com/v22.0/${channel.credentials?.ig_user_id}/messages`, {
-              method: 'POST',
-              headers: {
-                Authorization: `Bearer ${channel.credentials?.access_token}`,
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({ recipient: { id: message.senderId }, message: { text: part.text } }),
-            });
+            for (let i = 0; i < parts.length; i += 1) {
+              const part = parts[i];
+              const delayMs = i === 0 ? 2000 : Math.min(1000, Math.max(250, Number(part.delayMs || 500)));
+              if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+
+              try {
+                const response = await fetch(`https://graph.instagram.com/v22.0/${channel.credentials?.ig_user_id}/messages`, {
+                  method: 'POST',
+                  headers: {
+                    Authorization: `Bearer ${channel.credentials?.access_token}`,
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({ recipient: { id: message.senderId }, message: { text: part.text } }),
+                });
+
+                logger.info({ recipientId: message.senderId, status: response.status }, 'Instagram outbound send status');
+
+                if (!response.ok) {
+                  const errorText = await response.text().catch(() => '');
+                  logger.error({ status: response.status, errorMessage: errorText || 'Graph API error' }, 'Instagram outbound send failed');
+                }
+              } catch (error) {
+                logger.error({ senderId: message.senderId, errorMessage: error instanceof Error ? error.message : 'unknown' }, 'Instagram outbound send error');
+              }
+            }
+          } catch (error) {
+            logger.error({ agentId: channel.credentials?.agent_id ?? null, errorMessage: error instanceof Error ? error.message : 'unknown' }, 'Instagram runAgentTurnWithLead failed');
           }
         }
       } catch (error) {
