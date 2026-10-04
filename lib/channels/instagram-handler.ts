@@ -31,11 +31,12 @@ export async function handleIncomingMessageWithDependencies(
 
   try {
     const normalizedMessage = (message as any)?.message ?? message;
-    const threadId = String(normalizedMessage?.thread_id ?? '');
-    const itemId = String(normalizedMessage?.item_id ?? '');
+    const threadId = String(normalizedMessage?.thread_id ?? normalizedMessage?.thread ?? '');
+    const itemId = String(normalizedMessage?.item_id ?? normalizedMessage?.mid ?? '');
     const text = typeof normalizedMessage?.text === 'string' ? normalizedMessage.text.trim() : '';
-    const userId = normalizedMessage?.user_id;
+    const userId = normalizedMessage?.user_id ?? normalizedMessage?.sender?.id;
 
+    if (normalizedMessage?.is_echo) return;
     if (!threadId || !itemId || !text) return;
     if (String(userId) === String(ig?.state?.cookieUserId)) return;
 

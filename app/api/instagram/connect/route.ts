@@ -7,21 +7,10 @@ export async function POST(req: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: 'Не авторизован' }, { status: 401 });
 
-  const body = await req.json().catch(() => ({}));
-  const agentId = typeof body?.agentId === 'string' ? body.agentId : null;
-  const username = typeof body?.username === 'string' ? body.username.trim() : '';
-  const password = typeof body?.password === 'string' ? body.password : '';
-
-  if (!agentId || !username || !password) {
-    return NextResponse.json({ error: 'agentId, username и password обязательны' }, { status: 400 });
-  }
-
-  try {
-    const status = await loginInstagram(agentId, username, password);
-    return NextResponse.json(status);
-  } catch (error) {
-    return NextResponse.json({ status: 'error', lastError: error instanceof Error ? error.message : 'Не удалось подключить Instagram' }, { status: 500 });
-  }
+  return NextResponse.json({
+    status: 'error',
+    lastError: 'Подключение Instagram через логин/пароль отключено. Используйте официальный OAuth вход Instagram.',
+  }, { status: 410 });
 }
 
 export async function GET(req: NextRequest) {

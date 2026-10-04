@@ -29,19 +29,26 @@ export async function GET(req: NextRequest) {
 
   for (const ch of channels ?? []) {
     const credentials = ch.credentials as Record<string, unknown> | null;
-    if (!credentials?.agent_id || credentials.agent_id === agentId) {
-      if (ch.type === 'telegram' && typeof credentials?.bot_username === 'string') {
-        result.telegram_bot = { connected: true, bot_username: credentials.bot_username };
-      }
-      if (ch.type === 'telegram_userbot') {
-        result.telegram_userbot = { connected: true, phone: credentials?.phone };
-      }
-      if (ch.type === 'whatsapp') {
-        result.whatsapp = { connected: true };
-      }
-      if (ch.type === 'instagram') {
-        result.instagram = { connected: true };
-      }
+    const matchesAgent = !credentials?.agent_id || credentials.agent_id === agentId;
+    if (!matchesAgent) continue;
+
+    if (ch.type === 'telegram' && typeof credentials?.bot_username === 'string') {
+      result.telegram_bot = { connected: true, bot_username: credentials.bot_username };
+    }
+    if (ch.type === 'telegram_userbot') {
+      result.telegram_userbot = { connected: true, phone: credentials?.phone };
+    }
+    if (ch.type === 'whatsapp') {
+      result.whatsapp = { connected: true };
+    }
+    if (ch.type === 'instagram') {
+      result.instagram = {
+        connected: Boolean(ch.is_active && credentials?.ig_user_id),
+        status: ch.connection_status ?? (ch.is_active ? 'connected' : 'disconnected'),
+        username: typeof credentials?.username === 'string' ? credentials.username : null,
+        token_expires_at: credentials?.expires_at ?? null,
+        message: typeof credentials?.last_error === 'string' ? credentials.last_error : null,
+      };
     }
   }
 

@@ -529,14 +529,50 @@ export async function submitInstagramCode(agentId: string, code: string): Promis
 }
 
 export async function sendInstagramText(agentId: string, threadId: string, text: string) {
-  const entry = clientStore.get(agentId);
-  if (!entry?.client) {
-    throw new Error('Instagram client is not initialized');
+  const admin = createAdminClient();
+  const { data: agent } = await admin.from('agents').select('org_id').eq('id', agentId).single();
+  if (!agent?.org_id) throw new Error(`Agent not found: ${agentId}`);
+
+  const { data: channel } = await admin
+    .from('channels')
+    .select('id, credentials, connection_status, is_active')
+    .eq('org_id', agent.org_id)
+    .eq('type', 'instagram')
+    .maybeSingle();
+
+  const credentials = (channel?.credentials as Record<string, unknown> | null) ?? {};
+  const token = typeof credentials.access_token === 'string' ? credentials.access_token : null;
+  const igUserId = typeof credentials.ig_user_id === 'string' ? credentials.ig_user_id : null;
+
+  if (!token || !igUserId) {
+    throw new Error('Instagram channel is not connected');
   }
-  if (entry.status !== 'connected') {
-    throw new Error('Instagram is not connected');
+
+  const response = await fetch(`https://graph.instagram.com/v22.0/${igUserId}/messages`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      recipient: { id: threadId },
+      message: { text },
+    }),
+  });
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    const errorCode = payload?.error?.code ?? payload?.error_code ?? null;
+    if (errorCode === 190) {
+      await admin.from('channels').update({
+        connection_status: 'error',
+        is_active: false,
+        credentials: { ...credentials, access_token: null },
+      }).eq('id', channel?.id ?? '');
+      throw new Error('Instagram token expired or invalid. Подключите аккаунт заново.');
+    }
+    throw new Error(payload?.error?.message ?? 'Не удалось отправить сообщение в Instagram');
   }
-  await entry.client.entity.directThread(threadId).broadcastText(text);
 }
 
 export async function restoreAllInstagramSessions() {
@@ -567,4 +603,3 @@ export async function restoreAllInstagramSessions() {
   }
 }
 
-void restoreAllInstagramSessions();

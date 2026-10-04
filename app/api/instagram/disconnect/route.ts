@@ -21,3 +21,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ status: 'disconnected', lastError: error instanceof Error ? error.message : 'Не удалось отключить Instagram' }, { status: 500 });
   }
 }
+
+export async function GET(req: NextRequest) {
+  return POST(req);
+}

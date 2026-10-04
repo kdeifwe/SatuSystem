@@ -15,3 +15,7 @@ export async function GET(req: NextRequest) {
   const status = await getInstagramStatus(agentId);
   return NextResponse.json(status);
 }
+
+export async function POST(req: NextRequest) {
+  return GET(req);
+}

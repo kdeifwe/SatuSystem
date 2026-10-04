@@ -10,7 +10,7 @@ type IntegrationStatus = {
   telegram_bot?: { connected: boolean; bot_username?: string | null } | null;
   telegram_userbot?: { connected: boolean; phone?: string | null } | null;
   whatsapp?: { connected: boolean } | null;
-  instagram?: { connected: boolean } | null;
+  instagram?: { connected: boolean; username?: string | null; status?: string | null; token_expires_at?: string | null; message?: string | null } | null;
   kaspi?: { connected: boolean; status?: string | null } | null;
 };
 
@@ -750,30 +750,25 @@ function WhatsAppForm({ agentId, onStatusChanged }: { agentId: string; onStatusC
 }
 
 function InstagramForm({ agentId }: { agentId: string }) {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [code, setCode] = useState('');
-  const [status, setStatus] = useState<'disconnected' | 'connected' | 'challenge' | '2fa' | 'error'>('disconnected');
+  const [status, setStatus] = useState<'disconnected' | 'connected' | 'error'>('disconnected');
+  const [username, setUsername] = useState<string | null>(null);
+  const [tokenExpiresAt, setTokenExpiresAt] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const syncStatus = (data: any) => {
-    const next = data?.status ?? 'disconnected';
-    setStatus(next === 'connected' || next === 'challenge' || next === '2fa' || next === 'error' ? next : 'disconnected');
-    setMessage(data?.lastError ?? (next === 'connected' ? 'Подключено' : null));
-  };
-
   const fetchStatus = async () => {
     try {
-      const response = await fetch(`/api/instagram/status?agentId=${agentId}`);
+      const response = await fetch(`/api/integrations/status?agentId=${agentId}`);
       const data = await response.json();
-      if (!response.ok) throw new Error(data?.error ?? 'Ошибка статуса');
-      syncStatus(data);
-      return data;
+      const instagram = data?.instagram ?? null;
+      const nextStatus = instagram?.connected ? 'connected' : 'disconnected';
+      setStatus(nextStatus);
+      setUsername(instagram?.username ?? null);
+      setTokenExpiresAt(instagram?.token_expires_at ?? null);
+      setMessage(instagram?.message ?? (nextStatus === 'connected' ? 'Подключено' : null));
     } catch {
       setStatus('error');
       setMessage('Не удалось получить статус Instagram');
-      return null;
     }
   };
 
@@ -781,49 +776,8 @@ function InstagramForm({ agentId }: { agentId: string }) {
     void fetchStatus();
   }, [agentId]);
 
-  const connect = async () => {
-    setLoading(true);
-    setMessage(null);
-    try {
-      const response = await fetch('/api/instagram/connect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agentId, username, password }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data?.error ?? 'Ошибка подключения');
-      syncStatus(data);
-      if (data?.status === '2fa' || data?.status === 'challenge') {
-        setMessage('Instagram требует подтверждение. Введите код из приложения или письма.');
-      }
-    } catch (error) {
-      setStatus('error');
-      setMessage(error instanceof Error ? error.message : 'Ошибка подключения');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const verifyCode = async () => {
-    if (!code.trim()) return;
-    setLoading(true);
-    setMessage(null);
-    try {
-      const response = await fetch('/api/instagram/verify-code', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agentId, code }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data?.error ?? 'Ошибка подтверждения');
-      syncStatus(data);
-      setCode('');
-    } catch (error) {
-      setStatus('error');
-      setMessage(error instanceof Error ? error.message : 'Ошибка подтверждения');
-    } finally {
-      setLoading(false);
-    }
+  const connect = () => {
+    window.location.href = `/api/instagram/oauth/start?agentId=${agentId}`;
   };
 
   const disconnect = async () => {
@@ -837,7 +791,9 @@ function InstagramForm({ agentId }: { agentId: string }) {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data?.error ?? 'Ошибка отключения');
-      setStatus(data?.status ?? 'disconnected');
+      setStatus('disconnected');
+      setUsername(null);
+      setTokenExpiresAt(null);
       setMessage('Instagram отключён');
     } catch (error) {
       setStatus('error');
@@ -851,79 +807,37 @@ function InstagramForm({ agentId }: { agentId: string }) {
     <div>
       <h2 className="font-medium text-[color:var(--color-chalk)] mb-2">Instagram</h2>
       <p className="text-sm text-[color:var(--color-smoke)] mb-4">
-        Неофициальное подключение через Instagram Direct. Используйте отдельный аккаунт и только на свой риск.
+        Нужен профессиональный аккаунт Instagram (Business или Creator). В режиме разработки подключать можно только аккаунты с ролью Instagram Tester.
       </p>
 
       <div className="flex gap-3 p-4 bg-[color:var(--color-carbon)] border border-[color:var(--color-graphite)] rounded-[var(--radius-cards)] mb-6">
         <span className="flex-shrink-0">⚠️</span>
-        <p className="text-sm text-[color:var(--color-smoke)]">Неофициальное подключение, используйте на свой риск, рекомендуется отдельный аккаунт.</p>
+        <p className="text-sm text-[color:var(--color-smoke)]">Подключение идёт через официальный Instagram Login (Business Login) без Facebook-страницы.</p>
       </div>
 
-      {(status === 'connected' || status === 'challenge' || status === '2fa') && (
-        <div className="rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-4 mb-4">
-          <p className="text-sm font-medium text-[color:var(--color-chalk)]">
-            {status === 'connected' ? 'Instagram подключён' : status === '2fa' ? 'Instagram требует код 2FA' : 'Instagram в режиме проверки безопасности'}
-          </p>
-          <div className="mt-4">
-            <button
-              onClick={disconnect}
-              disabled={loading}
-              className="px-4 py-2 rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] text-[color:var(--color-chalk)] text-sm hover:border-[color:var(--color-ash)] disabled:opacity-50"
-            >
-              {loading ? 'Отключаю...' : 'Отключить'}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {(status === 'challenge' || status === '2fa') && (
-        <div className="space-y-3 mb-4">
-          <label className="block text-xs font-medium text-[color:var(--color-chalk)]">Код подтверждения</label>
-          <input
-            value={code}
-            onChange={(event) => setCode(event.target.value)}
-            placeholder="Введите код из Instagram"
-            className="w-full px-3 py-2 border border-[color:var(--color-graphite)] rounded-[var(--radius-cards)] bg-[color:var(--color-carbon)] text-[color:var(--color-chalk)] text-sm placeholder-[color:var(--color-smoke)] focus:outline-none focus:border-[color:var(--color-ash)]"
-          />
+      {status === 'connected' && (
+        <div className="rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-4 mb-4 space-y-3">
+          <p className="text-sm font-medium text-[color:var(--color-chalk)]">Instagram подключён</p>
+          {username && <p className="text-sm text-[color:var(--color-smoke)]">@{username}</p>}
+          {tokenExpiresAt && <p className="text-xs text-[color:var(--color-smoke)]">Срок токена: {new Date(tokenExpiresAt).toLocaleString('ru-RU')}</p>}
           <button
-            onClick={verifyCode}
-            disabled={loading || !code.trim()}
-            className="px-6 py-2.5 bg-[color:var(--color-obsidian)] border border-[color:var(--color-graphite)] text-[color:var(--color-chalk)] text-sm rounded-[var(--radius-cards)] hover:border-[color:var(--color-ash)] disabled:opacity-50"
+            onClick={disconnect}
+            disabled={loading}
+            className="px-4 py-2 rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] text-[color:var(--color-chalk)] text-sm hover:border-[color:var(--color-ash)] disabled:opacity-50"
           >
-            {loading ? 'Проверяю...' : 'Подтвердить код'}
+            {loading ? 'Отключаю...' : 'Отключить'}
           </button>
         </div>
       )}
 
       {status !== 'connected' && (
-        <div className="space-y-3">
-          <div>
-            <label className="block text-xs font-medium text-[color:var(--color-chalk)] mb-1">Логин Instagram</label>
-            <input
-              value={username}
-              onChange={(event) => setUsername(event.target.value)}
-              placeholder="username"
-              className="w-full px-3 py-2 border border-[color:var(--color-graphite)] rounded-[var(--radius-cards)] bg-[color:var(--color-carbon)] text-[color:var(--color-chalk)] text-sm placeholder-[color:var(--color-smoke)] focus:outline-none focus:border-[color:var(--color-ash)]"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-[color:var(--color-chalk)] mb-1">Пароль</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              placeholder="Пароль"
-              className="w-full px-3 py-2 border border-[color:var(--color-graphite)] rounded-[var(--radius-cards)] bg-[color:var(--color-carbon)] text-[color:var(--color-chalk)] text-sm placeholder-[color:var(--color-smoke)] focus:outline-none focus:border-[color:var(--color-ash)]"
-            />
-          </div>
-          <button
-            onClick={connect}
-            disabled={loading || !username.trim() || !password.trim()}
-            className="px-6 py-2.5 bg-[color:var(--color-obsidian)] border border-[color:var(--color-graphite)] text-[color:var(--color-chalk)] text-sm rounded-[var(--radius-cards)] hover:border-[color:var(--color-ash)] disabled:opacity-50"
-          >
-            {loading ? 'Подключаю...' : 'Подключить Instagram'}
-          </button>
-        </div>
+        <button
+          onClick={connect}
+          disabled={loading}
+          className="px-6 py-2.5 bg-[color:var(--color-obsidian)] border border-[color:var(--color-graphite)] text-[color:var(--color-chalk)] text-sm rounded-[var(--radius-cards)] hover:border-[color:var(--color-ash)] disabled:opacity-50"
+        >
+          {loading ? 'Подключаю...' : 'Подключить Instagram'}
+        </button>
       )}
 
       {message && <p className="text-sm text-[color:var(--color-smoke)] mt-4">{message}</p>}
