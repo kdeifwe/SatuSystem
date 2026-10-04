@@ -17,7 +17,7 @@ export async function GET(req: NextRequest) {
 
   const { data: channels } = await admin
     .from('channels')
-    .select('type, credentials, is_active')
+    .select('type, credentials, is_active, connection_status')
     .eq('is_active', true);
 
   const result: Record<string, any> = {
