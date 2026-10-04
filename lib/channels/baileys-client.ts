@@ -8,10 +8,12 @@ import {
   fetchLatestBaileysVersion,
   DisconnectReason,
   proto,
+  downloadMediaMessage,
   WAMessage,
 } from '@whiskeysockets/baileys';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { runAgentTurnWithLead } from '@/lib/server/ai/orchestrator';
+import { understandMedia } from '@/lib/server/media-understanding';
 import { handleIncomingMessageWithDependencies } from './baileys-handler';
 import { splitAgentMessage, calculateTypingDelay } from '@/lib/server/ai/message-splitter';
 import { enqueueNotification } from '@/lib/notifications';
@@ -241,6 +243,8 @@ export async function handleIncomingMessage(agentId: string, sock: ReturnType<ty
     createAdminClient,
     ensureWhatsAppChannel,
     runAgentTurnWithLead,
+    downloadMedia: async (m) => (await downloadMediaMessage(m, 'buffer', {})) as Buffer,
+    understandMedia,
     logger,
   });
 }

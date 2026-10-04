@@ -5,7 +5,7 @@ import { runAgentTurnWithLead } from '@/lib/server/ai/orchestrator';
 import { splitAgentMessage, calculateTypingDelay } from '@/lib/server/ai/message-splitter';
 import { sendWhatsAppMessage } from '@/lib/channels/whatsapp';
 import { withLeadProcessingLock } from '@/lib/server/lead-processing-queue';
-import { fetchAndTranscribeWhatsAppMedia, saveBufferToSupabase } from '@/lib/server/media-stt';
+import { fetchAndUnderstandWhatsAppMedia, saveBufferToSupabase } from '@/lib/server/media-stt';
 
 // WhatsApp webhook callbacks run outside a user session, so we use a service-role
 // Supabase client here to bypass RLS while still keeping the webhook handling secure.
@@ -215,18 +215,24 @@ export async function processIncomingWhatsAppMessage(body: any) {
     const normalizedPhoneNumber = String(phoneNumber).replace(/^\+/, '');
     const processingLockKey = `whatsapp:${webhookPhoneNumberId ?? 'unknown'}:${normalizedPhoneNumber}`;
 
-    // Attempt STT for audio messages when there's no text
     let mediaPath: string | null = null;
-    if (!text && (msg.type === 'audio' || msg.audio)) {
+    const mediaKind: 'audio' | 'image' | 'video' | null =
+      msg.type === 'audio' || msg.audio ? 'audio'
+      : msg.type === 'image' || msg.image ? 'image'
+      : msg.type === 'video' || msg.video ? 'video'
+      : null;
+
+    if (mediaKind) {
       try {
-        const mediaId = msg.audio?.id;
+        const mediaObj = msg[mediaKind];
+        const mediaId = mediaObj?.id;
+        const caption = mediaObj?.caption ?? text;
         const accessToken = String(((channel?.credentials as Record<string, unknown>) ?? {})['access_token'] ?? '');
         if (mediaId && accessToken) {
-          const { text: transcribedText, buffer, mimeType } = await fetchAndTranscribeWhatsAppMedia(mediaId, accessToken);
-          if (transcribedText) text = transcribedText;
-          // save original audio to private Supabase bucket, store storage PATH (not signed URL)
+          const { text: understood, buffer, mimeType } = await fetchAndUnderstandWhatsAppMedia(mediaId, accessToken, mediaKind, caption);
+          if (understood) text = understood;
           try {
-            const storagePath = `whatsapp/${channel?.org_id ?? 'unknown'}/${normalizedPhoneNumber}/${messageId}.${(mimeType?.split('/')[1] ?? 'ogg')}`;
+            const storagePath = `whatsapp/${channel?.org_id ?? 'unknown'}/${normalizedPhoneNumber}/${messageId}.${(mimeType?.split('/')[1] ?? 'bin')}`;
             await saveBufferToSupabase(admin, 'messages-media', storagePath, buffer, mimeType);
             mediaPath = storagePath;
           } catch (e) {
@@ -234,30 +240,28 @@ export async function processIncomingWhatsAppMessage(body: any) {
           }
         }
       } catch (err) {
-        console.error('[whatsapp webhook] media/transcription error', err);
-        // friendly user message (do not silent-return)
+        console.error('[whatsapp webhook] media understanding error', err);
         try {
           const recipient = phoneNumber.replace(/^\+/, '');
           const phoneNumberId = String(((channel?.credentials as Record<string, unknown>) ?? {})['phone_number_id'] ?? webhookPhoneNumberId ?? '');
           const accessToken = String(((channel?.credentials as Record<string, unknown>) ?? {})['access_token'] ?? '');
           if (phoneNumberId && accessToken) {
-            await sendWhatsAppMessage(phoneNumberId, accessToken, recipient, 'Извините, не получилось распознать голосовое, напишите, пожалуйста, текстом');
+            await sendWhatsAppMessage(phoneNumberId, accessToken, recipient, 'Извините, не получилось открыть файл, напишите, пожалуйста, текстом');
           }
         } catch (sendErr) {
-          console.error('[whatsapp webhook] failed to notify user about STT error', sendErr);
+          console.error('[whatsapp webhook] failed to notify user about media error', sendErr);
         }
         return;
       }
     }
 
-    // If after STT we still have no text, handle unsupported types / polite message and exit
     if (!text) {
       try {
         const recipient = phoneNumber.replace(/^\+/, '');
         const phoneNumberId = String(((channel?.credentials as Record<string, unknown>) ?? {})['phone_number_id'] ?? webhookPhoneNumberId ?? '');
         const accessToken = String(((channel?.credentials as Record<string, unknown>) ?? {})['access_token'] ?? '');
         if (phoneNumberId && accessToken) {
-          await sendWhatsAppMessage(phoneNumberId, accessToken, recipient, 'Извините, пока могу отвечать только на текст и голосовые сообщения. Пожалуйста, напишите текстом.');
+          await sendWhatsAppMessage(phoneNumberId, accessToken, recipient, 'Извините, этот тип файла пока не поддерживается. Пожалуйста, напишите текстом.');
         }
       } catch (e) {
         console.error('[whatsapp webhook] failed to notify user about unsupported media', e);

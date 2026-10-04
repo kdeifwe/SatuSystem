@@ -1,6 +1,7 @@
 import type { WAMessage } from '@whiskeysockets/baileys';
 import { splitAgentMessage, calculateTypingDelay } from '@/lib/server/ai/message-splitter';
 import { isValidLeadName } from '@/lib/server/lead-name';
+import { understandMedia, type MediaKind } from '@/lib/server/media-understanding';
 
 export interface BaileysHandlerDeps {
   createAdminClient: () => any;
@@ -14,6 +15,8 @@ export interface BaileysHandlerDeps {
     currentUserMessageId?: string,
     options?: { preferRealLead?: boolean }
   ) => Promise<{ answer: string; messageParts?: Array<{ text: string; delayMs: number }>; splitMessages?: boolean; typingSimulation?: boolean }>;
+  downloadMedia?: (message: WAMessage) => Promise<Buffer>;
+  understandMedia?: typeof understandMedia;
   logger?: { error: (meta: any, message: string) => void };
 }
 
@@ -30,6 +33,22 @@ function extractText(message: any) {
   return null;
 }
 
+function unwrapMessage(message: any): any {
+  if (message?.ephemeralMessage?.message) return unwrapMessage(message.ephemeralMessage.message);
+  if (message?.viewOnceMessage?.message) return unwrapMessage(message.viewOnceMessage.message);
+  if (message?.viewOnceMessageV2?.message) return unwrapMessage(message.viewOnceMessageV2.message);
+  return message;
+}
+
+function detectMedia(message: any): { kind: MediaKind; mimeType: string; caption: string | null } | null {
+  const m = unwrapMessage(message);
+  if (!m) return null;
+  if (m.audioMessage) return { kind: 'audio', mimeType: m.audioMessage.mimetype ?? 'audio/ogg', caption: null };
+  if (m.imageMessage) return { kind: 'image', mimeType: m.imageMessage.mimetype ?? 'image/jpeg', caption: m.imageMessage.caption ?? null };
+  if (m.videoMessage) return { kind: 'video', mimeType: m.videoMessage.mimetype ?? 'video/mp4', caption: m.videoMessage.caption ?? null };
+  return null;
+}
+
 export async function handleIncomingMessageWithDependencies(
   agentId: string,
   sock: { sendMessage: (jid: string, content: any) => Promise<any> },
@@ -43,7 +62,26 @@ export async function handleIncomingMessageWithDependencies(
     const remoteJid = String(message.key?.remoteJid ?? '');
     if (!remoteJid) return;
 
-    const text = extractText(message.message);
+    let text = extractText(message.message);
+
+    const media = detectMedia(message.message);
+    if (media) {
+      try {
+        const download = deps.downloadMedia;
+        if (!download) throw new Error('downloadMedia dependency is not provided');
+        const understand = deps.understandMedia ?? understandMedia;
+        const buffer = await download(message);
+        const understood = await understand(buffer, media.mimeType, media.kind, media.caption ?? text);
+        if (understood) text = understood;
+      } catch (error) {
+        logger.error({ agentId, error }, 'Failed to understand WhatsApp media');
+        try {
+          await sock.sendMessage(remoteJid, { text: 'Извините, не получилось открыть файл, напишите, пожалуйста, текстом' });
+        } catch {}
+        return;
+      }
+    }
+
     if (!text || text.trim().length === 0) return;
 
     const admin = deps.createAdminClient();

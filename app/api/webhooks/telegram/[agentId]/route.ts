@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { runAgentTurnWithLead } from '@/lib/server/ai/orchestrator';
 import { splitAgentMessage, calculateTypingDelay } from '@/lib/server/ai/message-splitter';
-import { fetchAndTranscribeTelegramFile, saveBufferToSupabase } from '@/lib/server/media-stt';
+import { fetchAndUnderstandTelegramFile, saveBufferToSupabase } from '@/lib/server/media-stt';
 
 // Webhook processing must use a service-role Supabase client because the request
 // is unauthenticated and webhook events need cross-org access for leads/conversations/messages.
@@ -18,6 +18,10 @@ export async function POST(
   req: NextRequest,
   { params }: { params: { agentId: string } }
 ) {
+  const secretHeader = req.headers.get('x-telegram-bot-api-secret-token');
+  if (!process.env.TELEGRAM_WEBHOOK_SECRET || secretHeader !== process.env.TELEGRAM_WEBHOOK_SECRET) {
+    return NextResponse.json({ ok: false }, { status: 401 });
+  }
   const rawBody = await req.text();
   let body: any = {};
 
@@ -37,7 +41,8 @@ export async function POST(
 }
 
 async function handleUpdate(update: any, agentId: string) {
-  console.log('[TG webhook] Received update for agent:', agentId, JSON.stringify(update).slice(0, 200));
+  // Avoid logging raw update payloads to prevent PII leakage.
+  // Received update for agent (logging of raw payload removed to prevent PII leakage)
   
   const message = update.message;
   if (!message) {
@@ -105,31 +110,37 @@ async function handleUpdate(update: any, agentId: string) {
       return;
     }
 
-    // If no text but voice/audio exist — download and transcribe
-    if (!text && (message.voice || message.audio)) {
+    const photoSizes = Array.isArray(message.photo) ? message.photo : [];
+    const tgMedia: { kind: 'audio' | 'image' | 'video'; fileId?: string; mime?: string } | null =
+      message.voice ? { kind: 'audio', fileId: message.voice.file_id, mime: message.voice.mime_type }
+      : message.audio ? { kind: 'audio', fileId: message.audio.file_id, mime: message.audio.mime_type }
+      : photoSizes.length ? { kind: 'image', fileId: photoSizes[photoSizes.length - 1].file_id }
+      : message.video ? { kind: 'video', fileId: message.video.file_id, mime: message.video.mime_type }
+      : message.video_note ? { kind: 'video', fileId: message.video_note.file_id, mime: 'video/mp4' }
+      : null;
+
+    if (tgMedia?.fileId) {
       try {
-        const fileId = message.voice?.file_id ?? message.audio?.file_id;
-        if (fileId) {
-          const { text: transcribed, buffer, mimeType } = await fetchAndTranscribeTelegramFile(botToken, fileId);
-          if (transcribed) text = transcribed;
-          try {
-            const storagePath = `telegram/${agentId}/${chatId}/${message.message_id}.${(mimeType?.split('/')[1] ?? 'ogg')}`;
-            await saveBufferToSupabase(admin, 'messages-media', storagePath, buffer, mimeType);
-            mediaPath = storagePath;
-          } catch (e) {
-            console.error('[TG webhook] failed to upload media', e);
-          }
+        const caption = message.caption ?? text;
+        const { text: understood, buffer, mimeType } = await fetchAndUnderstandTelegramFile(botToken, tgMedia.fileId, tgMedia.kind, caption, tgMedia.mime);
+        if (understood) text = understood;
+        try {
+          const storagePath = `telegram/${agentId}/${chatId}/${message.message_id}.${(mimeType?.split('/')[1] ?? 'bin')}`;
+          await saveBufferToSupabase(admin, 'messages-media', storagePath, buffer, mimeType);
+          mediaPath = storagePath;
+        } catch (e) {
+          console.error('[TG webhook] failed to upload media', e);
         }
       } catch (err) {
-        console.error('[TG webhook] failed to download/transcribe voice', err);
+        console.error('[TG webhook] failed to download/understand media', err);
         try {
           await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ chat_id: chatId, text: 'Извините, не получилось распознать голосовое, напишите, пожалуйста, текстом' }),
+            body: JSON.stringify({ chat_id: chatId, text: 'Извините, не получилось открыть файл, напишите, пожалуйста, текстом' }),
           });
         } catch (sendErr) {
-          console.error('[TG webhook] failed to notify user about STT error', sendErr);
+          console.error('[TG webhook] failed to notify user about media error', sendErr);
         }
         return;
       }
@@ -140,7 +151,7 @@ async function handleUpdate(update: any, agentId: string) {
         await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chat_id: chatId, text: 'Извините, пока могу отвечать только на текст и голосовые сообщения. Пожалуйста, напишите текстом.' }),
+          body: JSON.stringify({ chat_id: chatId, text: 'Извините, этот тип файла пока не поддерживается. Пожалуйста, напишите текстом.' }),
         });
       } catch (e) {
         console.error('[TG webhook] failed to notify user about unsupported media', e);
