@@ -63,7 +63,7 @@ export async function POST(req: NextRequest) {
     await fetch(`https://api.telegram.org/bot${token}/setWebhook`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: webhookUrl }),
+      body: JSON.stringify({ url: webhookUrl, secret: process.env.TELEGRAM_WEBHOOK_SECRET }),
     });
 
     return NextResponse.json({ success: true, botName });

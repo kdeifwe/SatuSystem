@@ -1,10 +1,8 @@
-require('ts-node/register/transpile-only');
+import test from 'node:test';
+import assert from 'node:assert/strict';
 
-const test = require('node:test');
-const assert = require('node:assert/strict');
-
-const { createInstagramContentBatches, buildInstagramChunkMetadata } = require('../lib/server/knowledge/instagram.ts');
-const { classifyChunkPriority } = require('../lib/knowledge-base/classification.ts');
+import { createInstagramContentBatches, buildInstagramChunkMetadata } from '../lib/server/knowledge/instagram';
+import { classifyChunkPriority } from '../lib/knowledge-base/classification';
 
 test('createInstagramContentBatches splits posts into 10-item batches', () => {
   const items = Array.from({ length: 23 }, (_, index) => ({ id: index + 1 }));
