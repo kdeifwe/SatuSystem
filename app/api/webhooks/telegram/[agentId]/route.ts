@@ -3,6 +3,10 @@ import { createClient } from '@supabase/supabase-js';
 import { runAgentTurnWithLead } from '@/lib/server/ai/orchestrator';
 import { splitAgentMessage, calculateTypingDelay } from '@/lib/server/ai/message-splitter';
 import { fetchAndUnderstandTelegramFile, saveBufferToSupabase } from '@/lib/server/media-stt';
+import {
+  buildTelegramExternalMessageId,
+  buildTelegramAiExternalMessageId,
+} from '@/lib/server/telegram-message-ids';
 
 // Webhook processing must use a service-role Supabase client because the request
 // is unauthenticated and webhook events need cross-org access for leads/conversations/messages.
@@ -92,7 +96,6 @@ async function handleUpdate(update: any, agentId: string) {
 
   const chatId = String(message.chat.id);
   const userName = [message.from?.first_name, message.from?.last_name].filter(Boolean).join(' ') || 'Клиент';
-  const externalMessageId = `tg_${message.message_id}`;
 
   const admin = getAdmin();
 
@@ -128,6 +131,8 @@ async function handleUpdate(update: any, agentId: string) {
       console.error('[TG webhook] Channel not found:', chErr);
       return;
     }
+
+    const externalMessageId = buildTelegramExternalMessageId(channel.id, message.message_id);
 
     const botToken = channel.credentials?.token;
     if (!botToken) {
@@ -417,7 +422,7 @@ async function handleUpdate(update: any, agentId: string) {
         conversation_id: conversation.id,
         sender: 'ai',
         content: part.text,
-        external_message_id: `tg_ai_${message.message_id}_${i}`,
+        external_message_id: buildTelegramAiExternalMessageId(channel.id, message.message_id, i),
       });
     }
 
