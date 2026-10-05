@@ -19,10 +19,47 @@ export async function POST(
   { params }: { params: { agentId: string } }
 ) {
   const secretHeader = req.headers.get('x-telegram-bot-api-secret-token');
-  if (!process.env.TELEGRAM_WEBHOOK_SECRET || secretHeader !== process.env.TELEGRAM_WEBHOOK_SECRET) {
+  const rawBody = await req.text();
+
+  const admin = getAdmin();
+  const { data: agent, error: agentErr } = await admin
+    .from('agents')
+    .select('org_id')
+    .eq('id', params.agentId)
+    .single();
+
+  if (agentErr || !agent) {
+    console.log('[TG webhook] rejecting request: agent not found for webhook route', { agentId: params.agentId, hasHeader: !!secretHeader });
     return NextResponse.json({ ok: false }, { status: 401 });
   }
-  const rawBody = await req.text();
+
+  const { data: channel, error: channelErr } = await admin
+    .from('channels')
+    .select('credentials')
+    .eq('type', 'telegram')
+    .eq('org_id', agent.org_id)
+    .eq('is_active', true)
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  const configuredSecret = channel?.credentials?.secret_token ?? process.env.TELEGRAM_WEBHOOK_SECRET ?? null;
+
+  if (!configuredSecret) {
+    console.log('[TG webhook] rejecting request: no secret token configured for this agent', { agentId: params.agentId, hasHeader: !!secretHeader });
+    return NextResponse.json({ ok: false }, { status: 401 });
+  }
+
+  if (secretHeader !== configuredSecret) {
+    console.log('[TG webhook] rejecting request: secret token mismatch', {
+      agentId: params.agentId,
+      hasHeader: !!secretHeader,
+      hasConfiguredSecret: !!configuredSecret,
+      channelError: channelErr ? String(channelErr) : null,
+    });
+    return NextResponse.json({ ok: false }, { status: 401 });
+  }
+
   let body: any = {};
 
   try {
