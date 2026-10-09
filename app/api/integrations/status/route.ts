@@ -20,18 +20,11 @@ export async function GET(req: NextRequest) {
     .select('type, credentials, is_active, connection_status')
     .eq('is_active', true);
 
-  const { data: googleCalendarConnection } = await admin
-    .from('calendar_connections')
-    .select('*')
-    .eq('agent_id', agentId)
-    .maybeSingle();
-
   const result: Record<string, any> = {
     telegram_bot: null,
     telegram_userbot: null,
     whatsapp: null,
     instagram: null,
-    google_calendar: null,
   };
 
   for (const ch of channels ?? []) {
@@ -57,15 +50,6 @@ export async function GET(req: NextRequest) {
         message: typeof credentials?.last_error === 'string' ? credentials.last_error : null,
       };
     }
-  }
-
-  if (googleCalendarConnection) {
-    result.google_calendar = {
-      connected: googleCalendarConnection.status === 'connected',
-      status: googleCalendarConnection.status ?? 'disconnected',
-      google_email: googleCalendarConnection.google_email ?? null,
-      needs_reauth: googleCalendarConnection.status === 'needs_reauth',
-    };
   }
 
   return NextResponse.json(result);

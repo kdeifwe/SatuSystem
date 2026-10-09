@@ -1,5 +1,5 @@
 import { calendar } from '@googleapis/calendar';
-import { getCalendarClientForAgent, CalendarNotConnectedError } from './client';
+import { getCalendarClientForAgent, CalendarNotConnectedError, getGoogleCalendarId } from './client';
 import { computeFreeSlots, type BusyInterval, type WorkingHoursMap } from './slots';
 
 export type BookingAvailabilityInput = {
@@ -39,9 +39,10 @@ export async function checkAvailability({
   return convertCalendarConnectionError(async () => {
     const auth = await getCalendarClientForAgent(agentId);
     const calendarApi = calendar({ version: 'v3', auth });
+    const calendarId = getGoogleCalendarId();
     const response = await calendarApi.freebusy.query({
       requestBody: {
-        items: [{ id: 'primary' }],
+        items: [{ id: calendarId }],
         timeMin: new Date(`${date}T00:00:00`).toISOString(),
         timeMax: new Date(`${date}T23:59:59`).toISOString(),
       },
@@ -94,6 +95,7 @@ export async function createBooking(agentId: string, input: {
   return convertCalendarConnectionError(async () => {
     const auth = await getCalendarClientForAgent(agentId);
     const calendarApi = calendar({ version: 'v3', auth });
+    const calendarId = getGoogleCalendarId();
 
     const startDate = new Date(input.start);
     const endDate = input.end ? new Date(input.end) : new Date(startDate.getTime() + Number(input.slotMinutes ?? 60) * 60 * 1000);
@@ -105,7 +107,7 @@ export async function createBooking(agentId: string, input: {
     ].filter((part): part is string => typeof part === 'string' && part.trim().length > 0);
 
     const event = await calendarApi.events.insert({
-      calendarId: 'primary',
+      calendarId,
       requestBody: {
         summary: input.summary,
         description: descriptionParts.join('\n'),
@@ -133,7 +135,7 @@ export async function cancelBooking(agentId: string, eventId: string) {
   return convertCalendarConnectionError(async () => {
     const auth = await getCalendarClientForAgent(agentId);
     const calendarApi = calendar({ version: 'v3', auth });
-    await calendarApi.events.delete({ calendarId: 'primary', eventId } as any);
+    await calendarApi.events.delete({ calendarId: getGoogleCalendarId(), eventId } as any);
     return { ok: true };
   });
 }
@@ -143,7 +145,7 @@ export async function cancelBookingForLead(agentId: string, leadId: string, reas
     const auth = await getCalendarClientForAgent(agentId);
     const calendarApi = calendar({ version: 'v3', auth });
     const response = await calendarApi.events.list({
-      calendarId: 'primary',
+      calendarId: getGoogleCalendarId(),
       privateExtendedProperty: [`lead_id=${leadId}`] as string[],
       maxResults: 20,
       singleEvents: true,
@@ -156,7 +158,7 @@ export async function cancelBookingForLead(agentId: string, leadId: string, reas
       throw new Error(`Не найдено событий Google Calendar для lead_id=${leadId}`);
     }
 
-    await calendarApi.events.delete({ calendarId: 'primary', eventId: event.id } as any);
+    await calendarApi.events.delete({ calendarId: getGoogleCalendarId(), eventId: event.id } as any);
     return { ok: true, eventId: event.id, reason };
   });
 }

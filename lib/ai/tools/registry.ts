@@ -140,9 +140,9 @@ export function buildToolDeclarationsForAgent(
   }
 
   const googleCalendarConfigured = Boolean(
-    process.env.GOOGLE_OAUTH_CLIENT_ID &&
-    process.env.GOOGLE_OAUTH_CLIENT_SECRET &&
-    process.env.GOOGLE_TOKEN_ENCRYPTION_KEY
+    process.env.GOOGLE_SA_EMAIL &&
+    process.env.GOOGLE_SA_PRIVATE_KEY &&
+    process.env.GOOGLE_CALENDAR_ID
   );
 
   if (capabilities.google_calendar_enabled !== true || !googleCalendarConfigured) {
@@ -256,7 +256,7 @@ export const PRODUCTION_TOOL_DECLARATIONS: GeminiFunctionDeclaration[] = [
   },
   {
     name: 'createCalendarEvent',
-    description: 'Создаёт запись клиента в Google Calendar агента. Время окончания рассчитывается автоматически по slot_minutes; сервер связывает запись с текущим лидом и агентом из контекста, не доверяет ID из модели.',
+    description: 'Создаёт запись клиента в Google Calendar агента. Окончание встречи рассчитывается автоматически по фиксированному slot_minutes = 60; сервер связывает запись с текущим лидом и агентом из контекста, не доверяет ID из модели.',
     parameters: {
       type: 'OBJECT',
       properties: {
@@ -264,7 +264,6 @@ export const PRODUCTION_TOOL_DECLARATIONS: GeminiFunctionDeclaration[] = [
         client_name: { type: 'STRING', description: 'Имя клиента для встречи.' },
         client_phone: { type: 'STRING', description: 'Телефон клиента, если указан.' },
         notes: { type: 'STRING', description: 'Дополнительные заметки по встрече.' },
-        slot_minutes: { type: 'NUMBER', description: 'Длительность встречи в минутах. По умолчанию 60.' },
       },
       required: ['start', 'client_name'],
     },

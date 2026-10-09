@@ -4,14 +4,13 @@ import { useEffect, useState } from 'react';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { supabase } from '@/lib/supabase-browser';
 
-type IntegrationType = 'telegram_bot' | 'telegram_userbot' | 'whatsapp' | 'instagram' | 'google_calendar' | 'kaspi';
+type IntegrationType = 'telegram_bot' | 'telegram_userbot' | 'whatsapp' | 'instagram' | 'kaspi';
 
 type IntegrationStatus = {
   telegram_bot?: { connected: boolean; bot_username?: string | null } | null;
   telegram_userbot?: { connected: boolean; phone?: string | null } | null;
   whatsapp?: { connected: boolean } | null;
   instagram?: { connected: boolean; username?: string | null; status?: string | null; token_expires_at?: string | null; message?: string | null } | null;
-  google_calendar?: { connected: boolean; status?: string | null; google_email?: string | null; needs_reauth?: boolean } | null;
   kaspi?: { connected: boolean; status?: string | null } | null;
 };
 
@@ -59,14 +58,6 @@ const INTEGRATIONS: Integration[] = [
     iconBg: 'bg-[color:var(--color-carbon)] border border-[color:var(--color-graphite)]',
     isOfficial: false,
     warning: 'Требует бизнес-аккаунт Instagram привязанный к Facebook. Используйте на свой страх и риск.',
-  },
-  {
-    id: 'google_calendar',
-    name: 'Google Calendar',
-    description: 'Проверяйте свободные слоты, создавайте и отменяйте встречи в Google Calendar этого агента без передачи ID модели.',
-    icon: '📅',
-    iconBg: 'bg-[color:var(--color-carbon)] border border-[color:var(--color-graphite)]',
-    isOfficial: true,
   },
   {
     id: 'kaspi',
@@ -132,7 +123,6 @@ export default function IntegrationsPage({ params }: { params: { agentId: string
               (integration.id === 'telegram_userbot' && connectedChannels.telegram_userbot?.connected) ||
               (integration.id === 'whatsapp' && connectedChannels.whatsapp?.connected) ||
               (integration.id === 'instagram' && connectedChannels.instagram?.connected) ||
-              (integration.id === 'google_calendar' && connectedChannels.google_calendar?.connected) ||
               (integration.id === 'kaspi' && Boolean(connectedChannels.kaspi?.connected))
             );
 
@@ -222,86 +212,8 @@ function IntegrationDetail({ type, agentId, connectedStatus, onBack, onStatusCha
         {type === 'telegram_userbot' && <TelegramUserbotForm agentId={agentId} />}
         {type === 'whatsapp' && <WhatsAppForm agentId={agentId} onStatusChanged={onStatusChanged} />}
         {type === 'instagram' && <InstagramForm agentId={agentId} />}
-        {type === 'google_calendar' && <GoogleCalendarForm agentId={agentId} connectedStatus={connectedStatus} onStatusChanged={onStatusChanged} />}
         {type === 'kaspi' && <KaspiPlaceholder />}
       </div>
-    </div>
-  );
-}
-
-function GoogleCalendarForm({ agentId, connectedStatus, onStatusChanged }: {
-  agentId: string;
-  connectedStatus: IntegrationStatus;
-  onStatusChanged: () => Promise<void>;
-}) {
-  const googleCalendar = connectedStatus.google_calendar;
-  const isConnected = Boolean(googleCalendar?.connected);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const connect = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      window.location.href = `/api/google-calendar/oauth/start?agentId=${encodeURIComponent(agentId)}`;
-    } catch {
-      setError('Не удалось начать подключение Google Calendar');
-      setLoading(false);
-    }
-  };
-
-  const disconnect = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await fetch('/api/google-calendar/disconnect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agentId }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data?.error ?? 'Ошибка отключения');
-      await onStatusChanged();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка отключения');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="space-y-4">
-      <div className="rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-4">
-        <p className="text-sm font-medium text-[color:var(--color-chalk)] mb-2">Подключение Google Calendar</p>
-        <p className="text-sm text-[color:var(--color-smoke)]">
-          После подключения агент сможет проверять слоты, создавать записи и отменять встречи в календаре этого агента.
-        </p>
-      </div>
-
-      {isConnected ? (
-        <div className="rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-4">
-          <p className="text-sm font-medium text-[color:var(--color-chalk)]">Календарь подключён</p>
-          <p className="text-xs text-[color:var(--color-smoke)] mt-1">{googleCalendar?.google_email ?? 'Google аккаунт привязан'}</p>
-          {googleCalendar?.needs_reauth && <p className="text-xs text-[color:var(--color-smoke)] mt-1">Требуется повторное подключение.</p>}
-          <button
-            onClick={disconnect}
-            disabled={loading}
-            className="mt-4 px-4 py-2 rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] text-[color:var(--color-chalk)] text-sm hover:border-[color:var(--color-ash)] disabled:opacity-50"
-          >
-            {loading ? '...' : 'Отключить'}
-          </button>
-        </div>
-      ) : (
-        <button
-          onClick={connect}
-          disabled={loading}
-          className="px-6 py-2.5 bg-[color:var(--color-obsidian)] border border-[color:var(--color-graphite)] text-[color:var(--color-chalk)] text-sm rounded-[var(--radius-cards)] hover:border-[color:var(--color-ash)] disabled:opacity-50"
-        >
-          {loading ? 'Подключаю...' : 'Подключить Google Calendar'}
-        </button>
-      )}
-
-      {error && <p className="text-xs text-[color:var(--color-smoke)]">{error}</p>}
     </div>
   );
 }

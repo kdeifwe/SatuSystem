@@ -64,7 +64,6 @@ export async function POST() {
         general_capabilities: {
           allowed_tools: defaultAllowedTools,
           kaspi_invoice_enabled: false,
-          google_calendar_enabled: false,
         },
       })
       .select('id')

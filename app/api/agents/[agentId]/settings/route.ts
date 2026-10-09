@@ -48,8 +48,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { agentId: s
   }
 
   if (
-    body.general_capabilities?.kaspi_invoice_enabled !== undefined ||
-    body.general_capabilities?.google_calendar_enabled !== undefined
+    body.general_capabilities?.kaspi_invoice_enabled !== undefined
   ) {
     try {
       await requireOwnerOrAdmin(supabase, user.id, existing.data.org_id);

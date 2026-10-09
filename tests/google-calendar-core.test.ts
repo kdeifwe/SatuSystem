@@ -1,33 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { encryptSecret, decryptSecret } from '../lib/server/crypto.ts';
-import { buildGoogleOAuthState, verifyGoogleOAuthState } from '../lib/server/google-oauth-state.ts';
 import { computeFreeSlots } from '../lib/google-calendar/slots.ts';
 import { buildToolDeclarationsForAgent } from '../lib/ai/tools/registry.ts';
 import { isSandboxToolAllowed } from '../lib/ai/tools/sandbox-allowlist.ts';
 import { buildSystemPrompt } from '../lib/ai/compile-system-prompt.ts';
-
-process.env.GOOGLE_TOKEN_ENCRYPTION_KEY = Buffer.from('0123456789abcdef0123456789abcdef').toString('base64');
-
-test('encrypt/decrypt roundtrip succeeds and wrong key fails', () => {
-  const original = 'refresh-token-abc';
-  const encrypted = encryptSecret(original);
-  assert.ok(encrypted.includes('v1:'));
-  assert.equal(decryptSecret(encrypted), original);
-
-  const saved = process.env.GOOGLE_TOKEN_ENCRYPTION_KEY;
-  process.env.GOOGLE_TOKEN_ENCRYPTION_KEY = Buffer.from('abcdef0123456789abcdef0123456789').toString('base64');
-  assert.throws(() => decryptSecret(encrypted), /decrypt|key/i);
-  process.env.GOOGLE_TOKEN_ENCRYPTION_KEY = saved;
-});
-
-test('google OAuth state validates signature and expiry', () => {
-  const secret = 'google-oauth-secret';
-  const state = buildGoogleOAuthState('agent-1', 'user-42', secret);
-  assert.equal(verifyGoogleOAuthState(state, 'agent-1', 'user-42', secret), true);
-  assert.equal(verifyGoogleOAuthState(`${state}x`, 'agent-1', 'user-42', secret), false);
-  assert.equal(verifyGoogleOAuthState(state, 'agent-1', 'other-user', secret), false);
-});
+import { CalendarNotConnectedError, getCalendarClientForAgent } from '../lib/google-calendar/client.ts';
 
 test('computeFreeSlots respects working hours, buffer, min_notice and day boundaries', () => {
   const slots = computeFreeSlots({
@@ -59,14 +36,32 @@ test('computeFreeSlots respects working hours, buffer, min_notice and day bounda
   assert.ok(slots.some((slot) => slot.start.includes('11:00')));
 });
 
-test('calendar tool declarations are gated by capability and sandbox blocks write tools', () => {
-  const originalClientId = process.env.GOOGLE_OAUTH_CLIENT_ID;
-  const originalClientSecret = process.env.GOOGLE_OAUTH_CLIENT_SECRET;
-  const originalKey = process.env.GOOGLE_TOKEN_ENCRYPTION_KEY;
+test('service-account client throws when calendar env is missing', () => {
+  const previousEmail = process.env.GOOGLE_SA_EMAIL;
+  const previousPrivateKey = process.env.GOOGLE_SA_PRIVATE_KEY;
+  const previousCalendarId = process.env.GOOGLE_CALENDAR_ID;
 
-  process.env.GOOGLE_OAUTH_CLIENT_ID = 'test-client-id';
-  process.env.GOOGLE_OAUTH_CLIENT_SECRET = 'test-client-secret';
-  process.env.GOOGLE_TOKEN_ENCRYPTION_KEY = Buffer.from('0123456789abcdef0123456789abcdef').toString('base64');
+  delete process.env.GOOGLE_SA_EMAIL;
+  delete process.env.GOOGLE_SA_PRIVATE_KEY;
+  delete process.env.GOOGLE_CALENDAR_ID;
+
+  try {
+    assert.rejects(() => getCalendarClientForAgent('agent-1'), CalendarNotConnectedError);
+  } finally {
+    if (previousEmail === undefined) delete process.env.GOOGLE_SA_EMAIL; else process.env.GOOGLE_SA_EMAIL = previousEmail;
+    if (previousPrivateKey === undefined) delete process.env.GOOGLE_SA_PRIVATE_KEY; else process.env.GOOGLE_SA_PRIVATE_KEY = previousPrivateKey;
+    if (previousCalendarId === undefined) delete process.env.GOOGLE_CALENDAR_ID; else process.env.GOOGLE_CALENDAR_ID = previousCalendarId;
+  }
+});
+
+test('calendar tool declarations are gated by capability and sandbox blocks write tools', () => {
+  const originalEmail = process.env.GOOGLE_SA_EMAIL;
+  const originalPrivateKey = process.env.GOOGLE_SA_PRIVATE_KEY;
+  const originalCalendarId = process.env.GOOGLE_CALENDAR_ID;
+
+  process.env.GOOGLE_SA_EMAIL = 'service-account@test.example';
+  process.env.GOOGLE_SA_PRIVATE_KEY = '-----BEGIN PRIVATE KEY-----\nTEST\n-----END PRIVATE KEY-----\n';
+  process.env.GOOGLE_CALENDAR_ID = 'primary';
 
   try {
     const hiddenWithoutFlag = buildToolDeclarationsForAgent(['checkCalendarAvailability', 'createCalendarEvent', 'cancelCalendarEvent'], { google_calendar_enabled: false }, null, []);
@@ -84,9 +79,9 @@ test('calendar tool declarations are gated by capability and sandbox blocks writ
     assert.equal(hiddenWhenEnabledWithoutAllowList.some((tool) => tool.name === 'createCalendarEvent'), false);
     assert.equal(hiddenWhenEnabledWithoutAllowList.some((tool) => tool.name === 'cancelCalendarEvent'), false);
   } finally {
-    if (originalClientId === undefined) delete process.env.GOOGLE_OAUTH_CLIENT_ID; else process.env.GOOGLE_OAUTH_CLIENT_ID = originalClientId;
-    if (originalClientSecret === undefined) delete process.env.GOOGLE_OAUTH_CLIENT_SECRET; else process.env.GOOGLE_OAUTH_CLIENT_SECRET = originalClientSecret;
-    if (originalKey === undefined) delete process.env.GOOGLE_TOKEN_ENCRYPTION_KEY; else process.env.GOOGLE_TOKEN_ENCRYPTION_KEY = originalKey;
+    if (originalEmail === undefined) delete process.env.GOOGLE_SA_EMAIL; else process.env.GOOGLE_SA_EMAIL = originalEmail;
+    if (originalPrivateKey === undefined) delete process.env.GOOGLE_SA_PRIVATE_KEY; else process.env.GOOGLE_SA_PRIVATE_KEY = originalPrivateKey;
+    if (originalCalendarId === undefined) delete process.env.GOOGLE_CALENDAR_ID; else process.env.GOOGLE_CALENDAR_ID = originalCalendarId;
   }
 
   assert.equal(isSandboxToolAllowed('checkCalendarAvailability'), true);
@@ -95,13 +90,13 @@ test('calendar tool declarations are gated by capability and sandbox blocks writ
 });
 
 test('prompt includes calendar safety policy only for enabled agents and preserves original prompt otherwise', () => {
-  const originalClientId = process.env.GOOGLE_OAUTH_CLIENT_ID;
-  const originalClientSecret = process.env.GOOGLE_OAUTH_CLIENT_SECRET;
-  const originalKey = process.env.GOOGLE_TOKEN_ENCRYPTION_KEY;
+  const originalEmail = process.env.GOOGLE_SA_EMAIL;
+  const originalPrivateKey = process.env.GOOGLE_SA_PRIVATE_KEY;
+  const originalCalendarId = process.env.GOOGLE_CALENDAR_ID;
 
-  process.env.GOOGLE_OAUTH_CLIENT_ID = 'test-client-id';
-  process.env.GOOGLE_OAUTH_CLIENT_SECRET = 'test-client-secret';
-  process.env.GOOGLE_TOKEN_ENCRYPTION_KEY = Buffer.from('0123456789abcdef0123456789abcdef').toString('base64');
+  process.env.GOOGLE_SA_EMAIL = 'service-account@test.example';
+  process.env.GOOGLE_SA_PRIVATE_KEY = '-----BEGIN PRIVATE KEY-----\nTEST\n-----END PRIVATE KEY-----\n';
+  process.env.GOOGLE_CALENDAR_ID = 'primary';
 
   try {
     const org = {
@@ -166,8 +161,8 @@ test('prompt includes calendar safety policy only for enabled agents and preserv
 
     assert.equal(disabledAgentPrompt, baselinePrompt);
   } finally {
-    if (originalClientId === undefined) delete process.env.GOOGLE_OAUTH_CLIENT_ID; else process.env.GOOGLE_OAUTH_CLIENT_ID = originalClientId;
-    if (originalClientSecret === undefined) delete process.env.GOOGLE_OAUTH_CLIENT_SECRET; else process.env.GOOGLE_OAUTH_CLIENT_SECRET = originalClientSecret;
-    if (originalKey === undefined) delete process.env.GOOGLE_TOKEN_ENCRYPTION_KEY; else process.env.GOOGLE_TOKEN_ENCRYPTION_KEY = originalKey;
+    if (originalEmail === undefined) delete process.env.GOOGLE_SA_EMAIL; else process.env.GOOGLE_SA_EMAIL = originalEmail;
+    if (originalPrivateKey === undefined) delete process.env.GOOGLE_SA_PRIVATE_KEY; else process.env.GOOGLE_SA_PRIVATE_KEY = originalPrivateKey;
+    if (originalCalendarId === undefined) delete process.env.GOOGLE_CALENDAR_ID; else process.env.GOOGLE_CALENDAR_ID = originalCalendarId;
   }
 });
