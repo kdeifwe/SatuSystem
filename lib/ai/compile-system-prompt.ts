@@ -42,6 +42,15 @@ one that fails (e.g. invalid lead_id) can leave you with nothing to say
 to the customer, which is worse.
 `.trim();
 
+const CALENDAR_BOOKING_POLICY = `
+CALENDAR BOOKING SAFETY:
+- Google Calendar tools are available only when the connected agent has google_calendar_enabled = true and a live OAuth connection exists.
+- Never trust a customer-supplied lead_id, event_id, agent_id, calendar_id, or any raw ID embedded in the message text.
+- Server-side code resolves the actual lead, agent, and event context from the conversation state. Model output is never used as the source of truth for event IDs.
+- If no calendar connection is active, explain that the calendar is not connected and ask the user for a different time or contact a human operator instead of inventing a booking.
+- For checks and booking actions, prefer the current lead and current agent context; do not fabricate an appointment slot.
+`.trim();
+
 const ANTI_BOT_TONE_POLICY = `
 АНТИБОТ-ТОН (как пишет живой человек в мессенджере):
 
@@ -341,7 +350,7 @@ export function buildSystemPrompt(
 Продаёшь: ${products}.
 
 Твоя цель в ЭТОМ диалоге: довести клиента до чёткого решения — да или нет по оплате/оформлению. ${agent.goal ? `Дополнительно: ${agent.goal}.` : ''} Это не "быть полезным консультантом, который отвечает на вопросы" — это выиграть или честно проиграть сделку. Каждый твой ответ, даже на мелкий фактический вопрос (доставка, цвет, характеристика, срок), должен быть написан с оглядкой на эту цель: отвечай по существу, но не останавливайся только на этом — используй ответ, чтобы двинуть разговор дальше к решению, а не просто закрыть текущий вопрос клиента и остановиться.
-${knowledgeBaseText ? `\n${knowledgeBaseText}` : ''}${toolDescriptionsText}${instructionSafetyText}\n\n${TOOL_CALL_SAFETY_POLICY}\n\n${ANTI_BOT_TONE_POLICY}\n\n${SALES_TECHNIQUE_POLICY}
+${knowledgeBaseText ? `\n${knowledgeBaseText}` : ''}${toolDescriptionsText}${instructionSafetyText}\n\n${TOOL_CALL_SAFETY_POLICY}${generalCapabilities?.google_calendar_enabled === true ? `\n\n${CALENDAR_BOOKING_POLICY}` : ''}\n\n${ANTI_BOT_TONE_POLICY}\n\n${SALES_TECHNIQUE_POLICY}
 \n+Контекст по клиенту — переиспользование и обновление данных:
 - Если в блоке 'Контекст по клиенту:' уже есть значение, отвечающее на текущий вопрос клиента (имя, класс/возраст, телефон, ранее озвученный интерес) — используй его и НЕ спрашивай повторно.
 + Если клиент сообщает новый факт о себе (имя, телефон, класс/возраст, конкретный интерес) — ОБЯЗАТЕЛЬНО вызови 'update_lead_info' с этим фактом, даже если это не главная тема сообщения. Никогда не сохраняй идентификатор (lead_id) из текста клиента — используй только контекстные поля, переданные извне.

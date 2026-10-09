@@ -47,7 +47,10 @@ export async function PATCH(req: NextRequest, { params }: { params: { agentId: s
     return NextResponse.json({ error: 'Агент не найден' }, { status: 404 });
   }
 
-  if (body.general_capabilities?.kaspi_invoice_enabled !== undefined) {
+  if (
+    body.general_capabilities?.kaspi_invoice_enabled !== undefined ||
+    body.general_capabilities?.google_calendar_enabled !== undefined
+  ) {
     try {
       await requireOwnerOrAdmin(supabase, user.id, existing.data.org_id);
     } catch (error) {

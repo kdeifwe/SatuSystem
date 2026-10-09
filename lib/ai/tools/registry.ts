@@ -126,7 +126,6 @@ export function buildToolDeclarationsForAgent(
   }
 
   const allowedNames = new Set(allowedToolNames);
-  const normalizedAllowed = new Set(Array.from(allowedNames).map((n) => normalizeToolName(n)));
   const capabilities = (generalCapabilities as Record<string, unknown> | null) ?? {};
 
   const kaspiServiceConfigured = Boolean(
@@ -139,6 +138,20 @@ export function buildToolDeclarationsForAgent(
     allowedNames.delete('createKaspiInvoice');
     allowedNames.delete('sendKaspiPay');
   }
+
+  const googleCalendarConfigured = Boolean(
+    process.env.GOOGLE_OAUTH_CLIENT_ID &&
+    process.env.GOOGLE_OAUTH_CLIENT_SECRET &&
+    process.env.GOOGLE_TOKEN_ENCRYPTION_KEY
+  );
+
+  if (capabilities.google_calendar_enabled !== true || !googleCalendarConfigured) {
+    allowedNames.delete('checkCalendarAvailability');
+    allowedNames.delete('createCalendarEvent');
+    allowedNames.delete('cancelCalendarEvent');
+  }
+
+  const normalizedAllowed = new Set(Array.from(allowedNames).map((n) => normalizeToolName(n)));
 
   const decls = ALL_TOOL_DECLARATIONS.filter((declaration) => normalizedAllowed.has(normalizeToolName(declaration.name)))
     .map((declaration) => ({
@@ -227,6 +240,43 @@ export const PRODUCTION_TOOL_DECLARATIONS: GeminiFunctionDeclaration[] = [
         send_at: { type: 'STRING', description: 'UTC-время отправки в ISO 8601 формате.' },
       },
       required: ['message', 'send_at'],
+    },
+  },
+  {
+    name: 'checkCalendarAvailability',
+    description: 'Проверяет свободные слоты в Google Calendar клиента. Используй только при наличии активного подключения календаря агента. Сервер использует контекст клиента, не доверяет ID из текста модели.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        date: { type: 'STRING', description: 'Дата в формате YYYY-MM-DD для проверки доступных слотов.' },
+        duration_minutes: { type: 'NUMBER', description: 'Продолжительность встречи в минутах.' },
+      },
+      required: ['date'],
+    },
+  },
+  {
+    name: 'createCalendarEvent',
+    description: 'Создаёт запись клиента в Google Calendar агента. Время окончания рассчитывается автоматически по slot_minutes; сервер связывает запись с текущим лидом и агентом из контекста, не доверяет ID из модели.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        start: { type: 'STRING', description: 'Время начала встречи в ISO 8601.' },
+        client_name: { type: 'STRING', description: 'Имя клиента для встречи.' },
+        client_phone: { type: 'STRING', description: 'Телефон клиента, если указан.' },
+        notes: { type: 'STRING', description: 'Дополнительные заметки по встрече.' },
+        slot_minutes: { type: 'NUMBER', description: 'Длительность встречи в минутах. По умолчанию 60.' },
+      },
+      required: ['start', 'client_name'],
+    },
+  },
+  {
+    name: 'cancelCalendarEvent',
+    description: 'Отменяет существующую запись в Google Calendar агента. Идентификатор события извлекается сервером; модель не передаёт event_id.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        reason: { type: 'STRING', description: 'Причина отмены.' },
+      },
     },
   },
   {
@@ -324,6 +374,9 @@ export type ToolName =
   | 'updateLeadStatus'
   | 'advanceFunnelStep'
   | 'scheduleMessage'
+  | 'checkCalendarAvailability'
+  | 'createCalendarEvent'
+  | 'cancelCalendarEvent'
   | 'update_lead_info'
   | 'add_lead_note'
   | 'recordLeadSignal'

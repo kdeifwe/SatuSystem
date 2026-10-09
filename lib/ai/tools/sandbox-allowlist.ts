@@ -5,6 +5,7 @@ const ALLOWED_IN_SANDBOX = new Set([
   'createKaspiInvoice',
   'sendKaspiPay',
   'redirectToOperator',
+  'checkCalendarAvailability',
 ]);
 
 export function isSandboxToolAllowed(toolName: string): boolean {
