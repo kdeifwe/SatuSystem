@@ -9,6 +9,8 @@ import { getLinkedKBChunks, searchKnowledgeBaseBilingual } from '../../knowledge
 import { normalizeFunnelFlow } from '../../funnel/normalize.ts';
 import { sendWhatsAppMedia } from '@/lib/channels/baileys-client';
 import { sendTelegramMedia } from '@/lib/channels/telegram-client';
+import { checkAvailability, createBooking, cancelBookingForLead } from '@/lib/google-calendar/bookings';
+import { CalendarNotConnectedError } from '@/lib/google-calendar/client';
 import type { FunnelFlow } from '../../funnel/types.ts';
 
 export interface ToolContext {
@@ -115,8 +117,76 @@ async function dispatch(call: ToolCall, ctx: ToolContext): Promise<unknown> {
       return sendCustomNotification(call.args as { message: string; target: string }, ctx);
     case 'scheduleMessage':
       return scheduleMessage(call.args as { message: string; send_at: string }, ctx);
+    case 'checkCalendarAvailability':
+      return checkCalendarAvailability(call.args as { date: string; duration_minutes?: number }, ctx);
+    case 'createCalendarEvent':
+      return createCalendarEvent(call.args as { start: string; client_name: string; client_phone?: string; notes?: string; slot_minutes?: number }, ctx);
+    case 'cancelCalendarEvent':
+      return cancelCalendarEvent(call.args as { reason?: string }, ctx);
     default:
       throw new Error(`Неизвестный инструмент: ${call.name}`);
+  }
+}
+
+async function checkCalendarAvailability(args: { date: string; duration_minutes?: number }, ctx: ToolContext) {
+  const date = String(args.date ?? '').trim();
+  if (!date) {
+    throw new Error('date обязателен для checkCalendarAvailability');
+  }
+
+  try {
+    return checkAvailability({
+      agentId: ctx.agentId,
+      date,
+      durationMinutes: Number(args.duration_minutes ?? 60),
+    });
+  } catch (error) {
+    if (error instanceof CalendarNotConnectedError) {
+      return { ok: false, reason: 'calendar_not_connected' };
+    }
+    throw error;
+  }
+}
+
+async function createCalendarEvent(args: { start: string; client_name: string; client_phone?: string; notes?: string; slot_minutes?: number }, ctx: ToolContext) {
+  if (!args.start || !args.client_name) {
+    throw new Error('start и client_name обязательны для createCalendarEvent');
+  }
+
+  const slotMinutes = Number(args.slot_minutes ?? 60);
+  const start = new Date(String(args.start));
+  const end = new Date(start.getTime() + (Number.isFinite(slotMinutes) ? slotMinutes : 60) * 60 * 1000).toISOString();
+
+  try {
+    return createBooking(ctx.agentId, {
+      start: start.toISOString(),
+      end,
+      summary: `Встреча с ${String(args.client_name)}`,
+      description: args.notes ? String(args.notes) : undefined,
+      leadId: resolveLeadIdForTool(undefined, ctx),
+      agentIdValue: ctx.agentId,
+      clientName: String(args.client_name),
+      clientPhone: args.client_phone ? String(args.client_phone) : undefined,
+      notes: args.notes ? String(args.notes) : undefined,
+      slotMinutes,
+    });
+  } catch (error) {
+    if (error instanceof CalendarNotConnectedError) {
+      return { ok: false, reason: 'calendar_not_connected' };
+    }
+    throw error;
+  }
+}
+
+async function cancelCalendarEvent(args: { reason?: string }, ctx: ToolContext) {
+  const reason = args.reason ? String(args.reason) : 'Отменено агентом';
+  try {
+    return cancelBookingForLead(ctx.agentId, ctx.leadId, reason);
+  } catch (error) {
+    if (error instanceof CalendarNotConnectedError) {
+      return { ok: false, reason: 'calendar_not_connected' };
+    }
+    throw error;
   }
 }
 
