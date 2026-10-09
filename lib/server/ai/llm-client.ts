@@ -16,6 +16,7 @@ export interface LLMRequest {
   maxTokens?: number;
   tools?: any[];
   jsonSchema?: Record<string, unknown>;
+  responseFormat?: 'json';
 }
 
 export interface LLMResponseToolCall {

@@ -53,7 +53,7 @@ function repairJsonText(candidate: string): string {
   return repaired;
 }
 
-function extractJSON(text: string): Record<string, any> {
+function extractJSON(text: string, finishReason?: string): Record<string, any> {
   let extractedText = text;
 
   // Удаляем markdown блоки (```json ... ``` или ``` ... ```)
@@ -144,7 +144,11 @@ function extractJSON(text: string): Record<string, any> {
     }
   }
 
-  console.error('[prompt-generator] extractJSON failed - no JSON object balanced');
+  console.error('[prompt-generator] extractJSON failed - no JSON object balanced', {
+    text,
+    textLength: text.length,
+    finishReason,
+  });
   throw new Error(`JSON не найден: ${text.slice(0, 200)}`);
 }
 
@@ -160,11 +164,12 @@ async function generateStructuredJson(
       messages: [{ role: 'user', content: prompt }],
       temperature: temp,
       maxTokens: maxOutputTokens,
+      responseFormat: 'json',
     });
     const text = resp.text ?? '';
 
     try {
-      return extractJSON(text);
+      return extractJSON(text, resp.finishReason);
     } catch (error) {
       const firstError = error instanceof Error ? error : new Error(String(error));
       const trimmedText = text.trim();
@@ -181,10 +186,11 @@ async function generateStructuredJson(
         messages: [{ role: 'user', content: retryPrompt }],
         temperature: 0.3,
         maxTokens: maxOutputTokens,
+        responseFormat: 'json',
       });
 
       try {
-        return extractJSON(retried.text ?? '');
+        return extractJSON(retried.text ?? '', retried.finishReason);
       } catch (retryError) {
         throw firstError;
       }

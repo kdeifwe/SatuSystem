@@ -15,19 +15,25 @@ function buildGeminiBody(request: LLMRequest): Record<string, unknown> {
       parts: [{ text: message.content }],
     }));
 
+  const generationConfig: Record<string, unknown> = {
+    temperature: request.temperature ?? 0.7,
+    topP: 0.9,
+    maxOutputTokens: request.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+    // Disable Gemini "thinking" by default for fast dialog responses.
+    // If you want thinking enabled later, adjust this value (e.g. 256).
+    thinkingConfig: {
+      thinkingBudget: 0,
+    },
+  };
+
+  if (request.responseFormat === 'json') {
+    generationConfig.responseMimeType = 'application/json';
+  }
+
   const body: Record<string, unknown> = {
     system_instruction: { parts: [{ text: systemText }] },
     contents,
-    generationConfig: {
-      temperature: request.temperature ?? 0.7,
-      topP: 0.9,
-      maxOutputTokens: request.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
-      // Disable Gemini "thinking" by default for fast dialog responses.
-      // If you want thinking enabled later, adjust this value (e.g. 256).
-      thinkingConfig: {
-        thinkingBudget: 0,
-      },
-    },
+    generationConfig,
   };
 
   if (Array.isArray(request.tools) && request.tools.length > 0) {
