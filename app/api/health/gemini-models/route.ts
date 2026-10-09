@@ -5,6 +5,7 @@ import {
   GEMINI_EMBEDDING_MODEL,
   listGeminiModels,
   isModelSupporting,
+  normalizeGeminiModelName,
 } from '@/lib/server/ai/gemini-client';
 
 type GeminiOperation = 'generateContent' | 'embedContent';
@@ -18,12 +19,17 @@ const requiredModels: { name: string; operation: GeminiOperation }[] = [
 export async function GET() {
   try {
     const models = await listGeminiModels();
-    const modelMap = new Map(models.map((model: any) => [model.name, model]));
+    const normalizedModels = models.map((model: any) => ({
+      ...model,
+      normalizedName: normalizeGeminiModelName(model.name),
+    }));
+    const modelMap = new Map(normalizedModels.map((model: any) => [model.normalizedName, model]));
 
     const checks = requiredModels.map((required) => {
-      const model = modelMap.get(required.name);
+      const normalizedRequiredName = normalizeGeminiModelName(required.name);
+      const model = modelMap.get(normalizedRequiredName);
       return {
-        name: required.name,
+        name: normalizedRequiredName,
         expectedOperation: required.operation,
         found: Boolean(model),
         supportsOperation: model ? isModelSupporting(model, required.operation) : false,
@@ -36,7 +42,10 @@ export async function GET() {
     return NextResponse.json({
       success: allOk,
       checks,
-      availableModels: models.map((model: any) => ({ name: model.name, supported: model.supportedMethods ?? model.supported_methods ?? [] })),
+      availableModels: normalizedModels.map((model: any) => ({
+        name: model.normalizedName,
+        supported: model.supportedMethods ?? model.supported_methods ?? [],
+      })),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

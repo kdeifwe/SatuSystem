@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/service';
+import { requireOwnerOrAdminApi } from '@/lib/server/require-auth';
 
 function isUuid(value: unknown): value is string {
   return typeof value === 'string' && /^[0-9a-fA-F-]{36}$/.test(value);
@@ -10,6 +11,9 @@ function isStringArray(value: unknown): value is string[] {
 }
 
 export async function POST(request: Request) {
+  const auth = await requireOwnerOrAdminApi();
+  if (!auth.ok) return auth.response;
+
   const supabase = createServiceClient();
 
   try {

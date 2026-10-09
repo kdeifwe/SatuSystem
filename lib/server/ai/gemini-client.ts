@@ -1,7 +1,18 @@
 export const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
-export const GEMINI_CHAT_MODEL = process.env.GEMINI_CHAT_MODEL ?? 'gemini-2.5-flash';
-export const GEMINI_PROMPT_MODEL = process.env.GEMINI_PROMPT_MODEL ?? 'gemini-2.5-flash';
-export const GEMINI_EMBEDDING_MODEL = process.env.GEMINI_EMBEDDING_MODEL ?? 'gemini-embedding-2';
+
+export function normalizeGeminiModelName(value: string | null | undefined): string {
+  if (typeof value !== 'string') return '';
+
+  return value
+    .trim()
+    .replace(/^['"]+|['"]+$/g, '')
+    .replace(/^models\//i, '')
+    .trim();
+}
+
+export const GEMINI_CHAT_MODEL = normalizeGeminiModelName(process.env.GEMINI_CHAT_MODEL ?? 'gemini-2.5-flash');
+export const GEMINI_PROMPT_MODEL = normalizeGeminiModelName(process.env.GEMINI_PROMPT_MODEL ?? 'gemini-2.5-flash');
+export const GEMINI_EMBEDDING_MODEL = normalizeGeminiModelName(process.env.GEMINI_EMBEDDING_MODEL ?? 'gemini-embedding-2');
 export const GEMINI_EMBEDDING_OUTPUT_DIMENSIONALITY = Number(process.env.GEMINI_EMBEDDING_OUTPUT_DIM ?? '768');
 
 export function extractGeminiUsageMetadata(body: any): { tokensInput: number; tokensOutput: number } {
@@ -60,7 +71,8 @@ export async function geminiFetch(
   body: object,
 ): Promise<Response> {
   const apiKey = getGeminiApiKey();
-  const url = `${GEMINI_API_BASE}/models/${model}:${endpoint}?key=${apiKey}`;
+  const normalizedModel = normalizeGeminiModelName(model);
+  const url = `${GEMINI_API_BASE}/models/${normalizedModel}:${endpoint}?key=${apiKey}`;
 
   // If operator requests forcing IPv4 resolution (diagnostic), prefer IPv4.
   if (process.env.FORCE_IPV4 === '1') {
@@ -108,9 +120,9 @@ export async function geminiFetch(
       }
 
       if (res.status === 404) {
-        const errorText = await res.text();
-        console.error(`[gemini-client] CRITICAL model not found: ${model} ${endpoint} - ${res.status} ${errorText}`);
-        throw new Error(`Gemini model not found: ${model}`);
+        const errorText = (await res.text()).trim();
+        console.error(`[gemini-client] CRITICAL model not found: ${normalizedModel} ${endpoint} - ${res.status} ${errorText}`);
+        throw new Error(`Gemini model not found: ${normalizedModel}${errorText ? ` - ${errorText}` : ''}`);
       }
 
       if (res.status === 429 || res.status === 503) {

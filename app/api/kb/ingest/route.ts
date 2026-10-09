@@ -1,6 +1,12 @@
 import { createAdminClient } from '@/lib/supabase/admin';
+import { requireOwnerOrAdminApi } from '@/lib/server/require-auth';
+
+export const maxDuration = 120;
 
 export async function POST(request: Request) {
+  const auth = await requireOwnerOrAdminApi();
+  if (!auth.ok) return auth.response;
+
   try {
     const { sourceId } = await request.json();
     if (!sourceId) return Response.json({ error: 'sourceId required' }, { status: 400 });
@@ -17,9 +23,12 @@ export async function POST(request: Request) {
       return Response.json({ error: 'source not found' }, { status: 404 });
     }
 
-    setImmediate(() =>
-      processSource(sourceId, source.agent_id, source.metadata?.use_ai !== false).catch((err: unknown) => console.error('[ingest] failed:', err))
-    );
+    try {
+      await processSource(sourceId, source.agent_id, source.metadata?.use_ai !== false);
+    } catch (err) {
+      console.error('[ingest] failed:', err);
+      return Response.json({ error: 'processing failed' }, { status: 500 });
+    }
 
     return Response.json({ ok: true });
   } catch (e: any) {

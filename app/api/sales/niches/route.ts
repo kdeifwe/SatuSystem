@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/service';
+import { requireOwnerOrAdminApi } from '@/lib/server/require-auth';
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
@@ -26,6 +27,9 @@ function parseTraits(value: unknown): Record<string, unknown> {
 }
 
 export async function GET() {
+  const auth = await requireOwnerOrAdminApi();
+  if (!auth.ok) return auth.response;
+
   const supabase = createServiceClient();
   const { data, error } = await supabase.from('niche_profiles').select('*').order('name', { ascending: true });
 
@@ -37,6 +41,9 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const auth = await requireOwnerOrAdminApi();
+  if (!auth.ok) return auth.response;
+
   const supabase = createServiceClient();
 
   try {

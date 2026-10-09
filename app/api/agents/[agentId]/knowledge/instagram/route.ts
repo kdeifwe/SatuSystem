@@ -1,7 +1,10 @@
 import { createAdminClient } from '@/lib/supabase/admin';
 import { parseInstagramProfileUrl, processInstagramSource } from '@/lib/server/knowledge/instagram';
+import { requireAgentAccess } from '@/lib/server/require-auth';
 
 export async function POST(request: Request, { params }: { params: { agentId: string } }) {
+  const auth = await requireAgentAccess(params.agentId);
+  if (!auth.ok) return auth.response;
   try {
     const body = await request.json().catch(() => ({}));
     const profileUrl = typeof body?.profileUrl === 'string'
@@ -10,7 +13,7 @@ export async function POST(request: Request, { params }: { params: { agentId: st
         ? body.username
         : '';
 
-    console.log('[KB] Instagram POST payload:', { agentId: params.agentId, profileUrl });
+    // Payload received; avoid logging potentially sensitive content.
 
     if (!profileUrl.trim()) {
       return Response.json({ error: 'profileUrl required' }, { status: 400 });

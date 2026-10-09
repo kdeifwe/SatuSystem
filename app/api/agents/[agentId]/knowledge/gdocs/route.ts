@@ -1,6 +1,9 @@
 import { createAdminClient } from '@/lib/supabase/admin';
+import { requireAgentAccess } from '@/lib/server/require-auth';
 
 export async function POST(request: Request, { params }: { params: { agentId: string } }) {
+  const auth = await requireAgentAccess(params.agentId);
+  if (!auth.ok) return auth.response;
   try {
     const { url } = await request.json();
 
@@ -56,11 +59,13 @@ export async function POST(request: Request, { params }: { params: { agentId: st
       return Response.json({ error: sourceError?.message || 'Не удалось создать источник' }, { status: 500 });
     }
 
-    setImmediate(() => {
-      import('@/lib/server/knowledge/processor')
-        .then(({ processSource }) => processSource(source.id, params.agentId, true).catch(console.error))
-        .catch(console.error);
-    });
+    try {
+      const { processSource } = await import('@/lib/server/knowledge/processor');
+      await processSource(source.id, params.agentId, true);
+    } catch (err) {
+      console.error('[gdocs] processing failed:', err);
+      return Response.json({ error: 'processing failed' }, { status: 500 });
+    }
 
     return Response.json({ sourceId: source.id, status: 'processing', type });
   } catch (e: any) {

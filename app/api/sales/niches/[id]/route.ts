@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/service';
+import { requireOwnerOrAdminApi } from '@/lib/server/require-auth';
 
 function isUuid(value: string): boolean {
   return /^[0-9a-fA-F-]{36}$/.test(value);
@@ -30,6 +31,9 @@ function parseTraits(value: unknown): Record<string, unknown> {
 }
 
 export async function GET(_request: Request, { params }: { params: { id: string } }) {
+  const auth = await requireOwnerOrAdminApi();
+  if (!auth.ok) return auth.response;
+
   const { id } = params;
 
   if (!isUuid(id)) {
@@ -51,6 +55,9 @@ export async function GET(_request: Request, { params }: { params: { id: string 
 }
 
 export async function PATCH(request: Request, { params }: { params: { id: string } }) {
+  const auth = await requireOwnerOrAdminApi();
+  if (!auth.ok) return auth.response;
+
   const { id } = params;
 
   if (!isUuid(id)) {
@@ -99,6 +106,9 @@ export async function PATCH(request: Request, { params }: { params: { id: string
 }
 
 export async function DELETE(_request: Request, { params }: { params: { id: string } }) {
+  const auth = await requireOwnerOrAdminApi();
+  if (!auth.ok) return auth.response;
+
   const { id } = params;
 
   if (!isUuid(id)) {

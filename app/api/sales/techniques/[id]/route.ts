@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/service';
+import { requireOwnerOrAdminApi } from '@/lib/server/require-auth';
 import { generateQueryEmbedding } from '@/lib/knowledge-base/embeddings';
 
 function isUuid(value: string): boolean {
@@ -28,6 +29,9 @@ function isExampleArray(value: unknown): value is Array<{ niche_slug: string; ex
 }
 
 export async function GET(_request: Request, { params }: { params: { id: string } }) {
+  const auth = await requireOwnerOrAdminApi();
+  if (!auth.ok) return auth.response;
+
   const { id } = params;
 
   if (!isUuid(id)) {
@@ -49,6 +53,9 @@ export async function GET(_request: Request, { params }: { params: { id: string 
 }
 
 export async function PATCH(request: Request, { params }: { params: { id: string } }) {
+  const auth = await requireOwnerOrAdminApi();
+  if (!auth.ok) return auth.response;
+
   const { id } = params;
 
   if (!isUuid(id)) {
@@ -126,6 +133,9 @@ export async function PATCH(request: Request, { params }: { params: { id: string
 }
 
 export async function DELETE(_request: Request, { params }: { params: { id: string } }) {
+  const auth = await requireOwnerOrAdminApi();
+  if (!auth.ok) return auth.response;
+
   const { id } = params;
 
   if (!isUuid(id)) {

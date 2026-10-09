@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { generateFunnelFromContext } from '@/lib/server/ai/generate-funnel';
+import { requireAgentAccess } from '@/lib/server/require-auth';
 
 export async function POST(
   req: NextRequest,
   { params }: { params: { agentId: string } },
 ) {
+  const auth = await requireAgentAccess(params.agentId);
+  if (!auth.ok) return auth.response;
+
   try {
     const body = await req.json();
     const steps = await generateFunnelFromContext(params.agentId, {

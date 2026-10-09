@@ -5,7 +5,7 @@ dotenv.config({ path: '.env.local' });
 const nextConfig = {
   reactStrictMode: true,
   experimental: {
-    serverComponentsExternalPackages: ['@whiskeysockets/baileys', 'whatsapp-rust-bridge'],
+    serverComponentsExternalPackages: ['@whiskeysockets/baileys'],
   },
   env: {
     NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL ?? '',

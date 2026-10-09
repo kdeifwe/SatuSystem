@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/service';
+import { requireOwnerOrAdminApi } from '@/lib/server/require-auth';
 import { generateQueryEmbedding } from '@/lib/knowledge-base/embeddings';
 
 function isUuid(value: string): boolean {
@@ -17,6 +18,9 @@ function isValidOutcome(value: unknown): value is 'lead_converted' | 'appointmen
 }
 
 export async function GET() {
+  const auth = await requireOwnerOrAdminApi();
+  if (!auth.ok) return auth.response;
+
   const supabase = createServiceClient();
   const { data, error } = await supabase
     .from('conversation_examples')
@@ -33,6 +37,9 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const auth = await requireOwnerOrAdminApi();
+  if (!auth.ok) return auth.response;
+
   const supabase = createServiceClient();
 
   try {

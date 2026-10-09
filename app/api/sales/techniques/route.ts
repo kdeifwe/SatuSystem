@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/service';
+import { requireOwnerOrAdminApi } from '@/lib/server/require-auth';
 import { generateQueryEmbedding } from '@/lib/knowledge-base/embeddings';
 
 function isStringArray(value: unknown): value is string[] {
@@ -24,6 +25,9 @@ function isExampleArray(value: unknown): value is Array<{ niche_slug: string; ex
 }
 
 export async function GET(request: Request) {
+  const auth = await requireOwnerOrAdminApi();
+  if (!auth.ok) return auth.response;
+
   const supabase = createServiceClient();
   const url = new URL(request.url);
   const niche = url.searchParams.get('niche');
@@ -44,6 +48,9 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const auth = await requireOwnerOrAdminApi();
+  if (!auth.ok) return auth.response;
+
   const supabase = createServiceClient();
 
   try {
