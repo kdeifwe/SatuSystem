@@ -45,7 +45,7 @@ export async function checkAvailability({
         timeMin: new Date(`${date}T00:00:00`).toISOString(),
         timeMax: new Date(`${date}T23:59:59`).toISOString(),
       },
-    } as any);
+    });
 
     const items = (response as any)?.data?.calendars?.primary?.busy ?? [];
     const busy: BusyInterval[] = (items ?? []).map((item: { start?: string | null; end?: string | null }) => ({
@@ -144,11 +144,11 @@ export async function cancelBookingForLead(agentId: string, leadId: string, reas
     const calendarApi = calendar({ version: 'v3', auth });
     const response = await calendarApi.events.list({
       calendarId: 'primary',
-      privateExtendedProperty: [`lead_id=${leadId}`],
+      privateExtendedProperty: [`lead_id=${leadId}`] as string[],
       maxResults: 20,
       singleEvents: true,
       orderBy: 'startTime',
-    } as any);
+    });
 
     const items = (response as any)?.data?.items ?? [];
     const event = items.find((item: { id?: string | null; extendedProperties?: { private?: Record<string, string | null> } | null }) => item.id && item.extendedProperties?.private?.lead_id === leadId) ?? items[0];

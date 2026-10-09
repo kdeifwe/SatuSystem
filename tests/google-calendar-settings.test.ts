@@ -1,17 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { googleCalendarSettingsSchema } from '../app/api/google-calendar/settings/route.ts';
+import fs from 'node:fs';
 
-test('googleCalendarSettingsSchema accepts enabled boolean and requires agentId', () => {
-  assert.deepEqual(googleCalendarSettingsSchema.parse({ agentId: 'agent-1', enabled: true }), {
-    agentId: 'agent-1',
-    enabled: true,
-  });
-
-  assert.deepEqual(googleCalendarSettingsSchema.parse({ agentId: 'agent-1' }), {
-    agentId: 'agent-1',
-  });
-
-  assert.throws(() => googleCalendarSettingsSchema.parse({ enabled: true }), /agentId/);
-  assert.throws(() => googleCalendarSettingsSchema.parse({ agentId: '' }), /agentId/);
+test('google calendar settings remain outside the v1 API surface', () => {
+  assert.equal(fs.existsSync('app/api/google-calendar/settings/route.ts'), false);
+  const dashboardPage = fs.readFileSync('app/dashboard/[agentId]/integrations/page.tsx', 'utf8');
+  assert.doesNotMatch(dashboardPage, /\/api\/google-calendar\/settings/);
 });

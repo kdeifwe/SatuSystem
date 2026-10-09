@@ -150,8 +150,8 @@ test('prompt includes calendar safety policy only for enabled agents and preserv
     assert.doesNotMatch(disabledAgentPrompt, /checkCalendarAvailability/);
 
     const baselinePrompt = buildSystemPrompt({
-      id: 'agent-2',
-      name: 'Baseline Agent',
+      id: 'agent-1',
+      name: 'Test Agent',
       role: 'assistant',
       goal: 'Sell',
       tone_of_voice: null,

@@ -10,6 +10,7 @@ import { normalizeFunnelFlow } from '../../funnel/normalize.ts';
 import { sendWhatsAppMedia } from '@/lib/channels/baileys-client';
 import { sendTelegramMedia } from '@/lib/channels/telegram-client';
 import { checkAvailability, createBooking, cancelBookingForLead } from '@/lib/google-calendar/bookings';
+import { CalendarNotConnectedError } from '@/lib/google-calendar/client';
 import type { FunnelFlow } from '../../funnel/types.ts';
 
 export interface ToolContext {
