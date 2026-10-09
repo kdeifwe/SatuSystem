@@ -1121,7 +1121,7 @@ async function callGemini(
   },
   retryCount = 0,
 ): Promise<GeminiClientResponse> {
-  const fallbackModel = 'gemini-2.5-flash';
+  const fallbackModel = GEMINI_CHAT_MODEL;
 
   async function execute(activeModel: string): Promise<GeminiClientResponse> {
     const messages = [
@@ -1248,7 +1248,7 @@ async function callGemini(
       throw err;
     }
 
-    console.warn('[GEMINI] Model deprecated/not found:', modelName, '— falling back to gemini-2.5-flash');
+    console.warn('[GEMINI] Model deprecated/not found:', modelName, '— falling back to', GEMINI_CHAT_MODEL);
     try {
       return await execute(fallbackModel);
     } catch (fallbackErr: any) {

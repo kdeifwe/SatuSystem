@@ -1,9 +1,9 @@
-import { geminiFetch } from '../gemini-client';
+import { GEMINI_CHAT_MODEL, geminiFetch } from '../gemini-client';
 import type { LLMRequest, LLMResponse, LLMProvider, LLMResponseToolCall } from '../llm-client';
 import { parseFinishReasonFromResponse } from '../llm-client';
 
 const DEFAULT_MAX_OUTPUT_TOKENS = 2048;
-const GEMINI_FALLBACK_MODEL = 'gemini-2.5-flash';
+const GEMINI_FALLBACK_MODEL = GEMINI_CHAT_MODEL;
 
 function buildGeminiBody(request: LLMRequest): Record<string, unknown> {
   const systemText = request.messages.find((message) => message.role === 'system')?.content ?? '';

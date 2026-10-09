@@ -1,3 +1,5 @@
+import { GEMINI_CHAT_MODEL } from './gemini-client';
+
 export interface AutoFilledFields {
   companyDescription: string;
   goal: string;
@@ -106,7 +108,7 @@ export async function autoFillFromKnowledgeBase(
 
   const prompt = buildAutoFillPrompt(combinedText);
 
-  const models = ['gemini-2.5-flash', 'gemini-2.5-pro'];
+  const models = [GEMINI_CHAT_MODEL, 'gemini-2.5-pro'];
   let lastError = '';
 
   for (const model of models) {

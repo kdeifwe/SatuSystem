@@ -5,8 +5,11 @@ import { Save } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 
-const DEFAULT_AGENT_MODEL = 'gemini-2.5-flash';
+const DEFAULT_AGENT_MODEL = 'gemini-3.8-flash';
 const ALLOWED_AGENT_MODELS = new Set([
+  'gemini-3.8-flash',
+  'gemini-3.5-flash-lite',
+  'gemini-3.5-flash',
   'gemini-2.5-flash',
   'gemini-2.5-flash-lite',
   'gemini-2.5-pro',
@@ -37,10 +40,9 @@ const modelGroups: Array<{
     label: 'Текст / диалог',
     description: 'Текстовые модели — для диалогов с клиентами в чате',
     options: [
-      { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash — быстрый, доступный, для большинства диалогов' },
-      { value: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite — дешёвый вариант для FAQ' },
-      { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro — мощный вариант для сложных задач' },
-      { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash — совместимый fallback' },
+      { value: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash — самый быстрый и современный вариант для диалогов' },
+      { value: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash-Lite — быстрый и дешёвый вариант для FAQ' },
+      { value: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash — оптимальный вариант для большинства задач' },
       { value: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash — быстрый и экономный вариант' },
       { value: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro — мощный вариант для сложных диалогов' },
       { value: 'gpt-5.4-mini', label: 'GPT-5.4 Mini — лёгкий и быстрый вариант от OpenAI' },
@@ -52,28 +54,28 @@ const modelGroups: Array<{
     key: 'images',
     label: 'Генерация изображений',
     description: 'Изображения — агент сможет присылать сгенерированные визуалы',
-    options: [{ value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash — доступна для текстовых сценариев' }],
+    options: [{ value: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash — доступна для текстовых сценариев' }],
   },
   {
     key: 'video',
     label: 'Генерация видео',
     description: 'Видео — для будущих модулей рекламных роликов',
-    options: [{ value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash — текстовые сценарии без видео', disabled: true }],
+    options: [{ value: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash — текстовые сценарии без видео', disabled: true }],
   },
   {
     key: 'voice',
     label: 'Голос',
     description: 'Голос — для звонков через модуль Голосовой агент',
-    options: [{ value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash — пока не используется для голосовых сценариев', disabled: true }],
+    options: [{ value: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash — пока не используется для голосовых сценариев', disabled: true }],
   },
   {
     key: 'legacy',
     label: 'Устаревшие / legacy',
     description: 'Устаревшие варианты — для уже существующих агентов, которые ещё используют их',
     options: [
-      { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash — legacy, для уже существующих агентов' },
-      { value: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite — legacy, для уже существующих агентов' },
-      { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro — legacy, для уже существующих агентов' },
+      { value: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash — современный вариант для уже существующих агентов' },
+      { value: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash-Lite — современный вариант для уже существующих агентов' },
+      { value: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash — совместимый вариант для уже существующих агентов' },
       { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash — совместимый fallback', disabled: false },
     ],
   },

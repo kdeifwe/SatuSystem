@@ -1,3 +1,5 @@
+import { GEMINI_CHAT_MODEL } from './gemini-client';
+
 export interface FunnelStepPayload {
   id: string;
   title: string;
@@ -86,7 +88,7 @@ export async function generateFunnelFromContext(
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY не задан');
 
-  const models = ['gemini-2.5-flash', 'gemini-2.5-pro'];
+  const models = [GEMINI_CHAT_MODEL, 'gemini-2.5-pro'];
   const prompt = buildGenerateFunnelPrompt(context);
 
   for (const model of models) {

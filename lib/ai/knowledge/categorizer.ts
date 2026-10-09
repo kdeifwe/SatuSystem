@@ -1,9 +1,10 @@
 import { buildCategoriesSummary, buildCategorizationPrompt, normalizeCategory, type KBCategory } from './categories.ts';
 import { llmClient, type LLMMessage } from '../../server/ai/llm-client.ts';
+import { GEMINI_CHAT_MODEL } from '../../server/ai/gemini-client.ts';
 import { createAdminClient } from '../../supabase/admin.ts';
 
 const BATCH_SIZE = 10;
-const GEMINI_MODEL = process.env.GEMINI_MODEL ?? process.env.GEMINI_PROMPT_MODEL ?? 'gemini-2.5-flash';
+const GEMINI_MODEL = process.env.GEMINI_MODEL ?? process.env.GEMINI_PROMPT_MODEL ?? GEMINI_CHAT_MODEL;
 
 export interface CategorizationResult {
   category: KBCategory;

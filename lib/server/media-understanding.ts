@@ -1,8 +1,8 @@
-import { geminiFetch } from '@/lib/server/ai/gemini-client';
+import { GEMINI_CHAT_MODEL, geminiFetch } from '@/lib/server/ai/gemini-client';
 
 export type MediaKind = 'audio' | 'image' | 'video';
 
-const GEMINI_MEDIA_MODEL = process.env.GEMINI_MEDIA_MODEL || 'gemini-2.5-flash';
+const GEMINI_MEDIA_MODEL = process.env.GEMINI_MEDIA_MODEL || GEMINI_CHAT_MODEL;
 // inlineData: лимит запроса ~20 МБ, base64 раздувает на ~33%
 const MAX_INLINE_BYTES = 14 * 1024 * 1024;
 

@@ -15,6 +15,19 @@ export const GEMINI_PROMPT_MODEL = normalizeGeminiModelName(process.env.GEMINI_P
 export const GEMINI_EMBEDDING_MODEL = normalizeGeminiModelName(process.env.GEMINI_EMBEDDING_MODEL ?? 'gemini-embedding-2');
 export const GEMINI_EMBEDDING_OUTPUT_DIMENSIONALITY = Number(process.env.GEMINI_EMBEDDING_OUTPUT_DIM ?? '768');
 
+export function resolveGeminiModel(model: string | null | undefined): string {
+  const resolvedModel = normalizeGeminiModelName(model);
+  if (!resolvedModel) return resolvedModel;
+
+  const isLegacyGemini = resolvedModel.startsWith('gemini-2.5') || resolvedModel.startsWith('gemini-2.0');
+  if (isLegacyGemini) {
+    console.warn(`[gemini-client] Replacing legacy Gemini model "${resolvedModel}" with "${GEMINI_CHAT_MODEL}"`);
+    return GEMINI_CHAT_MODEL;
+  }
+
+  return resolvedModel;
+}
+
 export function extractGeminiUsageMetadata(body: any): { tokensInput: number; tokensOutput: number } {
   const usage = body?.usageMetadata ?? {};
   return {
@@ -71,8 +84,8 @@ export async function geminiFetch(
   body: object,
 ): Promise<Response> {
   const apiKey = getGeminiApiKey();
-  const normalizedModel = normalizeGeminiModelName(model);
-  const url = `${GEMINI_API_BASE}/models/${normalizedModel}:${endpoint}?key=${apiKey}`;
+  const resolvedModel = resolveGeminiModel(model);
+  const url = `${GEMINI_API_BASE}/models/${resolvedModel}:${endpoint}?key=${apiKey}`;
 
   // If operator requests forcing IPv4 resolution (diagnostic), prefer IPv4.
   if (process.env.FORCE_IPV4 === '1') {
@@ -121,13 +134,13 @@ export async function geminiFetch(
 
       if (res.status === 404) {
         const errorText = (await res.text()).trim();
-        console.error(`[gemini-client] CRITICAL model not found: ${normalizedModel} ${endpoint} - ${res.status} ${errorText}`);
-        throw new Error(`Gemini model not found: ${normalizedModel}${errorText ? ` - ${errorText}` : ''}`);
+        console.error(`[gemini-client] CRITICAL model not found: ${resolvedModel} ${endpoint} - ${res.status} ${errorText}`);
+        throw new Error(`Gemini model not found: ${resolvedModel}${errorText ? ` - ${errorText}` : ''}`);
       }
 
       if (res.status === 429 || res.status === 503) {
         const delay = BASE_RETRY_DELAY_MS * Math.pow(2, attempt);
-        console.warn(`[gemini-client] ${model} attempt ${attempt + 1} failed with ${res.status}, retrying in ${delay}ms`);
+        console.warn(`[gemini-client] ${resolvedModel} attempt ${attempt + 1} failed with ${res.status}, retrying in ${delay}ms`);
         await new Promise((resolve) => setTimeout(resolve, delay));
         continue;
       }
@@ -151,7 +164,7 @@ export async function geminiFetch(
     }
   }
 
-  throw new Error(`Все модели Gemini недоступны по адресу: ${model}:${endpoint}. Попробуй через несколько минут.`);
+  throw new Error(`Все модели Gemini недоступны по адресу: ${resolvedModel}:${endpoint}. Попробуй через несколько минут.`);
 }
 
 export async function listGeminiModels(): Promise<any[]> {

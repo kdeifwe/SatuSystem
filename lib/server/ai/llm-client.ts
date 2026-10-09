@@ -1,3 +1,4 @@
+import { GEMINI_CHAT_MODEL } from './gemini-client';
 import { GeminiProvider } from './providers/gemini-provider';
 import { DeepSeekProvider } from './providers/deepseek-provider';
 import { OpenAIProvider } from './providers/openai-provider';
@@ -139,7 +140,7 @@ export class UnifiedLLMClient {
     if (providerName === 'openai' && isOpenAI) return requestedModel;
     if (providerName === 'groq' && (isGroqModel || isOpenAI)) return requestedModel;
 
-    if (providerName === 'gemini') return process.env.GEMINI_CHAT_MODEL ?? 'gemini-2.5-flash';
+    if (providerName === 'gemini') return process.env.GEMINI_CHAT_MODEL ?? GEMINI_CHAT_MODEL;
     if (providerName === 'deepseek') return process.env.PRIMARY_LLM_MODEL ?? 'deepseek-v4-flash';
     if (providerName === 'openai') return process.env.FALLBACK_LLM_MODEL ?? 'gpt-5.4-mini';
     if (providerName === 'groq') return 'llama-3.3-70b-versatile';

@@ -52,7 +52,7 @@ interface WizardState {
 }
 
 type Scenario = 'sales' | 'consultant' | 'support';
-type Model = 'gemini-3.5-flash' | 'gemini-2.5-flash' | 'gemini-2.5-pro';
+type Model = 'gemini-3.8-flash' | 'gemini-3.5-flash-lite' | 'gemini-3.5-flash';
 type Currency = 'KZT' | 'USD' | 'EUR' | 'RUB';
 type Timezone = 'Asia/Almaty' | 'Europe/Moscow' | 'UTC';
 type Tone = 'Формальный' | 'Дружелюбный' | 'Нейтральный';
@@ -96,7 +96,7 @@ const initialWizardState = (): WizardState => ({
     splitLongMessages: true,
   },
   advanced: {
-    model: 'gemini-2.5-flash' as Model,
+    model: 'gemini-3.8-flash' as Model,
     temperature: 0.4,
     topP: 0.9,
   },
@@ -1239,9 +1239,9 @@ export default function CreateAgentPage() {
                           onChange={(e) => updateAdvanced({ model: e.target.value as Model })}
                           className="w-full rounded-3xl border border-gray-300 bg-white px-4 py-3 text-gray-900"
                         >
+                          <option value="gemini-3.8-flash">gemini-3.8-flash</option>
+                          <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite</option>
                           <option value="gemini-3.5-flash">gemini-3.5-flash</option>
-                          <option value="gemini-2.5-flash">gemini-2.5-flash</option>
-                          <option value="gemini-2.5-pro">gemini-2.5-pro</option>
                         </select>
                       </div>
                       <div>
