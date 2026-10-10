@@ -16,6 +16,7 @@ import { tryBuildDeterministicFactAnswer } from '@/lib/server/ai/deterministic-f
 import { isValidLeadName } from '@/lib/server/lead-name';
 import { sanitizeAgentReply } from '@/lib/ai/response-sanitizer';
 import { buildStickyFactsContextMessage, buildStickyFactsFromChunks, type StickyFact } from '@/lib/server/ai/sticky-facts';
+import { normalizeGeminiContentsToLlmMessages } from '@/lib/server/ai/gemini-message-normalizer';
 
 const ORCHESTRATOR_BUILD_TAG =
   process.env.ORCHESTRATOR_BUILD_TAG ||
@@ -1126,12 +1127,7 @@ async function callGemini(
   async function execute(activeModel: string): Promise<GeminiClientResponse> {
     const messages = [
       { role: 'system', content: systemPrompt },
-      ...(contents.map((content) => ({
-        role: content.role === 'model' ? 'assistant' : (content.role as 'user' | 'assistant'),
-        content: Array.isArray(content.parts)
-          ? content.parts.map((part) => (typeof part?.text === 'string' ? part.text : '')).filter(Boolean).join('\n')
-          : '',
-      })) as any[]),
+      ...normalizeGeminiContentsToLlmMessages(contents),
     ];
 
     console.error('[FC-DEBUG] outgoing messages:', JSON.stringify(messages, null, 2));
