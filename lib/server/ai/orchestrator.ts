@@ -221,14 +221,15 @@ async function getCachedAgent(
   select: string,
 ) {
   const now = Date.now();
-  const cached = agentCache.get(agentId);
+  const key = `${agentId}:${select}`;
+  const cached = agentCache.get(key);
   if (cached && cached.expiresAt > now) {
     return cached.data;
   }
 
   const { data, error } = await admin.from('agents').select(select).eq('id', agentId).single();
   const resolvedData = error ? null : (data as unknown as Record<string, unknown> | null);
-  agentCache.set(agentId, { expiresAt: now + AGENT_CACHE_TTL_MS, data: resolvedData });
+  agentCache.set(key, { expiresAt: now + AGENT_CACHE_TTL_MS, data: resolvedData });
   return resolvedData;
 }
 
@@ -1510,12 +1511,14 @@ export async function runAgentTurnWithLead(
   history: ChatMessage[] = [],
   externalLeadId: string,
   userMessageId?: string,
-  options?: { preferRealLead?: boolean },
+  options?: { preferRealLead?: boolean; skipAssistantPersist?: boolean },
+  skipAssistantPersist?: boolean,
 ): Promise<AgentTurnResult> {
   const admin = createAdminClient();
   let resolvedLeadId: string | null = externalLeadId ?? null;
   let resolvedConversationId: string | null = null;
   let resolvedUserMessageId: string | undefined = userMessageId;
+  const effectiveSkipAssistantPersist = skipAssistantPersist ?? options?.skipAssistantPersist ?? false;
 
   if (resolvedLeadId) {
     const { data: lead } = await admin.from('leads').select('id').eq('id', resolvedLeadId).maybeSingle();
@@ -1564,7 +1567,16 @@ export async function runAgentTurnWithLead(
     }
   }
 
-  return runAgentTurn(agentId, systemPrompt, userMessage, history, resolvedLeadId ?? undefined, resolvedConversationId ?? undefined, resolvedUserMessageId);
+  return runAgentTurn(
+    agentId,
+    systemPrompt,
+    userMessage,
+    history,
+    resolvedLeadId ?? undefined,
+    resolvedConversationId ?? undefined,
+    resolvedUserMessageId,
+    effectiveSkipAssistantPersist,
+  );
 }
 
 const NUMBER_CLAIM_REGEX = /\d[\d\s]{1,7}(?:тг|₸|kzt|тенге|тыс|млн|см|мм|кг|г\b|шт|%|месяц\w*|дн\w*|дня|дней|лет|год\w*)/gi;
@@ -1615,6 +1627,7 @@ export async function runAgentTurn(
   leadId?: string,
   conversationId?: string,
   userMessageId?: string,
+  skipAssistantPersist = false,
 ): Promise<AgentTurnResult> {
   const admin = createAdminClient();
   const startTime = Date.now();
@@ -2472,7 +2485,7 @@ export async function runAgentTurn(
   }
   // === End Routing ===
 
-  if (conversationId && routingResult.shouldAppendMessage) {
+  if (conversationId && !skipAssistantPersist && (routingResult.shouldAppendMessage || finalAnswer.trim().length > 0)) {
     await appendMessage(admin, conversationId, 'ai', finalAnswer);
   }
 
