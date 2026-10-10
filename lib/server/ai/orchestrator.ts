@@ -1064,6 +1064,50 @@ export function getToolLoopStateForTest({
   };
 }
 
+export function buildToolDuplicateSkipMessage(toolName: string): string | null {
+  if (toolName === 'searchKnowledgeBase') {
+    return 'Результаты поиска уже получены выше. Не вызывай инструменты, ответь клиенту.';
+  }
+  return null;
+}
+
+export async function retryEmptyFinalAnswerWithoutTools({
+  agentId,
+  conversationId,
+  systemPrompt,
+  conversationContents,
+  userMessage,
+  callGeminiFn,
+}: {
+  agentId?: string;
+  conversationId?: string;
+  systemPrompt: string;
+  conversationContents: Array<Record<string, unknown>>;
+  userMessage: string;
+  callGeminiFn: (modelName: string, systemPrompt: string, contents: Array<Record<string, unknown>>, tools: Array<Record<string, unknown>>) => Promise<GeminiClientResponse>;
+}): Promise<{ finalAnswer: string; retryAttempted: boolean; response?: GeminiClientResponse; currentParts?: Array<Record<string, unknown>> }> {
+  const retryInstruction = `Ответь клиенту на его последнее сообщение на его языке. Не используй инструменты и не говори о внутренних рассуждениях. Ответь коротко, по существу, обычным текстом. Содержание сообщения клиента: "${userMessage}"`;
+  const retryContents = [...conversationContents, { role: 'user', parts: [{ text: retryInstruction }] }];
+  const retryResponse = await callGeminiFn(GEMINI_CHAT_MODEL, systemPrompt, retryContents, []);
+  const retryParts = normalizeLlmResponseParts(retryResponse);
+  const retryText = sanitizeAgentReply(extractTextFromParts(retryParts) || ((retryResponse as any).text ?? ''));
+
+  console.warn('[PROD] empty reply retry without tools', {
+    agentId,
+    conversationId,
+    userMessage,
+    replyText: retryText,
+    toolsSent: 0,
+  });
+
+  return {
+    finalAnswer: retryText,
+    retryAttempted: true,
+    response: retryResponse,
+    currentParts: retryParts,
+  };
+}
+
 function serializeMessagesForSummary(messages: Array<{ role: 'user' | 'model'; text: string }>) {
   return messages
     .map((message) => `${message.role === 'user' ? 'Клиент' : 'Агент'}: ${message.text}`)
@@ -1991,6 +2035,7 @@ export async function runAgentTurn(
   let iterations = 0;
   let toolsUsed: string[] = [];
   const toolUsageCounts: Record<string, number> = {};
+  const accumulatedToolHistory: Array<Record<string, unknown>> = [];
 
   while (iterations < MAX_TOOL_ROUNDS && toolCalls.length > 0) {
     iterations += 1;
@@ -2004,6 +2049,18 @@ export async function runAgentTurn(
 
       const policy = getToolExecutionPolicy(toolCall.name, toolUsageCounts);
       if (!policy.shouldExecute) {
+        const duplicateMessage = buildToolDuplicateSkipMessage(toolCall.name);
+        if (duplicateMessage) {
+          finalAnswer = duplicateMessage;
+          currentParts = [{ text: duplicateMessage }];
+          toolCalls = [];
+          toolResults.push({
+            name: toolCall.name,
+            result: { skipped: true, reason: policy.reason },
+          });
+          break;
+        }
+
         toolResults.push({
           name: toolCall.name,
           result: { skipped: true, reason: policy.reason },
@@ -2103,9 +2160,16 @@ export async function runAgentTurn(
       functionResponseParts,
     });
 
+    const callRoundParts = toolCalls.map((call) => ({ functionCall: { name: call.name, args: call.args } }));
+    accumulatedToolHistory.push(
+      { role: 'model', parts: callRoundParts },
+      { role: 'user', parts: functionResponseParts },
+    );
+
     const followUpHistory = [
       ...conversationContents,
       { role: 'user', parts: [{ text: userMessage }] },
+      ...accumulatedToolHistory,
       { role: 'model', parts: currentParts ?? [] },
       { role: 'user', parts: functionResponseParts },
     ];
@@ -2152,7 +2216,7 @@ export async function runAgentTurn(
     if (!finalAnswer.trim()) {
       finalAnswer = buildToolFailureFallbackMessage([
         { name: 'tool_loop_guard', result: null, error: 'tool loop limit reached' },
-      ]) ?? getEmptyResponseFallbackMessage();
+      ]) ?? '';
     }
   }
 
@@ -2160,25 +2224,24 @@ export async function runAgentTurn(
 
   if (!finalAnswer.trim() && !handoffTriggered) {
     emptyReplyRetryAttempted = true;
-    console.warn('[PROD] empty reply returned by Gemini, retrying once', { agentId, conversationId, userMessage });
+    console.warn('[PROD] empty reply returned by Gemini, retrying once without tools', { agentId, conversationId, userMessage });
     try {
-      const retryResponse = await callGemini(
-        GEMINI_CHAT_MODEL,
-        fullSystemPrompt,
-        [
-          ...conversationContents,
-          { role: 'user', parts: [{ text: userMessage }] },
-        ],
-        toolPayload,
-      );
-      const retryParts = normalizeLlmResponseParts(retryResponse);
-      const retryText = sanitizeAgentReply(extractTextFromParts(retryParts) || ((retryResponse as any).text ?? ''));
-      if (retryText.trim()) {
-        response = retryResponse;
-        currentParts = retryParts;
-        finalAnswer = retryText;
-        tokensInput += retryResponse.payload.usageMetadata?.promptTokenCount ?? 0;
-        tokensOutput += retryResponse.payload.usageMetadata?.candidatesTokenCount ?? 0;
+      const retryResult = await retryEmptyFinalAnswerWithoutTools({
+        agentId,
+        conversationId,
+        systemPrompt: fullSystemPrompt,
+        conversationContents,
+        userMessage,
+        callGeminiFn: async (modelName, retrySystemPrompt, retryContents, retryTools) => callGemini(modelName, retrySystemPrompt, retryContents, retryTools),
+      });
+      if (retryResult.finalAnswer.trim()) {
+        if (retryResult.response) {
+          response = retryResult.response;
+          tokensInput += retryResult.response.payload.usageMetadata?.promptTokenCount ?? 0;
+          tokensOutput += retryResult.response.payload.usageMetadata?.candidatesTokenCount ?? 0;
+        }
+        currentParts = retryResult.currentParts ?? [];
+        finalAnswer = retryResult.finalAnswer;
       }
     } catch (retryErr) {
       console.warn('[PROD] empty-reply retry failed', { agentId, conversationId, userMessage, error: retryErr instanceof Error ? retryErr.message : String(retryErr) });

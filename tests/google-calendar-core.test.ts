@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { computeFreeSlots } from '../lib/google-calendar/slots.ts';
@@ -6,7 +6,7 @@ import { buildToolDeclarationsForAgent } from '../lib/ai/tools/registry.ts';
 import { isSandboxToolAllowed } from '../lib/ai/tools/sandbox-allowlist.ts';
 import { buildSystemPrompt } from '../lib/ai/compile-system-prompt.ts';
 import { CalendarNotConnectedError, getCalendarClientForAgent } from '../lib/google-calendar/client.ts';
-import { MAX_TOOL_ROUNDS, getToolLoopStateForTest } from '../lib/server/ai/orchestrator.ts';
+import { MAX_TOOL_ROUNDS, getToolLoopStateForTest, retryEmptyFinalAnswerWithoutTools } from '../lib/server/ai/orchestrator.ts';
 
 function buildCalendarFallbackForTest(toolResults: Array<Record<string, unknown>>) {
   const failedResults = toolResults.filter((result) => Boolean(result.error));
@@ -231,4 +231,43 @@ test('tool loop allows up to five rounds and logs leftover tool calls without si
   const stateBeforeLimit = getToolLoopStateForTest({ iterations: 2, toolCalls: [{ name: 'searchKnowledgeBase', args: { query: 'цены' } }] });
   assert.equal(stateBeforeLimit.shouldContinue, true);
   assert.equal(stateBeforeLimit.shouldLogLeftover, false);
+});
+
+test('empty final answer retries without tools after a blank KB search round and returns the model text to the client', async () => {
+  const callGemini = mock.fn(async (_modelName: string, _systemPrompt: string, contents: Array<Record<string, unknown>>, tools: Array<Record<string, unknown>>) => {
+    const lastMessage = String((contents.at(-1)?.parts?.[0] as { text?: string } | undefined)?.text ?? '');
+    assert.equal(Array.isArray(tools), true, 'no-tools retry should call Gemini with no tool declarations');
+    assert.equal(tools.length, 0, 'retry path must turn tool calling off');
+    assert.match(lastMessage, /Ответь клиенту на его последнее сообщение на его языке/i, 'retry prompt should tell Gemini to answer the client in their language');
+
+    return {
+      text: 'Здравствуйте! Чтобы записать вас, уточните удобное время, услугу, имя и телефон.',
+      provider: 'gemini',
+      usage: {
+        promptTokens: 12,
+        completionTokens: 7,
+        totalTokens: 19,
+      },
+      toolCalls: [],
+      finishReason: 'STOP',
+      payload: {
+        parts: [{ text: 'Здравствуйте! Чтобы записать вас, уточните удобное время, услугу, имя и телефон.' }],
+        finishReason: 'STOP',
+        usageMetadata: { promptTokenCount: 12, candidatesTokenCount: 7 },
+      },
+    };
+  });
+
+  const result = await retryEmptyFinalAnswerWithoutTools({
+    agentId: 'agent-1',
+    conversationId: 'conversation-1',
+    systemPrompt: 'Ты агент',
+    conversationContents: [{ role: 'user', parts: [{ text: 'ия болады' }] }],
+    userMessage: 'ия болады',
+    callGeminiFn: callGemini as any,
+  });
+
+  assert.equal(result.finalAnswer, 'Здравствуйте! Чтобы записать вас, уточните удобное время, услугу, имя и телефон.');
+  assert.equal(result.retryAttempted, true);
+  assert.equal(callGemini.mock.callCount(), 1, 'no-tools retry should be invoked once');
 });
