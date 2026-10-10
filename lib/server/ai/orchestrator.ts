@@ -1147,7 +1147,7 @@ async function callGemini(
     const hasLlmText = typeof llmResponse.text === 'string' && llmResponse.text.trim().length > 0;
     const hasLlmToolCalls = Array.isArray(llmResponse.toolCalls) && llmResponse.toolCalls.length > 0;
     if (!hasLlmText && !hasLlmToolCalls) {
-      const fallbackModel = process.env.FALLBACK_LLM_MODEL ?? 'gpt-5.4-mini';
+      const fallbackModel = process.env.PRIMARY_LLM_MODEL ?? GEMINI_CHAT_MODEL;
       const isAlreadyFallback = activeModel === fallbackModel;
       if (isAlreadyFallback) {
         console.warn('[LLM] fallback model returned empty response; stopping recursive fallback', {
