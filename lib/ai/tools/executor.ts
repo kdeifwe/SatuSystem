@@ -40,10 +40,7 @@ export async function executeTool(call: ToolCall, context: ToolContext): Promise
 
 async function dispatch(call: ToolCall, ctx: ToolContext): Promise<unknown> {
   if (ctx.isSandbox && !isSandboxToolAllowed(call.name)) {
-    return {
-      sandbox_blocked: true,
-      message: `Инструмент ${call.name} недоступен в режиме тестирования`,
-    };
+    throw new Error('sandbox: запись отключена');
   }
 
   if (!ctx.isSandbox) {

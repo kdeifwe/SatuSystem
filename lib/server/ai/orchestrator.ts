@@ -156,6 +156,23 @@ export function buildToolFailureFallbackMessage(toolResults: Array<Record<string
       .map((result) => (typeof result.name === 'string' ? result.name : ''))
       .filter(Boolean);
 
+    const calendarBookingFailed = failedToolNames.includes('createCalendarEvent')
+      || toolResults.some((result) => {
+        const name = typeof result.name === 'string' ? result.name : '';
+        if (name !== 'createCalendarEvent') return false;
+        const payload = result.result;
+        if (payload && typeof payload === 'object') {
+          const ok = (payload as { ok?: unknown }).ok;
+          const eventId = (payload as { eventId?: unknown }).eventId;
+          return ok !== true || typeof eventId !== 'string' || eventId.trim().length === 0;
+        }
+        return true;
+      });
+
+    if (calendarBookingFailed) {
+      return 'не удалось записать, передаю администратору';
+    }
+
     const succeededCriticalNames = toolResults
       .filter((result) => !result.error)
       .map((result) => (typeof result.name === 'string' ? result.name : ''))
@@ -1979,6 +1996,31 @@ export async function runAgentTurn(
       if (toolResult.error) {
         console.warn('[PROD_TOOL_ERROR]', { agentId, name: toolCall.name, error: toolResult.error });
         // Не прерываем цикл: модель может ответить из CORE_KNOWLEDGE или дать естественный follow-up.
+      }
+
+      const isCalendarBookingFailure = toolCall.name === 'createCalendarEvent' && (
+        toolResult.error !== undefined ||
+        toolResult.result === null ||
+        (toolResult.result && typeof toolResult.result === 'object' && (
+          (toolResult.result as { ok?: unknown }).ok !== true ||
+          typeof (toolResult.result as { eventId?: unknown }).eventId !== 'string' ||
+          (toolResult.result as { eventId?: string }).eventId?.trim().length === 0
+        ))
+      );
+
+      if (isCalendarBookingFailure) {
+        const redirectOutcome = await executeRedirectToOperator(
+          admin,
+          agentId,
+          leadId ?? null,
+          conversationId ?? null,
+          'Не удалось записать клиента в календарь',
+          handoffConfig,
+        );
+        finalAnswer = 'не удалось записать, передаю администратору';
+        handoffMessage = redirectOutcome.handoffMessage;
+        handoffTriggered = true;
+        break;
       }
 
       if (toolCall.name === 'redirectToOperator' && toolResult.result) {

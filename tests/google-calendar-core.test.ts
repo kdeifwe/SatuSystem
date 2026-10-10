@@ -1,10 +1,37 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+
 import { computeFreeSlots } from '../lib/google-calendar/slots.ts';
 import { buildToolDeclarationsForAgent } from '../lib/ai/tools/registry.ts';
 import { isSandboxToolAllowed } from '../lib/ai/tools/sandbox-allowlist.ts';
 import { buildSystemPrompt } from '../lib/ai/compile-system-prompt.ts';
 import { CalendarNotConnectedError, getCalendarClientForAgent } from '../lib/google-calendar/client.ts';
+
+function buildCalendarFallbackForTest(toolResults: Array<Record<string, unknown>>) {
+  const failedResults = toolResults.filter((result) => Boolean(result.error));
+  const failedToolNames = failedResults
+    .map((result) => (typeof result.name === 'string' ? result.name : ''))
+    .filter(Boolean);
+
+  const calendarBookingFailed = failedToolNames.includes('createCalendarEvent')
+    || toolResults.some((result) => {
+      const name = typeof result.name === 'string' ? result.name : '';
+      if (name !== 'createCalendarEvent') return false;
+      const payload = result.result;
+      if (payload && typeof payload === 'object') {
+        const ok = (payload as { ok?: unknown }).ok;
+        const eventId = (payload as { eventId?: unknown }).eventId;
+        return ok !== true || typeof eventId !== 'string' || eventId.trim().length === 0;
+      }
+      return true;
+    });
+
+  if (calendarBookingFailed) {
+    return 'не удалось записать, передаю администратору';
+  }
+
+  return null;
+}
 
 test('computeFreeSlots respects working hours, buffer, min_notice and day boundaries', () => {
   const slots = computeFreeSlots({
@@ -124,6 +151,8 @@ test('prompt includes calendar safety policy only for enabled agents and preserv
 
     assert.match(enabledAgentPrompt, /Google Calendar tools are available only when/);
     assert.match(enabledAgentPrompt, /checkCalendarAvailability/);
+    assert.match(enabledAgentPrompt, /Подтверждать запись клиенту.*createCalendarEvent/i);
+    assert.match(enabledAgentPrompt, /не удалось записать, передаю администратору/i);
 
     const disabledAgentPrompt = buildSystemPrompt({
       id: 'agent-1',
@@ -165,4 +194,28 @@ test('prompt includes calendar safety policy only for enabled agents and preserv
     if (originalPrivateKey === undefined) delete process.env.GOOGLE_SA_PRIVATE_KEY; else process.env.GOOGLE_SA_PRIVATE_KEY = originalPrivateKey;
     if (originalCalendarId === undefined) delete process.env.GOOGLE_CALENDAR_ID; else process.env.GOOGLE_CALENDAR_ID = originalCalendarId;
   }
+});
+
+test('sandbox blocks calendar write tools with explicit error and allows them only when flag is set', () => {
+  const previousFlag = process.env.SANDBOX_ALLOW_CALENDAR_WRITE;
+
+  try {
+    delete process.env.SANDBOX_ALLOW_CALENDAR_WRITE;
+    assert.equal(isSandboxToolAllowed('createCalendarEvent'), false);
+    assert.equal(isSandboxToolAllowed('cancelCalendarEvent'), false);
+
+    process.env.SANDBOX_ALLOW_CALENDAR_WRITE = 'true';
+    assert.equal(isSandboxToolAllowed('createCalendarEvent'), true);
+    assert.equal(isSandboxToolAllowed('cancelCalendarEvent'), true);
+  } finally {
+    if (previousFlag === undefined) delete process.env.SANDBOX_ALLOW_CALENDAR_WRITE; else process.env.SANDBOX_ALLOW_CALENDAR_WRITE = previousFlag;
+  }
+});
+
+test('calendar booking failure fallback explicitly tells the user it could not book and passes to operator', () => {
+  const fallback = buildCalendarFallbackForTest([
+    { name: 'createCalendarEvent', result: null, error: 'sandbox: запись отключена' },
+  ]);
+
+  assert.equal(fallback, 'не удалось записать, передаю администратору');
 });
