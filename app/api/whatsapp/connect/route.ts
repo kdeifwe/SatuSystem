@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient as createUserClient } from '@/lib/supabase/server';
-import { getBaileysClient } from '@/lib/channels/baileys-client';
+import { getBaileysClient, getBaileysStatus } from '@/lib/channels/baileys-client';
 import { waitForBaileysStatus } from '@/lib/channels/baileys-status-wait';
 
 export async function POST(req: NextRequest) {
@@ -18,7 +18,14 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const clientEntry = await getBaileysClient(agentId);
+    const status = await getBaileysStatus(agentId).catch(() => ({ status: 'disconnected' } as any));
+    let clientEntry: any;
+    if (status.status === 'connected') {
+      // if already connected, avoid creating a new auth/socket
+      clientEntry = (await import('@/lib/channels/baileys-client')).peekBaileysClient(agentId) ?? { status: 'connected' };
+    } else {
+      clientEntry = await getBaileysClient(agentId, { forceNewAuth: true });
+    }
     const finalStatus = await waitForBaileysStatus(
       () => clientEntry.status,
       ['qr', 'connected', 'error'],

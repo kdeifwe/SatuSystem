@@ -9,8 +9,15 @@ export async function discoverPersistedAuthAgentIds(authRoot: string): Promise<s
         .filter((entry) => entry.isDirectory())
         .map(async (entry) => {
           const dirPath = path.join(authRoot, entry.name);
-          const contents = await fs.readdir(dirPath);
-          return contents.length > 0 ? entry.name : null;
+          const credsPath = path.join(dirPath, 'creds.json');
+          try {
+            const raw = await fs.readFile(credsPath, 'utf8');
+            const parsed = JSON.parse(raw);
+            if (parsed && parsed.registered === true) return entry.name;
+          } catch (err) {
+            // ignore missing/invalid creds
+          }
+          return null;
         })
     );
 

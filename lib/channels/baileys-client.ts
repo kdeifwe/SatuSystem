@@ -36,6 +36,7 @@ interface BaileysClientEntry extends BaileysClientInfo {
   lastReconnectAt?: number;
   lastDisconnectTime?: number;
   reconnectTimer?: ReturnType<typeof setTimeout>;
+  everConnected?: boolean;
 }
 
 declare global {
@@ -308,6 +309,7 @@ async function createBaileysClient(agentId: string, forceNewAuth = false) {
           clientEntry.reconnectTimer = undefined;
         }
         clientEntry.status = 'connected';
+        clientEntry.everConnected = true;
         clientEntry.jid = sock.user?.id;
         clientEntry.qrDataUrl = undefined;
         clientEntry.lastError = undefined;
@@ -319,6 +321,11 @@ async function createBaileysClient(agentId: string, forceNewAuth = false) {
       }
 
       if (update.connection === 'close') {
+        try {
+          console.log(JSON.stringify({ tag: 'WA_CLOSE', agentId, statusCode: (update.lastDisconnect?.error as any)?.output?.statusCode, reason: update.lastDisconnect?.error?.message }));
+        } catch (e) {
+          // ignore logging failures
+        }
         const statusCode = (update.lastDisconnect?.error as any)?.output?.statusCode;
         const isLoggedOut = statusCode === DisconnectReason.loggedOut;
 
@@ -389,11 +396,37 @@ async function createBaileysClient(agentId: string, forceNewAuth = false) {
 }
 
 export async function getBaileysClient(agentId: string, options?: { forceNewAuth?: boolean }) {
-  if (!clientStore.has(agentId) || options?.forceNewAuth) {
-    await createBaileysClient(agentId, options?.forceNewAuth ?? false);
+  const existing = clientStore.get(agentId);
+
+  if (existing && !options?.forceNewAuth) {
+    // If the existing entry is in a disconnected/error state and there's no active reconnect timer,
+    // treat it as stale: try to close and recreate.
+    if ((existing.status === 'disconnected' || existing.status === 'error') && !existing.reconnectTimer) {
+      try {
+        const logoutHandler = (existing.sock as typeof existing.sock & { logout?: () => Promise<void> }).logout;
+        if (typeof logoutHandler === 'function') {
+          await logoutHandler.call(existing.sock);
+        } else if ((existing.sock as any)?.ws?.close) {
+          try { (existing.sock as any).ws.close(); } catch (e) { /* ignore */ }
+        }
+      } catch (err) {
+        logger.warn({ agentId, err }, 'Failed to close stale Baileys socket');
+      }
+
+      clientStore.delete(agentId);
+      clientInitLocks.delete(agentId);
+    } else {
+      return existing;
+    }
   }
 
+  await createBaileysClient(agentId, options?.forceNewAuth ?? false);
+
   return clientStore.get(agentId)!;
+}
+
+export function peekBaileysClient(agentId: string): BaileysClientEntry | undefined {
+  return clientStore.get(agentId);
 }
 
 export async function sendWhatsAppText(agentId: string, remoteJid: string, content: string) {
@@ -491,4 +524,6 @@ export async function getBaileysStatus(agentId: string): Promise<BaileysClientIn
   }
 }
 
-void restorePersistedWhatsAppSessions();
+if (process.env.WHATSAPP_RESTORE_ENABLED === 'true') {
+  void restorePersistedWhatsAppSessions();
+}

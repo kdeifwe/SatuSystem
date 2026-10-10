@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { enqueueNotification } from '@/lib/notifications';
-import { getBaileysClient } from '@/lib/channels/baileys-client';
+import { peekBaileysClient } from '@/lib/channels/baileys-client';
 
 const AUTH_HEADER = 'authorization';
 const DISCONNECT_THRESHOLD_SECONDS = 60; // Only alert if disconnected for >60 seconds
@@ -40,10 +40,17 @@ export async function GET(req: NextRequest) {
 
     for (const agent of agents) {
       try {
-        // Get the client to check current status
-        const clientEntry = await getBaileysClient(agent.id).catch(() => null);
+        // Peek without creating sockets; cron must not create clients
+        const clientEntry = peekBaileysClient(agent.id);
 
-        if (!clientEntry || clientEntry.status !== 'disconnected') {
+        // Skip agents without a client record or that never connected
+        if (!clientEntry || !clientEntry.everConnected) {
+          results.checked += 1;
+          continue;
+        }
+
+        // Only alert for disconnected or error states
+        if (clientEntry.status !== 'disconnected' && clientEntry.status !== 'error') {
           results.checked += 1;
           continue;
         }
@@ -55,7 +62,7 @@ export async function GET(req: NextRequest) {
           continue;
         }
 
-        // Send notification after sustained disconnect
+        // Send notification after sustained disconnect (only for agents that were ever connected)
         const notified = await enqueueNotification('channel_down', null, agent.id, {
           channel_type: 'whatsapp',
           channel_name: agent.name || 'WhatsApp',
@@ -63,9 +70,7 @@ export async function GET(req: NextRequest) {
           time: new Date().toISOString(),
         });
 
-        if (notified) {
-          results.notified += 1;
-        }
+        if (notified) results.notified += 1;
         results.checked += 1;
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
