@@ -2022,15 +2022,22 @@ export async function runAgentTurn(
     }));
     console.log('[PROD_TOOL_FOLLOWUP]', { agentId, toolResults, functionResponseParts });
 
+    const followUpHistory = [
+      ...conversationContents,
+      { role: 'user', parts: [{ text: userMessage }] },
+      { role: 'model', parts: currentParts ?? [] },
+      { role: 'user', parts: functionResponseParts },
+    ];
+    console.warn('[GEMINI_ROLE_TRACE] before tool follow-up', {
+      roles: followUpHistory.map((entry) => entry.role),
+      userMessage,
+      currentToolResults: toolResults.map((result) => result.name),
+    });
+
     const followUpResponse = await callGemini(
       GEMINI_CHAT_MODEL,
       fullSystemPrompt,
-      [
-        ...conversationContents,
-        { role: 'user', parts: [{ text: userMessage }] },
-        { role: 'model', parts: currentParts ?? [] },
-        { role: 'user', parts: functionResponseParts },
-      ],
+      followUpHistory,
       toolPayload,
     );
 

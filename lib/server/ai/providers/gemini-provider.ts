@@ -5,29 +5,38 @@ import { parseFinishReasonFromResponse } from '../llm-client';
 const DEFAULT_MAX_OUTPUT_TOKENS = 2048;
 const GEMINI_FALLBACK_MODEL = GEMINI_CHAT_MODEL;
 
+type GeminiHistoryEntry = {
+  role: 'user' | 'model' | 'assistant' | 'system';
+  parts: Array<{ text?: string }>;
+};
+
 export function normalizeGeminiContentsForHistory(
-  contents: Array<{ role: 'user' | 'model'; parts: Array<{ text?: string }> }>,
+  contents: GeminiHistoryEntry[],
 ): Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> {
-  const normalized = contents.map((content) => ({
-    role: content.role,
-    parts: Array.isArray(content.parts)
-      ? content.parts
-          .map((part) => ({ text: typeof part?.text === 'string' ? part.text : '' }))
-          .filter((part) => part.text.length > 0)
-      : [{ text: '' }],
-  }));
+  const normalized: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = contents
+    .filter((content) => content.role !== 'system')
+    .map((content) => {
+      const role: 'user' | 'model' = content.role === 'assistant'
+        ? 'model'
+        : content.role === 'user'
+          ? 'user'
+          : 'model';
 
-  if (normalized.length === 0) {
-    return normalized;
-  }
+      return {
+        role,
+        parts: Array.isArray(content.parts)
+          ? content.parts
+              .map((part) => ({ text: typeof part?.text === 'string' ? part.text : '' }))
+              .filter((part) => part.text.length > 0)
+          : [{ text: '' }],
+      };
+    });
 
-  let lastIndex = normalized.length - 1;
-  while (lastIndex >= 0 && normalized[lastIndex].role === 'model') {
-    normalized[lastIndex] = {
-      ...normalized[lastIndex],
-      role: 'user',
-    };
-    lastIndex -= 1;
+  const trailingRole = normalized[normalized.length - 1]?.role;
+  if (trailingRole === 'model') {
+    console.warn('[GEMINI_ROLE_TRACE] trailing model turn before Gemini request; warning only, original role order is preserved.', {
+      roles: normalized.map((content) => content.role),
+    });
   }
 
   return normalized;
@@ -180,6 +189,15 @@ export class GeminiProvider implements LLMProvider {
   async generate(request: LLMRequest): Promise<LLMResponse> {
     const model = request.model || GEMINI_FALLBACK_MODEL;
     const body = buildGeminiBody(request);
+    const requestRoles = request.messages.map((message) => message.role);
+    const contentRoles = Array.isArray(body.contents)
+      ? (body.contents as Array<{ role?: string }>).map((content) => content.role ?? 'unknown')
+      : [];
+    console.warn('[GEMINI_ROLE_TRACE] before generateContent', {
+      requestRoles,
+      contentRoles,
+      userMessage: request.messages.filter((message) => message.role === 'user').at(-1)?.content ?? null,
+    });
 
     let response: Response;
     try {
