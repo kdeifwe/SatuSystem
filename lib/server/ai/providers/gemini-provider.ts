@@ -5,15 +5,46 @@ import { parseFinishReasonFromResponse } from '../llm-client';
 const DEFAULT_MAX_OUTPUT_TOKENS = 2048;
 const GEMINI_FALLBACK_MODEL = GEMINI_CHAT_MODEL;
 
+export function normalizeGeminiContentsForHistory(
+  contents: Array<{ role: 'user' | 'model'; parts: Array<{ text?: string }> }>,
+): Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> {
+  const normalized = contents.map((content) => ({
+    role: content.role,
+    parts: Array.isArray(content.parts)
+      ? content.parts
+          .map((part) => ({ text: typeof part?.text === 'string' ? part.text : '' }))
+          .filter((part) => part.text.length > 0)
+      : [{ text: '' }],
+  }));
+
+  if (normalized.length === 0) {
+    return normalized;
+  }
+
+  let lastIndex = normalized.length - 1;
+  while (lastIndex >= 0 && normalized[lastIndex].role === 'model') {
+    normalized[lastIndex] = {
+      ...normalized[lastIndex],
+      role: 'user',
+    };
+    lastIndex -= 1;
+  }
+
+  return normalized;
+}
+
 function buildGeminiBody(request: LLMRequest): Record<string, unknown> {
   const systemText = request.messages.find((message) => message.role === 'system')?.content ?? '';
-  const contents = request.messages
-    .filter((message) => message.role !== 'system')
-    .map((message) => ({
-      // Gemini accepts roles 'user' and 'model' — map assistant -> model
-      role: message.role === 'assistant' ? 'model' : message.role,
-      parts: [{ text: message.content }],
-    }));
+  const contents = normalizeGeminiContentsForHistory(
+    request.messages
+      .filter((message) => message.role !== 'system')
+      .map((message) => ({
+        // Gemini accepts roles 'user' and 'model' — map assistant -> model,
+        // but the final item must never be a model turn.
+        role: message.role === 'assistant' ? 'model' : message.role,
+        parts: [{ text: message.content }],
+      })),
+  );
 
   const generationConfig: Record<string, unknown> = {
     temperature: request.temperature ?? 0.7,
