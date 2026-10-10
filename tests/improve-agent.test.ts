@@ -116,6 +116,68 @@ test('Gemini mock returns valid improve result from JSON mode', async () => {
   }
 });
 
+test('retries once on empty Gemini response and then accepts valid JSON', async () => {
+  const originalGenerate = llmClient.generate.bind(llmClient);
+  const validation = {
+    root_cause: 'Prompt lacks budget question',
+    weak_sections: ['lead qualification'],
+    specific_fixes_needed: ['ask about budget'],
+    severity: 'major',
+  };
+
+  let attempt = 0;
+  llmClient.generate = async (request: any) => {
+    attempt += 1;
+    if (attempt === 1) {
+      return {
+        text: '',
+        provider: 'gemini',
+        usage: { promptTokens: 120, completionTokens: 0, totalTokens: 120 },
+        finishReason: 'MAX_TOKENS',
+        rawResponse: {
+          promptFeedback: { blockReason: 'SAFETY' },
+          candidates: [{ finishReason: 'MAX_TOKENS', safetyRatings: [{ category: 'HARM_CATEGORY_SEXUAL' }] }],
+        },
+      };
+    }
+
+    return {
+      text: '```json\n' + JSON.stringify(validation) + '\n```',
+      provider: 'gemini',
+      usage: { promptTokens: 120, completionTokens: 25, totalTokens: 145 },
+      finishReason: 'STOP',
+      rawResponse: {
+        candidates: [{
+          finishReason: 'STOP',
+          content: { parts: [{ text: '```json\n' + JSON.stringify(validation) + '\n```' }] },
+        }],
+      },
+    };
+  };
+
+  try {
+    const result = await callGeminiForImproveWithRetry(
+      'You are a critic',
+      'Improve this prompt',
+      0.7,
+      buildGeminiObjectSchema({
+        root_cause: { type: 'string' },
+        weak_sections: { type: 'array', items: { type: 'string' } },
+        specific_fixes_needed: { type: 'array', items: { type: 'string' } },
+        severity: { type: 'string' },
+      }, ['root_cause', 'weak_sections', 'specific_fixes_needed', 'severity']),
+      { phase: 'critic' },
+      (obj) => !!obj && typeof (obj as Record<string, unknown>).root_cause === 'string',
+      2
+    );
+
+    assert.equal(attempt, 2);
+    assert.deepEqual(result.parsedJson, validation);
+  } finally {
+    llmClient.generate = originalGenerate;
+  }
+});
+
 test('applies valid prompt patches sequentially', () => {
   const currentPrompt = 'Ты агент.\n\nПРАВИЛА:\n- Будь вежлив.\n\nСЕКЦИЯ: продажа';
   const patches = [

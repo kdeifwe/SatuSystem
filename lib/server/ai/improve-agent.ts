@@ -422,9 +422,8 @@ export async function callGeminiForImprove(
         { role: 'user', content: prompt },
       ],
       temperature,
-      maxTokens: 32768,
+      maxTokens: 8192,
       responseFormat: 'json',
-      jsonSchema: responseSchema ?? undefined,
     });
 
     fullRawResponse = llmResponse.rawResponse ?? llmResponse;
@@ -451,23 +450,42 @@ export async function callGeminiForImprove(
       responseSchema: Boolean(responseSchema),
     };
 
-    if (text.trim().length > 0) {
+    if (!text || text.trim().length === 0) {
+      const finishReason = fullRawResponse?.candidates?.[0]?.finishReason ?? fullRawResponse?.finishReason ?? null;
+      const promptFeedback = fullRawResponse?.promptFeedback ?? null;
+      const blockReason = promptFeedback?.blockReason ?? null;
+      const safetyRatings = fullRawResponse?.candidates?.[0]?.safetyRatings ?? promptFeedback?.safetyRatings ?? null;
+      const rawResponseSnapshot = typeof fullRawResponse === 'string'
+        ? fullRawResponse.slice(0, 1500)
+        : JSON.stringify(fullRawResponse ?? null).slice(0, 1500);
+
+      console.warn('[improve] Empty Gemini response', {
+        phase: options.phase,
+        attempt: options.attempt ?? null,
+        finishReason,
+        promptFeedback,
+        blockReason,
+        safetyRatings,
+        rawResponse: rawResponseSnapshot,
+      });
+
+      logContext.error = 'Gemini returned empty text';
       await logImproveCall(options.admin ?? null, logContext);
-      return {
-        text,
-        metadata: {
-          model,
-          finishReason: llmResponse.finishReason,
-          promptTokenCount: tokensInput,
-          candidatesTokenCount: tokensOutput,
-        },
-        rawResponse: fullRawResponse,
-        parsedJson: null,
-      };
+      throw new Error(`Gemini returned empty text (finishReason=${String(finishReason ?? 'unknown')}, blockReason=${String(blockReason ?? 'unknown')})`);
     }
 
-    logContext.error = 'Gemini returned empty text';
     await logImproveCall(options.admin ?? null, logContext);
+    return {
+      text,
+      metadata: {
+        model,
+        finishReason: llmResponse.finishReason,
+        promptTokenCount: tokensInput,
+        candidatesTokenCount: tokensOutput,
+      },
+      rawResponse: fullRawResponse,
+      parsedJson: null,
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error('[improve] Gemini error:', message);
@@ -485,9 +503,8 @@ export async function callGeminiForImprove(
       responseSchema: Boolean(responseSchema),
       attempt: options.attempt ?? null,
     });
+    throw error;
   }
-
-  throw new Error('Gemini did not return a valid response');
 }
 
 export async function callGeminiForImproveWithRetry(
@@ -505,8 +522,10 @@ export async function callGeminiForImproveWithRetry(
   maxAttempts = 3
 ): Promise<{ parsedJson: Record<string, unknown>; geminiResponse: GeminiResponse; attempt: number }> {
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const requestTemperature = attempt === 2 && temperature !== 0.3 ? 0.3 : temperature;
+
     try {
-      const res = await callGeminiForImprove(systemInstruction, prompt, temperature, responseSchema, {
+      const res = await callGeminiForImprove(systemInstruction, prompt, requestTemperature, responseSchema, {
         admin: options.admin ?? null,
         agentId: options.agentId,
         feedback: options.feedback,
@@ -576,6 +595,14 @@ export async function callGeminiForImproveWithRetry(
 
       return { parsedJson: parsed as Record<string, unknown>, geminiResponse: res, attempt };
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (/empty text|empty response/i.test(message)) {
+        console.warn('[improve] Empty Gemini response retry', {
+          phase: options.phase,
+          attempt,
+          message,
+        });
+      }
       if (attempt >= maxAttempts) throw err;
     }
   }
