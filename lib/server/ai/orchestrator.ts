@@ -1125,7 +1125,7 @@ async function callGemini(
   const fallbackModel = GEMINI_CHAT_MODEL;
 
   async function execute(activeModel: string): Promise<GeminiClientResponse> {
-    const messages = [
+    const messages: import('./llm-client').LLMMessage[] = [
       { role: 'system', content: systemPrompt },
       ...normalizeGeminiContentsToLlmMessages(contents),
     ];
