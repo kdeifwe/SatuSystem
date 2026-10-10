@@ -1071,6 +1071,26 @@ export function buildToolDuplicateSkipMessage(toolName: string): string | null {
   return null;
 }
 
+export function shouldRetryWithoutToolsForFinalTurn({
+  toolCalls,
+  finalAnswer,
+  handoffTriggered,
+}: {
+  toolCalls: Array<{ name: string; args: Record<string, unknown> }>;
+  finalAnswer: string;
+  handoffTriggered: boolean;
+}) {
+  if (handoffTriggered) {
+    return false;
+  }
+
+  if (!finalAnswer.trim()) {
+    return true;
+  }
+
+  return toolCalls.some((call) => call.name === 'searchKnowledgeBase');
+}
+
 export async function retryEmptyFinalAnswerWithoutTools({
   agentId,
   conversationId,
@@ -2050,20 +2070,12 @@ export async function runAgentTurn(
       const policy = getToolExecutionPolicy(toolCall.name, toolUsageCounts);
       if (!policy.shouldExecute) {
         const duplicateMessage = buildToolDuplicateSkipMessage(toolCall.name);
-        if (duplicateMessage) {
-          finalAnswer = duplicateMessage;
-          currentParts = [{ text: duplicateMessage }];
-          toolCalls = [];
-          toolResults.push({
-            name: toolCall.name,
-            result: { skipped: true, reason: policy.reason },
-          });
-          break;
-        }
-
         toolResults.push({
           name: toolCall.name,
-          result: { skipped: true, reason: policy.reason },
+          result: {
+            skipped: true,
+            reason: duplicateMessage ?? policy.reason,
+          },
         });
         continue;
       }
@@ -2170,8 +2182,6 @@ export async function runAgentTurn(
       ...conversationContents,
       { role: 'user', parts: [{ text: userMessage }] },
       ...accumulatedToolHistory,
-      { role: 'model', parts: currentParts ?? [] },
-      { role: 'user', parts: functionResponseParts },
     ];
     console.warn('[GEMINI_ROLE_TRACE] before tool follow-up', {
       roles: followUpHistory.map((entry) => entry.role),
@@ -2222,9 +2232,19 @@ export async function runAgentTurn(
 
   let emptyReplyRetryAttempted = false;
 
-  if (!finalAnswer.trim() && !handoffTriggered) {
+  if (shouldRetryWithoutToolsForFinalTurn({
+    toolCalls,
+    finalAnswer,
+    handoffTriggered,
+  }) && !handoffTriggered) {
     emptyReplyRetryAttempted = true;
-    console.warn('[PROD] empty reply returned by Gemini, retrying once without tools', { agentId, conversationId, userMessage });
+    console.warn('[PROD] retrying once without tools after duplicate / empty outcome', {
+      agentId,
+      conversationId,
+      userMessage,
+      toolCalls: toolCalls.map((call) => ({ name: call.name, args: call.args })),
+      finalAnswer,
+    });
     try {
       const retryResult = await retryEmptyFinalAnswerWithoutTools({
         agentId,
@@ -2242,9 +2262,10 @@ export async function runAgentTurn(
         }
         currentParts = retryResult.currentParts ?? [];
         finalAnswer = retryResult.finalAnswer;
+        toolCalls = [];
       }
     } catch (retryErr) {
-      console.warn('[PROD] empty-reply retry failed', { agentId, conversationId, userMessage, error: retryErr instanceof Error ? retryErr.message : String(retryErr) });
+      console.warn('[PROD] no-tools retry failed', { agentId, conversationId, userMessage, error: retryErr instanceof Error ? retryErr.message : String(retryErr) });
     }
   }
 

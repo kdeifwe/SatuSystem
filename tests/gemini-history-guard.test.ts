@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { normalizeGeminiContentsForHistory } from '../lib/server/ai/providers/gemini-provider.ts';
 import { normalizeGeminiContentsToLlmMessages } from '../lib/server/ai/gemini-message-normalizer.ts';
-import { buildToolDuplicateSkipMessage, retryEmptyFinalAnswerWithoutTools } from '../lib/server/ai/orchestrator.ts';
+import { buildToolDuplicateSkipMessage, retryEmptyFinalAnswerWithoutTools, shouldRetryWithoutToolsForFinalTurn } from '../lib/server/ai/orchestrator.ts';
 
 test('Gemini history warns on trailing model turns without mutating the original order', () => {
   const contents = normalizeGeminiContentsForHistory([
@@ -55,6 +55,25 @@ test('duplicate searchKnowledgeBase skip returns the exact no-tools re-answer in
   assert.equal(
     buildToolDuplicateSkipMessage('searchKnowledgeBase'),
     'Результаты поиска уже получены выше. Не вызывай инструменты, ответь клиенту.',
+  );
+});
+
+test('duplicate search requests trigger a final no-tools retry without exposing the duplicate message to the client', () => {
+  assert.equal(
+    shouldRetryWithoutToolsForFinalTurn({
+      toolCalls: [{ name: 'searchKnowledgeBase', args: { query: 'цены' } }],
+      finalAnswer: '',
+      handoffTriggered: false,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldRetryWithoutToolsForFinalTurn({
+      toolCalls: [{ name: 'searchKnowledgeBase', args: { query: 'цены' } }],
+      finalAnswer: 'Текст для клиента',
+      handoffTriggered: false,
+    }),
+    true,
   );
 });
 
