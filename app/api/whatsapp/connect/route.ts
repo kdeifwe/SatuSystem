@@ -18,13 +18,27 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    const shouldReset = Boolean(body?.reset === true);
+    const credsPath = require('node:path').join(process.cwd(), 'baileys-auth', agentId, 'creds.json');
+    let persistedAuthRegistered = false;
+
+    try {
+      const credsRaw = await require('node:fs/promises').readFile(credsPath, 'utf8');
+      const creds = JSON.parse(credsRaw || '{}');
+      persistedAuthRegistered = Boolean(creds?.registered === true);
+    } catch {
+      persistedAuthRegistered = false;
+    }
+
+    const forceNewAuth = shouldReset || !persistedAuthRegistered;
+
     const status = await getBaileysStatus(agentId).catch(() => ({ status: 'disconnected' } as any));
     let clientEntry: any;
     if (status.status === 'connected') {
       // if already connected, avoid creating a new auth/socket
       clientEntry = (await import('@/lib/channels/baileys-client')).peekBaileysClient(agentId) ?? { status: 'connected' };
     } else {
-      clientEntry = await getBaileysClient(agentId, { forceNewAuth: true });
+      clientEntry = await getBaileysClient(agentId, { forceNewAuth });
     }
     const finalStatus = await waitForBaileysStatus(
       () => clientEntry.status,

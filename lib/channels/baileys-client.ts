@@ -124,6 +124,22 @@ async function clearAuthState(agentId: string) {
   }
 }
 
+function detachSocketListeners(sock: ReturnType<typeof makeWASocket> | undefined) {
+  if (!sock) return;
+
+  try {
+    sock.ev.removeAllListeners('connection.update');
+  } catch (error) {
+    logger.warn({ error }, 'Failed to remove connection.update listeners from stale Baileys socket');
+  }
+
+  try {
+    sock.ev.removeAllListeners('messages.upsert');
+  } catch (error) {
+    logger.warn({ error }, 'Failed to remove messages.upsert listeners from stale Baileys socket');
+  }
+}
+
 export async function disconnectBaileysClient(agentId: string): Promise<BaileysClientInfo> {
   const inFlightInit = clientInitLocks.get(agentId);
   if (inFlightInit) {
@@ -291,6 +307,10 @@ async function createBaileysClient(agentId: string, forceNewAuth = false) {
     clientStore.set(agentId, clientEntry);
 
     sock.ev.on('connection.update', async (update) => {
+      if (clientStore.get(agentId)?.sock !== sock) {
+        return;
+      }
+
       if (update.qr) {
         if (clientEntry.reconnectTimer) {
           clearTimeout(clientEntry.reconnectTimer);
@@ -321,13 +341,10 @@ async function createBaileysClient(agentId: string, forceNewAuth = false) {
       }
 
       if (update.connection === 'close') {
-        try {
-          console.log(JSON.stringify({ tag: 'WA_CLOSE', agentId, statusCode: (update.lastDisconnect?.error as any)?.output?.statusCode, reason: update.lastDisconnect?.error?.message }));
-        } catch (e) {
-          // ignore logging failures
-        }
         const statusCode = (update.lastDisconnect?.error as any)?.output?.statusCode;
         const isLoggedOut = statusCode === DisconnectReason.loggedOut;
+        const isReplaced = statusCode === DisconnectReason.connectionReplaced || statusCode === 440;
+        console.log(JSON.stringify({ tag: 'WA_CLOSE', agentId, statusCode, reason: update.lastDisconnect?.error?.message, isLoggedOut, isReplaced }));
 
         clientEntry.status = 'disconnected';
         clientEntry.qrDataUrl = undefined;
@@ -343,6 +360,14 @@ async function createBaileysClient(agentId: string, forceNewAuth = false) {
         if (isLoggedOut) {
           await clearAuthState(agentId);
           await logSessionRestoreFailure(agentId, 'logged_out', update.lastDisconnect?.error?.message);
+          return;
+        }
+
+        if (isReplaced) {
+          clientEntry.status = 'error';
+          clientEntry.lastError = 'Сессия открыта в другом месте';
+          await syncChannelConnectionState(agentId, 'error', false);
+          logger.warn({ agentId, statusCode }, 'Baileys session replaced elsewhere; stopping reconnect');
           return;
         }
 
