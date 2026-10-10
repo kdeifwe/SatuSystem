@@ -135,7 +135,6 @@ test('retries once on empty Gemini response and then accepts valid JSON', async 
         usage: { promptTokens: 120, completionTokens: 0, totalTokens: 120 },
         finishReason: 'MAX_TOKENS',
         rawResponse: {
-          promptFeedback: { blockReason: 'SAFETY' },
           candidates: [{ finishReason: 'MAX_TOKENS', safetyRatings: [{ category: 'HARM_CATEGORY_SEXUAL' }] }],
         },
       };
@@ -173,6 +172,40 @@ test('retries once on empty Gemini response and then accepts valid JSON', async 
 
     assert.equal(attempt, 2);
     assert.deepEqual(result.parsedJson, validation);
+  } finally {
+    llmClient.generate = originalGenerate;
+  }
+});
+
+test('fails fast when Gemini blocks the prompt for prohibited content', async () => {
+  const originalGenerate = llmClient.generate.bind(llmClient);
+  llmClient.generate = async () => ({
+    text: '',
+    provider: 'gemini',
+    usage: { promptTokens: 4621, completionTokens: 0, totalTokens: 4621 },
+    finishReason: 'PROHIBITED_CONTENT',
+    rawResponse: {
+      promptFeedback: { blockReason: 'PROHIBITED_CONTENT' },
+      usageMetadata: { promptTokenCount: 4621, totalTokenCount: 4621 },
+      modelVersion: 'gemini-3.6-flash',
+    },
+  });
+
+  try {
+    await assert.rejects(
+      () => callGeminiForImproveWithRetry(
+        'You are a critic',
+        'Improve this prompt',
+        0.3,
+        buildGeminiObjectSchema({
+          root_cause: { type: 'string' },
+        }, ['root_cause']),
+        { phase: 'critic' },
+        (obj) => !!obj && typeof (obj as Record<string, unknown>).root_cause === 'string',
+        3
+      ),
+      /Gemini blocked the request due to safety policy/
+    );
   } finally {
     llmClient.generate = originalGenerate;
   }

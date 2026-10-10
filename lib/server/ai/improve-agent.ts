@@ -398,6 +398,21 @@ async function logImproveCall(
   }
 }
 
+function getGeminiBlockReason(rawResponse: any): string | null {
+  const promptFeedback = rawResponse?.promptFeedback ?? rawResponse?.prompt_feedback ?? null;
+  const blockReason = promptFeedback?.blockReason ?? promptFeedback?.block_reason ?? null;
+  if (typeof blockReason === 'string' && blockReason.trim().length > 0) return blockReason;
+
+  const candidates = Array.isArray(rawResponse?.candidates) ? rawResponse.candidates : [];
+  const firstCandidate = candidates[0];
+  const candidateBlockReason = firstCandidate?.finishReason ?? firstCandidate?.finish_reason ?? null;
+  if (typeof candidateBlockReason === 'string' && candidateBlockReason.trim().length > 0) {
+    return candidateBlockReason;
+  }
+
+  return null;
+}
+
 export async function callGeminiForImprove(
   systemInstruction: string,
   prompt: string,
@@ -453,7 +468,7 @@ export async function callGeminiForImprove(
     if (!text || text.trim().length === 0) {
       const finishReason = fullRawResponse?.candidates?.[0]?.finishReason ?? fullRawResponse?.finishReason ?? null;
       const promptFeedback = fullRawResponse?.promptFeedback ?? null;
-      const blockReason = promptFeedback?.blockReason ?? null;
+      const blockReason = getGeminiBlockReason(fullRawResponse) ?? promptFeedback?.blockReason ?? null;
       const safetyRatings = fullRawResponse?.candidates?.[0]?.safetyRatings ?? promptFeedback?.safetyRatings ?? null;
       const rawResponseSnapshot = typeof fullRawResponse === 'string'
         ? fullRawResponse.slice(0, 1500)
@@ -471,7 +486,14 @@ export async function callGeminiForImprove(
 
       logContext.error = 'Gemini returned empty text';
       await logImproveCall(options.admin ?? null, logContext);
-      throw new Error(`Gemini returned empty text (finishReason=${String(finishReason ?? 'unknown')}, blockReason=${String(blockReason ?? 'unknown')})`);
+
+      const safetyBlocked = !!blockReason && /PROHIBITED_CONTENT|SAFETY|BLOCKED|HARM/i.test(String(blockReason));
+      const blockReasonMessage = blockReason ? ` (blockReason=${String(blockReason)})` : '';
+      const baseMessage = `Gemini returned empty text (finishReason=${String(finishReason ?? 'unknown')}${blockReasonMessage})`;
+      if (safetyBlocked) {
+        throw new Error(`Gemini blocked the request due to safety policy: ${baseMessage}`);
+      }
+      throw new Error(baseMessage);
     }
 
     await logImproveCall(options.admin ?? null, logContext);
@@ -596,12 +618,16 @@ export async function callGeminiForImproveWithRetry(
       return { parsedJson: parsed as Record<string, unknown>, geminiResponse: res, attempt };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      const safetyBlocked = /safety policy|PROHIBITED_CONTENT|SAFETY|BLOCKED/i.test(message);
       if (/empty text|empty response/i.test(message)) {
         console.warn('[improve] Empty Gemini response retry', {
           phase: options.phase,
           attempt,
           message,
         });
+      }
+      if (safetyBlocked) {
+        throw new Error(`Gemini blocked the request due to safety policy: ${message}`);
       }
       if (attempt >= maxAttempts) throw err;
     }

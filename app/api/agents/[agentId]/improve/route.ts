@@ -389,6 +389,14 @@ Rules:
   } catch (err) {
     const fullError = err instanceof Error ? err.message : String(err);
     console.error('[improve] Full error details:', fullError);
+
+    const isSafetyBlocked = /safety policy|PROHIBITED_CONTENT|blockReason=|SAFETY|BLOCKED/i.test(fullError);
+    if (isSafetyBlocked) {
+      return NextResponse.json({
+        error: 'Gemini заблокировал запрос по политике безопасности. Попробуйте переформулировать запрос более нейтрально.',
+      }, { status: 400 });
+    }
+
     return NextResponse.json({
       error: 'Не удалось обработать ответ ассистента. Попробуйте переформулировать запрос.',
     }, { status: 500 });
