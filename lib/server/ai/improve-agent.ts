@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { buildGeminiObjectSchema } from '@/lib/server/ai/gemini-response-schema';
+import { GEMINI_CHAT_MODEL } from '@/lib/server/ai/gemini-client';
 import { llmClient } from '@/lib/server/ai/llm-client';
 
 type ImprovePhase = 'critic' | 'generator' | 'validator';
@@ -359,7 +360,7 @@ async function logImproveCall(
       request: {
         type: 'improve_agent',
         phase: context.phase,
-        provider: context.provider ?? 'openai',
+        provider: context.provider ?? 'gemini',
         agent_id: context.agentId,
         feedback: context.feedback,
         prompt: context.prompt,
@@ -368,8 +369,8 @@ async function logImproveCall(
         attempt: context.attempt ?? null,
       },
       response: {
-        provider: context.provider ?? 'openai',
-        // Store FULL raw_response from OpenAI or Gemini (includes usage tokens, function call data, etc)
+        provider: context.provider ?? 'gemini',
+        // Store FULL raw_response from Gemini (includes usage tokens, function call data, etc)
         raw: context.rawResponse ?? null,
         raw_response: context.rawResponse ?? null,
         response_preview: responsePreview,
@@ -397,7 +398,7 @@ async function logImproveCall(
   }
 }
 
-export async function callOpenAIForImprove(
+export async function callGeminiForImprove(
   systemInstruction: string,
   prompt: string,
   temperature: number,
@@ -415,13 +416,14 @@ export async function callOpenAIForImprove(
 
   try {
     const llmResponse = await llmClient.generate({
-      model: 'gpt-5.4',
+      model: GEMINI_CHAT_MODEL,
       messages: [
         { role: 'system', content: systemInstruction },
         { role: 'user', content: prompt },
       ],
       temperature,
       maxTokens: 32768,
+      responseFormat: 'json',
       jsonSchema: responseSchema ?? undefined,
     });
 
@@ -430,8 +432,8 @@ export async function callOpenAIForImprove(
     const latencyMs = Date.now() - startedAt;
     const tokensInput = llmResponse.usage?.promptTokens ?? 0;
     const tokensOutput = llmResponse.usage?.completionTokens ?? 0;
-    const model = 'gpt-5.4';
-    const provider = llmResponse.provider ?? 'openai';
+    const model = GEMINI_CHAT_MODEL;
+    const provider = llmResponse.provider ?? 'gemini';
 
     const logContext: ImproveLogContext = {
       agentId: options.agentId ?? 'unknown',
@@ -464,18 +466,18 @@ export async function callOpenAIForImprove(
       };
     }
 
-    logContext.error = 'OpenAI returned empty text';
+    logContext.error = 'Gemini returned empty text';
     await logImproveCall(options.admin ?? null, logContext);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error('[improve] OpenAI error:', message);
+    console.error('[improve] Gemini error:', message);
     await logImproveCall(options.admin ?? null, {
       agentId: options.agentId ?? 'unknown',
       feedback: options.feedback ?? '',
       phase: options.phase,
       prompt,
-      model: 'gpt-5.4',
-      provider: 'openai',
+      model: GEMINI_CHAT_MODEL,
+      provider: 'gemini',
       latencyMs: Date.now() - startedAt,
       rawText: '',
       rawResponse: fullRawResponse,
@@ -485,10 +487,10 @@ export async function callOpenAIForImprove(
     });
   }
 
-  throw new Error('OpenAI did not return a valid response');
+  throw new Error('Gemini did not return a valid response');
 }
 
-export async function callOpenAIForImproveWithRetry(
+export async function callGeminiForImproveWithRetry(
   systemInstruction: string,
   prompt: string,
   temperature: number,
@@ -504,7 +506,7 @@ export async function callOpenAIForImproveWithRetry(
 ): Promise<{ parsedJson: Record<string, unknown>; geminiResponse: GeminiResponse; attempt: number }> {
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      const res = await callOpenAIForImprove(systemInstruction, prompt, temperature, responseSchema, {
+      const res = await callGeminiForImprove(systemInstruction, prompt, temperature, responseSchema, {
         admin: options.admin ?? null,
         agentId: options.agentId,
         feedback: options.feedback,
@@ -517,12 +519,19 @@ export async function callOpenAIForImproveWithRetry(
         parsed = (res.parsedJson ?? extractJsonPayload(res.text)) as Record<string, unknown>;
       } catch (parseError) {
         const message = parseError instanceof Error ? parseError.message : String(parseError);
+        console.warn('[improve] JSON parse failed for Gemini response', {
+          phase: options.phase,
+          attempt,
+          rawText: res.text,
+          rawResponse: res.rawResponse ?? null,
+          message,
+        });
         await logFailedJsonParse(options.admin ?? null, {
           agentId: options.agentId ?? 'unknown',
           feedback: options.feedback ?? '',
           phase: options.phase,
           prompt,
-          model: 'gpt-5.4',
+          model: GEMINI_CHAT_MODEL,
           latencyMs: 0,
           rawText: res.text,
           rawResponse: res.rawResponse ?? null,
@@ -531,20 +540,25 @@ export async function callOpenAIForImproveWithRetry(
         });
 
         if (attempt < maxAttempts) continue;
-        throw parseError;
+        throw new Error(`Gemini response could not be parsed as JSON: ${message}`);
       }
 
-      // structural validation
       try {
         const ok = validateFn(parsed);
         if (!ok) {
           const message = 'Schema validation failed';
+          console.warn('[improve] Gemini schema validation failed', {
+            phase: options.phase,
+            attempt,
+            rawText: res.text,
+            rawResponse: res.rawResponse ?? null,
+          });
           await logFailedJsonParse(options.admin ?? null, {
             agentId: options.agentId ?? 'unknown',
             feedback: options.feedback ?? '',
             phase: options.phase,
             prompt,
-            model: 'gpt-5.4',
+            model: GEMINI_CHAT_MODEL,
             latencyMs: 0,
             rawText: res.text,
             rawResponse: res.rawResponse ?? null,
@@ -562,14 +576,13 @@ export async function callOpenAIForImproveWithRetry(
 
       return { parsedJson: parsed as Record<string, unknown>, geminiResponse: res, attempt };
     } catch (err) {
-      // If last attempt, rethrow
       if (attempt >= maxAttempts) throw err;
-      // otherwise continue to retry
     }
   }
 
-  throw new Error('All OpenAI attempts failed');
+  throw new Error('All Gemini attempts failed');
 }
+
 
 export async function logFailedJsonParse(
   admin: SupabaseClient | null,
