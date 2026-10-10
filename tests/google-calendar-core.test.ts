@@ -6,6 +6,7 @@ import { buildToolDeclarationsForAgent } from '../lib/ai/tools/registry.ts';
 import { isSandboxToolAllowed } from '../lib/ai/tools/sandbox-allowlist.ts';
 import { buildSystemPrompt } from '../lib/ai/compile-system-prompt.ts';
 import { CalendarNotConnectedError, getCalendarClientForAgent } from '../lib/google-calendar/client.ts';
+import { MAX_TOOL_ROUNDS, getToolLoopStateForTest } from '../lib/server/ai/orchestrator.ts';
 
 function buildCalendarFallbackForTest(toolResults: Array<Record<string, unknown>>) {
   const failedResults = toolResults.filter((result) => Boolean(result.error));
@@ -218,4 +219,16 @@ test('calendar booking failure fallback explicitly tells the user it could not b
   ]);
 
   assert.equal(fallback, 'не удалось записать, передаю администратору');
+});
+
+test('tool loop allows up to five rounds and logs leftover tool calls without silently dropping them', () => {
+  assert.equal(MAX_TOOL_ROUNDS, 5);
+
+  const stateAtLimit = getToolLoopStateForTest({ iterations: 5, toolCalls: [{ name: 'checkCalendarAvailability', args: { date: '2026-10-10' } }] });
+  assert.equal(stateAtLimit.shouldContinue, false);
+  assert.equal(stateAtLimit.shouldLogLeftover, true);
+
+  const stateBeforeLimit = getToolLoopStateForTest({ iterations: 2, toolCalls: [{ name: 'searchKnowledgeBase', args: { query: 'цены' } }] });
+  assert.equal(stateBeforeLimit.shouldContinue, true);
+  assert.equal(stateBeforeLimit.shouldLogLeftover, false);
 });

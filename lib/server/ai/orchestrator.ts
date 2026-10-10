@@ -1045,6 +1045,24 @@ function extractTextFromParts(parts: Array<Record<string, unknown>> | undefined)
 const CONVERSATION_LOAD_LIMIT = 120;
 const SUMMARY_TOKEN_THRESHOLD = 8000;
 const SUMMARY_TAIL_MESSAGES = 25;
+export const MAX_TOOL_ROUNDS = 5;
+
+export function getToolLoopStateForTest({
+  iterations,
+  toolCalls,
+}: {
+  iterations: number;
+  toolCalls: Array<{ name: string; args: Record<string, unknown> }>;
+}) {
+  const shouldContinue = iterations < MAX_TOOL_ROUNDS && toolCalls.length > 0;
+  const shouldLogLeftover = iterations >= MAX_TOOL_ROUNDS && toolCalls.length > 0;
+
+  return {
+    shouldContinue,
+    shouldLogLeftover,
+    maxRounds: MAX_TOOL_ROUNDS,
+  };
+}
 
 function serializeMessagesForSummary(messages: Array<{ role: 'user' | 'model'; text: string }>) {
   return messages
@@ -1595,6 +1613,19 @@ export async function runAgentTurn(
   const leadAttributes = contextData?.leadAttributes ?? null;
   const previousConversationSummary = contextData?.previousConversationSummary ?? null;
   const isSandbox = contextData?.isSandbox ?? false;
+  console.warn('[GEMINI_TOOL_GATE_LOG]', {
+    agentId,
+    isSandbox,
+    configuredAllowedTools: configuredToolNames,
+    mergedAllowedTools: allowedToolNames,
+    toolPayloadNames: toolPayload.map((tool) => String((tool as { name?: unknown })?.name ?? '')),
+    googleCalendarEnabled: Boolean(generalCapabilities.google_calendar_enabled),
+    sandboxAllowCalendarWrite: String(process.env.SANDBOX_ALLOW_CALENDAR_WRITE ?? ''),
+    sandboxToolAllowedStatus: {
+      checkCalendarAvailability: isSandbox ? undefined : undefined,
+      createCalendarEvent: process.env.SANDBOX_ALLOW_CALENDAR_WRITE,
+    },
+  });
   const persistedUserMessageId = userMessageId ?? null;
   const leadGrade = (leadAttributes && typeof leadAttributes === 'object')
     ? (leadAttributes.grade as string | number | null | undefined)
@@ -1940,6 +1971,13 @@ export async function runAgentTurn(
   }
   let currentParts = normalizeLlmResponseParts(response);
   let finalAnswer = sanitizeAgentReply(extractTextFromParts(currentParts) || ((response as any).text ?? ''));
+  let toolCalls = tryExtractToolCalls(currentParts);
+  console.warn('[GEMINI_MODEL_RESPONSE_BEFORE_FOLLOWUP]', {
+    agentId,
+    conversationId,
+    functionCalls: toolCalls.map((call) => ({ name: call.name, args: call.args })),
+    responseText: finalAnswer,
+  });
   let handoffMessage: string | undefined;
   let handoffTriggered = false;
 
@@ -1950,12 +1988,11 @@ export async function runAgentTurn(
     conversationId: conversationId ?? '',
     isSandbox,
   };
-  let toolCalls = tryExtractToolCalls(currentParts);
   let iterations = 0;
   let toolsUsed: string[] = [];
   const toolUsageCounts: Record<string, number> = {};
 
-  while (iterations < 2 && toolCalls.length > 0) {
+  while (iterations < MAX_TOOL_ROUNDS && toolCalls.length > 0) {
     iterations += 1;
     const toolResults: Array<Record<string, unknown>> = [];
 
@@ -2059,6 +2096,12 @@ export async function runAgentTurn(
       },
     }));
     console.log('[PROD_TOOL_FOLLOWUP]', { agentId, toolResults, functionResponseParts });
+    console.warn('[GEMINI_MODEL_TOOL_FOLLOWUP_INPUT]', {
+      agentId,
+      conversationId,
+      functionCallNames: toolResults.map((result) => String(result.name ?? '')),
+      functionResponseParts,
+    });
 
     const followUpHistory = [
       ...conversationContents,
@@ -2083,6 +2126,12 @@ export async function runAgentTurn(
     tokensOutput += followUpResponse.payload.usageMetadata?.candidatesTokenCount ?? 0;
     currentParts = normalizeLlmResponseParts(followUpResponse);
     finalAnswer = sanitizeAgentReply(extractTextFromParts(currentParts) || ((followUpResponse as any).text ?? finalAnswer));
+    console.warn('[GEMINI_MODEL_RESPONSE_AFTER_FOLLOWUP]', {
+      agentId,
+      conversationId,
+      functionCalls: tryExtractToolCalls(currentParts).map((call) => ({ name: call.name, args: call.args })),
+      responseText: finalAnswer,
+    });
     console.log('[PROD_TOOL_FOLLOWUP_RESPONSE]', { agentId, answer: finalAnswer, toolCalls: tryExtractToolCalls(currentParts) });
     toolCalls = tryExtractToolCalls(currentParts);
   }
@@ -2090,6 +2139,21 @@ export async function runAgentTurn(
   if (handoffTriggered) {
     console.log('[PROD_HANDOFF_TRIGGERED]', { agentId, leadId, conversationId, reason: toolsUsed.join(',') });
     finalAnswer = finalAnswer || 'Сейчас подключу коллегу, пожалуйста, подождите.';
+  }
+
+  if (toolCalls.length > 0 && !handoffTriggered) {
+    console.warn('[PROD_TOOL_LOOP_LEFTOVER]', {
+      agentId,
+      conversationId,
+      iterations,
+      leftoverToolCalls: toolCalls.map((call) => ({ name: call.name, args: call.args })),
+    });
+
+    if (!finalAnswer.trim()) {
+      finalAnswer = buildToolFailureFallbackMessage([
+        { name: 'tool_loop_guard', result: null, error: 'tool loop limit reached' },
+      ]) ?? getEmptyResponseFallbackMessage();
+    }
   }
 
   let emptyReplyRetryAttempted = false;
