@@ -49,7 +49,14 @@ export async function checkAvailability({
       },
     });
 
-    const items = (response as any)?.data?.calendars?.primary?.busy ?? [];
+    const calendars = (response as any)?.data?.calendars ?? {};
+    const calendarEntry = calendars[calendarId] ?? calendars.primary;
+    const calendarErrors = calendarEntry?.errors;
+    if (Array.isArray(calendarErrors) && calendarErrors.length > 0) {
+      // Не считать календарь свободным, если Google вернул ошибку доступа.
+      throw new Error(`Google Calendar freebusy error: ${JSON.stringify(calendarErrors)}`);
+    }
+    const items = calendarEntry?.busy ?? [];
     const busy: BusyInterval[] = (items ?? []).map((item: { start?: string | null; end?: string | null }) => ({
       start: item.start ?? new Date().toISOString(),
       end: item.end ?? new Date().toISOString(),
