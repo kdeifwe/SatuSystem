@@ -1,7 +1,7 @@
 import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { computeFreeSlots, parseWorkingHours } from '../lib/google-calendar/slots.ts';
+import { computeFreeSlots, parseWorkingHours, type WorkingHoursMap } from '../lib/google-calendar/slots.ts';
 import { buildBusyIntervals, evaluateBooking, isWithinWorkingHours, createBooking } from '../lib/google-calendar/bookings.ts';
 import { zonedDate } from '../lib/google-calendar/timezone.ts';
 import { DEFAULT_DURATION_MINUTES, MIN_DURATION_MINUTES, MAX_DURATION_MINUTES, resolveDurationMinutes } from '../lib/google-calendar/duration.ts';

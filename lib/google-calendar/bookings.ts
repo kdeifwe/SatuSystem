@@ -102,8 +102,12 @@ export function buildBusyIntervals(
 
     const isAllDayEvent = Boolean(item.start.date && !item.start.dateTime);
     if (isAllDayEvent) {
-      const allDayStart = zonedDate(item.start.date, '00:00:00', timezone).toISOString();
-      const allDayEnd = zonedDate(item.end?.date ?? item.start.date, '00:00:00', timezone).toISOString();
+      const allDayDate = item.start.date;
+      const allDayEndDate = item.end?.date ?? allDayDate;
+      if (!allDayDate || !allDayEndDate) continue;
+
+      const allDayStart = zonedDate(allDayDate, '00:00:00', timezone).toISOString();
+      const allDayEnd = zonedDate(allDayEndDate, '00:00:00', timezone).toISOString();
 
       // All-day events consume the whole day slot, so a capacity of 3 means the day is blocked 3 times.
       for (let index = 0; index < normalizedCapacity; index += 1) {
