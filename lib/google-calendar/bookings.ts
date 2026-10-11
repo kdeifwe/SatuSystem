@@ -1,5 +1,6 @@
 import { calendar } from '@googleapis/calendar';
 import { getCalendarClientForAgent, CalendarNotConnectedError, getGoogleCalendarId } from './client';
+import { resolveDurationMinutes } from './duration';
 import { computeFreeSlots, type BusyInterval, type WorkingHoursMap } from './slots';
 
 export type BookingAvailabilityInput = {
@@ -28,7 +29,7 @@ async function convertCalendarConnectionError<T>(operation: () => Promise<T>): P
 export async function checkAvailability({
   agentId,
   date,
-  durationMinutes = 60,
+  durationMinutes,
   timezone = 'Asia/Almaty',
   workingHours,
   bufferMinutes = 0,
@@ -64,12 +65,14 @@ export async function checkAvailability({
       sun: [],
     };
 
+    const slotMinutes = resolveDurationMinutes(durationMinutes, 60);
+
     const slots = computeFreeSlots({
       date,
       timezone,
       workingHours: workingHours ?? defaultWorkingHours,
       busy,
-      slotMinutes: durationMinutes,
+      slotMinutes,
       bufferMinutes,
       minNoticeMinutes,
       now,
@@ -98,7 +101,8 @@ export async function createBooking(agentId: string, input: {
     const calendarId = getGoogleCalendarId();
 
     const startDate = new Date(input.start);
-    const endDate = input.end ? new Date(input.end) : new Date(startDate.getTime() + Number(input.slotMinutes ?? 60) * 60 * 1000);
+    const slotMinutes = resolveDurationMinutes(input.slotMinutes, 60);
+    const endDate = input.end ? new Date(input.end) : new Date(startDate.getTime() + slotMinutes * 60 * 1000);
     const descriptionParts = [
       input.description,
       input.notes,

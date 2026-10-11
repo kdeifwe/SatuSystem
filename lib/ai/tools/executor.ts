@@ -11,6 +11,7 @@ import { sendWhatsAppMedia } from '@/lib/channels/baileys-client';
 import { sendTelegramMedia } from '@/lib/channels/telegram-client';
 import { checkAvailability, createBooking, cancelBookingForLead } from '@/lib/google-calendar/bookings';
 import { CalendarNotConnectedError } from '@/lib/google-calendar/client';
+import { resolveDurationMinutes } from '@/lib/google-calendar/duration';
 import type { FunnelFlow } from '../../funnel/types.ts';
 
 export interface ToolContext {
@@ -39,21 +40,15 @@ export async function executeTool(call: ToolCall, context: ToolContext): Promise
 }
 
 async function dispatch(call: ToolCall, ctx: ToolContext): Promise<unknown> {
-  if (ctx.isSandbox && !isSandboxToolAllowed(call.name)) {
-    throw new Error('sandbox: запись отключена');
-  }
-
-  if (!ctx.isSandbox) {
-    const { allowedToolNames, hasExplicitAllowList } = await getAllowedToolNamesForAgent(ctx.agentId);
-    if (!hasExplicitAllowList || !allowedToolNames.includes(call.name)) {
-      await logRejectedToolCall(ctx, call.name, allowedToolNames);
-      return {
-        rejected: true,
-        reason: 'tool_not_allowed',
-        tool_name: call.name,
-        allowed_tools: allowedToolNames,
-      };
-    }
+  const { allowedToolNames, hasExplicitAllowList } = await getAllowedToolNamesForAgent(ctx.agentId);
+  if (!hasExplicitAllowList || !allowedToolNames.includes(call.name)) {
+    await logRejectedToolCall(ctx, call.name, allowedToolNames);
+    return {
+      rejected: true,
+      reason: 'tool_not_allowed',
+      tool_name: call.name,
+      allowed_tools: allowedToolNames,
+    };
   }
 
   switch (call.name as string) {
@@ -91,18 +86,21 @@ async function dispatch(call: ToolCall, ctx: ToolContext): Promise<unknown> {
     case 'redirectToOperator':
       return redirectToOperator(call.args as { reason: string; priority?: string }, ctx);
     case 'sendKaspiPay':
+      if (ctx.isSandbox) return { success: true, sandbox_mode: true, simulated: true };
       return createKaspiInvoice(call.args as { phone: string; amount: number; comment?: string }, ctx);
     case 'advanceFunnelStep':
       return advanceFunnelStep(call.args as { stepId: string; reason: string }, ctx);
     case 'getCurrentDate':
       return getCurrentDate(ctx);
     case 'sendMediaToClient':
+      if (ctx.isSandbox) return { success: true, sandbox_mode: true, simulated: true };
       return sendMediaToClient(call.args as { category: string; caption?: string }, ctx);
     case 'update_lead_status':
       return updateLeadStatus(call.args as { lead_id: string; status: string }, ctx);
     case 'updateLeadStatus':
       return updateLeadStatus(call.args as { lead_id: string; status: string }, ctx);
     case 'createKaspiInvoice':
+      if (ctx.isSandbox) return { success: true, sandbox_mode: true, simulated: true };
       return createKaspiInvoice(call.args as { phone: string; amount: number; comment?: string }, ctx);
     case 'update_lead_info':
       return updateLeadInfo(call.args as { fields: Record<string, unknown> }, ctx);
@@ -111,14 +109,18 @@ async function dispatch(call: ToolCall, ctx: ToolContext): Promise<unknown> {
     case 'recordLeadSignal':
       return recordLeadSignal(call.args as { lead_id: string; signal_type: string; description: string; raw_quote?: string; suggested_follow_up_at?: string }, ctx);
     case 'sendCustomNotification':
+      if (ctx.isSandbox) return { success: true, sandbox_mode: true, simulated: true };
       return sendCustomNotification(call.args as { message: string; target: string }, ctx);
     case 'scheduleMessage':
+      if (ctx.isSandbox) return { success: true, sandbox_mode: true, simulated: true };
       return scheduleMessage(call.args as { message: string; send_at: string }, ctx);
     case 'checkCalendarAvailability':
       return checkCalendarAvailability(call.args as { date: string; duration_minutes?: number }, ctx);
     case 'createCalendarEvent':
+      if (ctx.isSandbox) return { success: true, sandbox_mode: true, simulated: true };
       return createCalendarEvent(call.args as { start: string; client_name: string; client_phone?: string; notes?: string; slot_minutes?: number }, ctx);
     case 'cancelCalendarEvent':
+      if (ctx.isSandbox) return { success: true, sandbox_mode: true, simulated: true };
       return cancelCalendarEvent(call.args as { reason?: string }, ctx);
     default:
       throw new Error(`Неизвестный инструмент: ${call.name}`);
@@ -135,7 +137,7 @@ async function checkCalendarAvailability(args: { date: string; duration_minutes?
     return checkAvailability({
       agentId: ctx.agentId,
       date,
-      durationMinutes: Number(args.duration_minutes ?? 60),
+      durationMinutes: resolveDurationMinutes(args.duration_minutes, 60),
     });
   } catch (error) {
     if (error instanceof CalendarNotConnectedError) {
@@ -150,9 +152,9 @@ async function createCalendarEvent(args: { start: string; client_name: string; c
     throw new Error('start и client_name обязательны для createCalendarEvent');
   }
 
-  const slotMinutes = Number(args.slot_minutes ?? 60);
+  const slotMinutes = resolveDurationMinutes(args.slot_minutes, 60);
   const start = new Date(String(args.start));
-  const end = new Date(start.getTime() + (Number.isFinite(slotMinutes) ? slotMinutes : 60) * 60 * 1000).toISOString();
+  const end = new Date(start.getTime() + slotMinutes * 60 * 1000).toISOString();
 
   try {
     return createBooking(ctx.agentId, {

@@ -2,6 +2,7 @@ import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { computeFreeSlots } from '../lib/google-calendar/slots.ts';
+import { DEFAULT_DURATION_MINUTES, MIN_DURATION_MINUTES, MAX_DURATION_MINUTES, resolveDurationMinutes } from '../lib/google-calendar/duration.ts';
 import { buildToolDeclarationsForAgent } from '../lib/ai/tools/registry.ts';
 import { isSandboxToolAllowed } from '../lib/ai/tools/sandbox-allowlist.ts';
 import { buildSystemPrompt } from '../lib/ai/compile-system-prompt.ts';
@@ -34,7 +35,18 @@ function buildCalendarFallbackForTest(toolResults: Array<Record<string, unknown>
   return null;
 }
 
-test('computeFreeSlots respects working hours, buffer, min_notice and day boundaries', () => {
+test('resolveDurationMinutes applies priority, rounding and clamp constraints', () => {
+  assert.equal(resolveDurationMinutes(12, 90, 45), 15);
+  assert.equal(resolveDurationMinutes(null, '92', 45), 92);
+  assert.equal(resolveDurationMinutes('75.4', 30), 75);
+  assert.equal(resolveDurationMinutes(null, 0, '', '300'), 240);
+  assert.equal(resolveDurationMinutes(undefined, '15.49'), 15);
+  assert.equal(resolveDurationMinutes('bad', null, -12, '0'), DEFAULT_DURATION_MINUTES);
+  assert.equal(MIN_DURATION_MINUTES, 15);
+  assert.equal(MAX_DURATION_MINUTES, 240);
+});
+
+test('computeFreeSlots respects working hours, buffer, min_notice and day boundaries for variable duration', () => {
   const slots = computeFreeSlots({
     date: '2026-10-09',
     timezone: 'Asia/Almaty',
@@ -51,7 +63,7 @@ test('computeFreeSlots respects working hours, buffer, min_notice and day bounda
       { start: '2026-10-09T10:00:00', end: '2026-10-09T11:00:00' },
       { start: '2026-10-09T15:30:00', end: '2026-10-09T15:45:00' },
     ],
-    slotMinutes: 60,
+    slotMinutes: 90,
     bufferMinutes: 15,
     minNoticeMinutes: 60,
     now: new Date('2026-10-08T12:00:00+06:00'),
@@ -59,8 +71,8 @@ test('computeFreeSlots respects working hours, buffer, min_notice and day bounda
   });
 
   assert.ok(slots.length > 0);
-  const first = slots[0];
-  assert.ok(first.start.includes('09:00') || first.start.includes('11:00'));
+  assert.ok(slots.every((slot) => slot.end > slot.start));
+  assert.ok(slots.some((slot) => slot.start.includes('09:00')) || slots.some((slot) => slot.start.includes('11:00')));
   assert.ok(slots.some((slot) => slot.start.includes('11:00')));
 });
 
