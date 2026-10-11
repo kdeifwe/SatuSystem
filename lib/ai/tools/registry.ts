@@ -244,26 +244,27 @@ export const PRODUCTION_TOOL_DECLARATIONS: GeminiFunctionDeclaration[] = [
   },
   {
     name: 'checkCalendarAvailability',
-    description: 'Проверяет свободные слоты в Google Calendar клиента. Используй только при наличии активного подключения календаря агента. Сервер использует контекст клиента, не доверяет ID из текста модели.',
+    description: 'Проверяет свободные слоты в Google Calendar клиента. Используй только при наличии активного подключения календаря агента. Сервер использует контекст клиента, не доверяет ID из текста модели. Возвращает свободные времена начала на день; предлагай клиенту 2–3 из них, start передавай в createCalendarEvent как есть.',
     parameters: {
       type: 'OBJECT',
       properties: {
         date: { type: 'STRING', description: 'Дата в формате YYYY-MM-DD для проверки доступных слотов.' },
-        duration_minutes: { type: 'NUMBER', description: 'Продолжительность встречи в минутах.' },
+        duration_minutes: { type: 'NUMBER', description: 'Длительность выбранной услуги в минутах (из базы знаний). Если не указана, используется 60. Допустимо от 15 до 240.' },
       },
       required: ['date'],
     },
   },
   {
     name: 'createCalendarEvent',
-    description: 'Создаёт запись клиента в Google Calendar агента. Окончание встречи рассчитывается автоматически по фиксированному slot_minutes = 60; сервер связывает запись с текущим лидом и агентом из контекста, не доверяет ID из модели.',
+    description: 'Создаёт запись клиента в Google Calendar агента. Окончание записи = start + duration_minutes (по умолчанию 60 минут, допустимо от 15 до 240); передавай ту же длительность, что и в checkCalendarAvailability. Сервер связывает запись с текущим лидом и агентом из контекста, не доверяет ID из модели. Если вернулся reason=slot_unavailable, время занято: снова вызови checkCalendarAvailability и предложи другие слоты.',
     parameters: {
       type: 'OBJECT',
       properties: {
         start: { type: 'STRING', description: 'Время начала встречи в ISO 8601.' },
         client_name: { type: 'STRING', description: 'Имя клиента для встречи.' },
         client_phone: { type: 'STRING', description: 'Телефон клиента, если указан.' },
-        notes: { type: 'STRING', description: 'Дополнительные заметки по встрече.' },
+        duration_minutes: { type: 'NUMBER', description: 'Длительность выбранной услуги в минутах (из базы знаний). Если не указана, используется 60. Допустимо от 15 до 240.' },
+        notes: { type: 'STRING', description: 'Дополнительные заметки по встрече (например, название услуги).' },
       },
       required: ['start', 'client_name'],
     },

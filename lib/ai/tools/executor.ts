@@ -11,6 +11,9 @@ import { sendWhatsAppMedia } from '@/lib/channels/baileys-client';
 import { sendTelegramMedia } from '@/lib/channels/telegram-client';
 import { checkAvailability, createBooking, cancelBookingForLead } from '@/lib/google-calendar/bookings';
 import { CalendarNotConnectedError } from '@/lib/google-calendar/client';
+import { resolveDurationMinutes } from '@/lib/google-calendar/duration';
+import { parseWorkingHours } from '@/lib/google-calendar/slots';
+import { parseCalendarStartDate } from '@/lib/google-calendar/timezone';
 import type { FunnelFlow } from '../../funnel/types.ts';
 
 export interface ToolContext {
@@ -39,21 +42,15 @@ export async function executeTool(call: ToolCall, context: ToolContext): Promise
 }
 
 async function dispatch(call: ToolCall, ctx: ToolContext): Promise<unknown> {
-  if (ctx.isSandbox && !isSandboxToolAllowed(call.name)) {
-    throw new Error('sandbox: запись отключена');
-  }
-
-  if (!ctx.isSandbox) {
-    const { allowedToolNames, hasExplicitAllowList } = await getAllowedToolNamesForAgent(ctx.agentId);
-    if (!hasExplicitAllowList || !allowedToolNames.includes(call.name)) {
-      await logRejectedToolCall(ctx, call.name, allowedToolNames);
-      return {
-        rejected: true,
-        reason: 'tool_not_allowed',
-        tool_name: call.name,
-        allowed_tools: allowedToolNames,
-      };
-    }
+  const { allowedToolNames, hasExplicitAllowList } = await getAllowedToolNamesForAgent(ctx.agentId);
+  if (!hasExplicitAllowList || !allowedToolNames.includes(call.name)) {
+    await logRejectedToolCall(ctx, call.name, allowedToolNames);
+    return {
+      rejected: true,
+      reason: 'tool_not_allowed',
+      tool_name: call.name,
+      allowed_tools: allowedToolNames,
+    };
   }
 
   switch (call.name as string) {
@@ -91,18 +88,21 @@ async function dispatch(call: ToolCall, ctx: ToolContext): Promise<unknown> {
     case 'redirectToOperator':
       return redirectToOperator(call.args as { reason: string; priority?: string }, ctx);
     case 'sendKaspiPay':
+      if (ctx.isSandbox) return { success: true, sandbox_mode: true, simulated: true };
       return createKaspiInvoice(call.args as { phone: string; amount: number; comment?: string }, ctx);
     case 'advanceFunnelStep':
       return advanceFunnelStep(call.args as { stepId: string; reason: string }, ctx);
     case 'getCurrentDate':
       return getCurrentDate(ctx);
     case 'sendMediaToClient':
+      if (ctx.isSandbox) return { success: true, sandbox_mode: true, simulated: true };
       return sendMediaToClient(call.args as { category: string; caption?: string }, ctx);
     case 'update_lead_status':
       return updateLeadStatus(call.args as { lead_id: string; status: string }, ctx);
     case 'updateLeadStatus':
       return updateLeadStatus(call.args as { lead_id: string; status: string }, ctx);
     case 'createKaspiInvoice':
+      if (ctx.isSandbox) return { success: true, sandbox_mode: true, simulated: true };
       return createKaspiInvoice(call.args as { phone: string; amount: number; comment?: string }, ctx);
     case 'update_lead_info':
       return updateLeadInfo(call.args as { fields: Record<string, unknown> }, ctx);
@@ -111,18 +111,43 @@ async function dispatch(call: ToolCall, ctx: ToolContext): Promise<unknown> {
     case 'recordLeadSignal':
       return recordLeadSignal(call.args as { lead_id: string; signal_type: string; description: string; raw_quote?: string; suggested_follow_up_at?: string }, ctx);
     case 'sendCustomNotification':
+      if (ctx.isSandbox) return { success: true, sandbox_mode: true, simulated: true };
       return sendCustomNotification(call.args as { message: string; target: string }, ctx);
     case 'scheduleMessage':
+      if (ctx.isSandbox) return { success: true, sandbox_mode: true, simulated: true };
       return scheduleMessage(call.args as { message: string; send_at: string }, ctx);
     case 'checkCalendarAvailability':
       return checkCalendarAvailability(call.args as { date: string; duration_minutes?: number }, ctx);
     case 'createCalendarEvent':
-      return createCalendarEvent(call.args as { start: string; client_name: string; client_phone?: string; notes?: string; slot_minutes?: number }, ctx);
+      if (ctx.isSandbox) return { success: true, sandbox_mode: true, simulated: true };
+      return createCalendarEvent(call.args as { start: string; client_name: string; client_phone?: string; notes?: string; duration_minutes?: number; slot_minutes?: number }, ctx);
     case 'cancelCalendarEvent':
+      if (ctx.isSandbox) return { success: true, sandbox_mode: true, simulated: true };
       return cancelCalendarEvent(call.args as { reason?: string }, ctx);
     default:
       throw new Error(`Неизвестный инструмент: ${call.name}`);
   }
+}
+
+function normalizeBookingCapacity(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 1;
+  const rounded = Math.trunc(parsed);
+  return rounded >= 1 ? rounded : 1;
+}
+
+async function getAgentCalendarSettings(agentId: string): Promise<{ workingHours: ReturnType<typeof parseWorkingHours>; capacity: number }> {
+  const supabase = createServiceClient();
+  const { data: agentRow } = await supabase
+    .from('agents')
+    .select('general_capabilities')
+    .eq('id', agentId)
+    .maybeSingle();
+  const capabilities = (agentRow?.general_capabilities ?? {}) as Record<string, unknown>;
+  return {
+    workingHours: parseWorkingHours(capabilities.working_hours),
+    capacity: normalizeBookingCapacity(capabilities.booking_capacity),
+  };
 }
 
 async function checkCalendarAvailability(args: { date: string; duration_minutes?: number }, ctx: ToolContext) {
@@ -130,12 +155,19 @@ async function checkCalendarAvailability(args: { date: string; duration_minutes?
   if (!date) {
     throw new Error('date обязателен для checkCalendarAvailability');
   }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw new Error('date должен быть в формате YYYY-MM-DD');
+  }
+
+  const calendarSettings = await getAgentCalendarSettings(ctx.agentId);
 
   try {
-    return checkAvailability({
+    return await checkAvailability({
       agentId: ctx.agentId,
       date,
-      durationMinutes: Number(args.duration_minutes ?? 60),
+      durationMinutes: resolveDurationMinutes(args.duration_minutes),
+      workingHours: calendarSettings.workingHours,
+      capacity: calendarSettings.capacity,
     });
   } catch (error) {
     if (error instanceof CalendarNotConnectedError) {
@@ -145,28 +177,45 @@ async function checkCalendarAvailability(args: { date: string; duration_minutes?
   }
 }
 
-async function createCalendarEvent(args: { start: string; client_name: string; client_phone?: string; notes?: string; slot_minutes?: number }, ctx: ToolContext) {
+async function createCalendarEvent(args: { start: string; client_name: string; client_phone?: string; notes?: string; duration_minutes?: number; slot_minutes?: number }, ctx: ToolContext) {
   if (!args.start || !args.client_name) {
     throw new Error('start и client_name обязательны для createCalendarEvent');
   }
 
-  const slotMinutes = Number(args.slot_minutes ?? 60);
-  const start = new Date(String(args.start));
-  const end = new Date(start.getTime() + (Number.isFinite(slotMinutes) ? slotMinutes : 60) * 60 * 1000).toISOString();
+  const start = parseCalendarStartDate(args.start, 'Asia/Almaty');
+  if (Number.isNaN(start.getTime())) {
+    throw new Error('start должен быть датой в формате ISO 8601');
+  }
+
+  const calendarSettings = await getAgentCalendarSettings(ctx.agentId);
+  const durationMinutes = resolveDurationMinutes(args.duration_minutes, args.slot_minutes);
+  const end = new Date(start.getTime() + durationMinutes * 60 * 1000).toISOString();
 
   try {
-    return createBooking(ctx.agentId, {
+    const result = await createBooking(ctx.agentId, {
       start: start.toISOString(),
       end,
       summary: `Встреча с ${String(args.client_name)}`,
-      description: args.notes ? String(args.notes) : undefined,
+      description: `Длительность: ${durationMinutes} мин`,
       leadId: resolveLeadIdForTool(undefined, ctx),
       agentIdValue: ctx.agentId,
       clientName: String(args.client_name),
       clientPhone: args.client_phone ? String(args.client_phone) : undefined,
       notes: args.notes ? String(args.notes) : undefined,
-      slotMinutes,
+      slotMinutes: durationMinutes,
+      capacity: calendarSettings.capacity,
+      workingHours: calendarSettings.workingHours,
+      timezone: 'Asia/Almaty',
     });
+
+    if (result && typeof result === 'object' && (result as { reason?: unknown }).reason === 'slot_unavailable') {
+      return { ok: false, reason: 'slot_unavailable' };
+    }
+    if (result && typeof result === 'object' && (result as { reason?: unknown }).reason === 'outside_working_hours') {
+      return { ok: false, reason: 'outside_working_hours' };
+    }
+
+    return result;
   } catch (error) {
     if (error instanceof CalendarNotConnectedError) {
       return { ok: false, reason: 'calendar_not_connected' };
@@ -178,7 +227,7 @@ async function createCalendarEvent(args: { start: string; client_name: string; c
 async function cancelCalendarEvent(args: { reason?: string }, ctx: ToolContext) {
   const reason = args.reason ? String(args.reason) : 'Отменено агентом';
   try {
-    return cancelBookingForLead(ctx.agentId, ctx.leadId, reason);
+    return await cancelBookingForLead(ctx.agentId, ctx.leadId, reason);
   } catch (error) {
     if (error instanceof CalendarNotConnectedError) {
       return { ok: false, reason: 'calendar_not_connected' };
