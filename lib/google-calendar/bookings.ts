@@ -84,26 +84,63 @@ function localTimeParts(date: Date, timezone: string): { hours: number; minutes:
   return { hours, minutes };
 }
 
-export function isBookingWithinWorkingHours(start: Date, end: Date, workingHours?: WorkingHoursMap, timezone = DEFAULT_TIMEZONE): boolean {
+export function buildBusyIntervals(items: Array<{ status?: string | null; transparency?: string | null; start?: { date?: string | null; dateTime?: string | null } | null; end?: { date?: string | null; dateTime?: string | null } | null }>, timezone = DEFAULT_TIMEZONE, capacity = 1): BusyInterval[] {
+  const result: BusyInterval[] = [];
+  const normalizedCapacity = Number.isFinite(capacity) && capacity > 0 ? Math.trunc(capacity) : 1;
+
+  for (const item of items ?? []) {
+    if (!item || item.status === 'cancelled' || item.transparency === 'transparent') continue;
+    if (!item.start) continue;
+
+    const startValue = item.start.dateTime ?? item.start.date;
+    const endValue = item.end?.dateTime ?? item.end?.date;
+    if (!startValue || !endValue) continue;
+
+    if (item.start.date && !item.start.dateTime) {
+      const allDayStart = zonedDate(item.start.date, '00:00:00', timezone).toISOString();
+      const allDayEnd = zonedDate(item.end?.date ?? item.start.date, '00:00:00', timezone).toISOString();
+      for (let index = 0; index < normalizedCapacity; index += 1) {
+        result.push({ start: allDayStart, end: allDayEnd });
+      }
+      continue;
+    }
+
+    const startMillis = new Date(startValue).getTime();
+    const endMillis = new Date(endValue).getTime();
+    if (!Number.isFinite(startMillis) || !Number.isFinite(endMillis)) continue;
+
+    for (let index = 0; index < normalizedCapacity; index += 1) {
+      result.push({ start: new Date(startMillis).toISOString(), end: new Date(endMillis).toISOString() });
+    }
+  }
+
+  return result;
+}
+
+export function isWithinWorkingHours(start: Date, end: Date, workingHours?: WorkingHoursMap, timezone = DEFAULT_TIMEZONE): boolean {
   if (!workingHours || !timezone) return true;
   if (start.getTime() >= end.getTime()) return false;
 
-  const { year, month, day } = localDateParts(start, timezone);
-  const startDate = `${year}-${month}-${day}`;
-  const endDate = `${localDateParts(end, timezone).year}-${localDateParts(end, timezone).month}-${localDateParts(end, timezone).day}`;
-  if (startDate !== endDate) return false;
+  const startDate = localDateParts(start, timezone);
+  const startDateKey = `${startDate.year}-${startDate.month}-${startDate.day}`;
+  const startMinutes = localTimeParts(start, timezone).hours * 60 + localTimeParts(start, timezone).minutes;
+  let endMinutes = localTimeParts(end, timezone).hours * 60 + localTimeParts(end, timezone).minutes;
+  const nextDay = new Date(end.getTime() + 60 * 1000);
+  const endDateParts = localDateParts(nextDay, timezone);
+  const endDateKey = `${endDateParts.year}-${endDateParts.month}-${endDateParts.day}`;
 
-  const dayKey = weekdayKeyForDate(startDate);
+  if (endDateKey !== startDateKey) {
+    endMinutes += 24 * 60;
+  }
+
+  const dayKey = weekdayKeyForDate(startDateKey);
   const windows = workingHours[dayKey] ?? [];
   if (windows.length === 0) return false;
-
-  const startMinutes = localTimeParts(start, timezone).hours * 60 + localTimeParts(start, timezone).minutes;
-  const endMinutes = localTimeParts(end, timezone).hours * 60 + localTimeParts(end, timezone).minutes;
 
   return windows.some(([from, to]) => {
     const fromMinutes = parseClock(from);
     const toMinutes = parseClock(to);
-    return startMinutes >= fromMinutes && endMinutes <= toMinutes;
+    return startMinutes >= fromMinutes && endMinutes <= toMinutes + (to === '24:00' ? 0 : 0);
   });
 }
 
@@ -133,25 +170,7 @@ export async function checkAvailability({
     });
 
     const items = (response as any)?.data?.items ?? [];
-    const busy: BusyInterval[] = [];
-    const capacityLimit = normalizeBookingCapacity(capacity);
-    for (const item of items) {
-      if (!isEventBusy(item)) continue;
-      const startDate = item.start?.date;
-      const endDate = item.end?.date;
-      if (startDate && !item.start?.dateTime) {
-        const fullDayStart = zonedDate(startDate, '00:00:00', timezone).toISOString();
-        const fullDayEnd = endDate ? zonedDate(endDate, '00:00:00', timezone).toISOString() : zonedDate(startDate, '23:59:59', timezone).toISOString();
-        for (let i = 0; i < capacityLimit; i += 1) {
-          busy.push({ start: fullDayStart, end: fullDayEnd });
-        }
-        continue;
-      }
-      const eventStart = item.start?.dateTime ?? item.start?.date;
-      const eventEnd = item.end?.dateTime ?? item.end?.date;
-      if (!eventStart || !eventEnd) continue;
-      busy.push({ start: new Date(eventStart).toISOString(), end: new Date(eventEnd).toISOString() });
-    }
+    const busy = buildBusyIntervals(items, timezone, normalizeBookingCapacity(capacity));
 
     const defaultWorkingHours: WorkingHoursMap = {
       mon: [['09:00', '18:00']],

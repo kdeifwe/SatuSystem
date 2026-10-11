@@ -2,6 +2,8 @@ import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { computeFreeSlots, parseWorkingHours } from '../lib/google-calendar/slots.ts';
+import { buildBusyIntervals, isWithinWorkingHours } from '../lib/google-calendar/bookings.ts';
+import { zonedDate } from '../lib/google-calendar/timezone.ts';
 import { DEFAULT_DURATION_MINUTES, MIN_DURATION_MINUTES, MAX_DURATION_MINUTES, resolveDurationMinutes } from '../lib/google-calendar/duration.ts';
 import { buildToolDeclarationsForAgent } from '../lib/ai/tools/registry.ts';
 import { isSandboxToolAllowed } from '../lib/ai/tools/sandbox-allowlist.ts';
@@ -44,6 +46,66 @@ test('resolveDurationMinutes applies priority, rounding and clamp constraints', 
   assert.equal(resolveDurationMinutes('bad', null, -12, '0'), DEFAULT_DURATION_MINUTES);
   assert.equal(MIN_DURATION_MINUTES, 15);
   assert.equal(MAX_DURATION_MINUTES, 240);
+});
+
+test('buildBusyIntervals and isWithinWorkingHours handle all-day blocks and valid/invalid windows', () => {
+  const items = [
+    { status: 'confirmed', transparency: 'opaque', start: { date: '2026-10-09' }, end: { date: '2026-10-10' } },
+    { status: 'cancelled', transparency: 'opaque', start: { date: '2026-10-09' }, end: { date: '2026-10-10' } },
+    { status: 'confirmed', transparency: 'transparent', start: { date: '2026-10-09' }, end: { date: '2026-10-10' } },
+    { status: 'confirmed', transparency: 'opaque', start: { dateTime: '2026-10-09T12:00:00+05:00' }, end: { dateTime: '2026-10-09T13:00:00+05:00' } },
+  ];
+  const busy = buildBusyIntervals(items, 'Asia/Almaty', 3);
+  assert.equal(busy.length, 6);
+  const allDayRange = {
+    start: zonedDate('2026-10-09', '00:00:00', 'Asia/Almaty').toISOString(),
+    end: zonedDate('2026-10-10', '00:00:00', 'Asia/Almaty').toISOString(),
+  };
+  assert.deepEqual(busy[0], allDayRange);
+  assert.ok(busy.slice(0, 3).every((entry) => entry.start === allDayRange.start && entry.end === allDayRange.end));
+
+  const workingHours: WorkingHoursMap = {
+    sun: [], mon: [], tue: [], wed: [], thu: [], fri: [['10:00', '24:00']], sat: [],
+  };
+
+  assert.equal(isWithinWorkingHours(new Date('2026-10-09T23:00:00+05:00'), new Date('2026-10-10T00:00:00+05:00'), workingHours, 'Asia/Almaty'), true);
+  assert.equal(isWithinWorkingHours(new Date('2026-10-09T09:30:00+05:00'), new Date('2026-10-09T10:30:00+05:00'), workingHours, 'Asia/Almaty'), false);
+  assert.equal(isWithinWorkingHours(new Date('2026-10-09T23:30:00+05:00'), new Date('2026-10-10T00:30:00+05:00'), workingHours, 'Asia/Almaty'), false);
+  assert.equal(isWithinWorkingHours(new Date('2026-10-09T12:00:00+05:00'), new Date('2026-10-09T18:00:00+05:00'), { mon: [], tue: [], wed: [], thu: [], fri: [], sat: [], sun: [] }, 'Asia/Almaty'), false);
+
+  const slots = computeFreeSlots({
+    date: '2026-10-09',
+    timezone: 'Asia/Almaty',
+    workingHours: { mon: [], tue: [], wed: [], thu: [], fri: [['10:00', '24:00']], sat: [], sun: [] },
+    busy: [
+      { start: '2026-10-09T00:00:00+05:00', end: '2026-10-10T00:00:00+05:00' },
+      { start: '2026-10-09T00:00:00+05:00', end: '2026-10-10T00:00:00+05:00' },
+      { start: '2026-10-09T00:00:00+05:00', end: '2026-10-10T00:00:00+05:00' },
+    ],
+    slotMinutes: 60,
+    stepMinutes: 30,
+    bufferMinutes: 0,
+    minNoticeMinutes: 0,
+    now: new Date('2026-10-08T12:00:00+05:00'),
+    maxDaysAhead: 30,
+    capacity: 3,
+  });
+  assert.deepEqual(slots, []);
+
+  const timezoneOverlap = computeFreeSlots({
+    date: '2026-10-09',
+    timezone: 'Asia/Almaty',
+    workingHours: { mon: [], tue: [], wed: [], thu: [], fri: [['10:00', '24:00']], sat: [], sun: [] },
+    busy: [{ start: '2026-10-09T10:00:00+05:00', end: '2026-10-09T11:00:00+05:00' }],
+    slotMinutes: 60,
+    stepMinutes: 60,
+    bufferMinutes: 0,
+    minNoticeMinutes: 0,
+    now: new Date('2026-10-08T12:00:00+05:00'),
+    maxDaysAhead: 30,
+    capacity: 1,
+  });
+  assert.ok(timezoneOverlap.some((slot) => slot.start === '2026-10-09T11:00:00+05:00'));
 });
 
 test('computeFreeSlots respects working hours, buffer, min_notice and day boundaries for variable duration', () => {
