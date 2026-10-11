@@ -118,7 +118,7 @@ async function dispatch(call: ToolCall, ctx: ToolContext): Promise<unknown> {
       return checkCalendarAvailability(call.args as { date: string; duration_minutes?: number }, ctx);
     case 'createCalendarEvent':
       if (ctx.isSandbox) return { success: true, sandbox_mode: true, simulated: true };
-      return createCalendarEvent(call.args as { start: string; client_name: string; client_phone?: string; notes?: string; slot_minutes?: number }, ctx);
+      return createCalendarEvent(call.args as { start: string; client_name: string; client_phone?: string; notes?: string; duration_minutes?: number; slot_minutes?: number }, ctx);
     case 'cancelCalendarEvent':
       if (ctx.isSandbox) return { success: true, sandbox_mode: true, simulated: true };
       return cancelCalendarEvent(call.args as { reason?: string }, ctx);
@@ -134,10 +134,10 @@ async function checkCalendarAvailability(args: { date: string; duration_minutes?
   }
 
   try {
-    return checkAvailability({
+    return await checkAvailability({
       agentId: ctx.agentId,
       date,
-      durationMinutes: resolveDurationMinutes(args.duration_minutes, 60),
+      durationMinutes: resolveDurationMinutes(args.duration_minutes),
     });
   } catch (error) {
     if (error instanceof CalendarNotConnectedError) {
@@ -147,27 +147,32 @@ async function checkCalendarAvailability(args: { date: string; duration_minutes?
   }
 }
 
-async function createCalendarEvent(args: { start: string; client_name: string; client_phone?: string; notes?: string; slot_minutes?: number }, ctx: ToolContext) {
+async function createCalendarEvent(args: { start: string; client_name: string; client_phone?: string; notes?: string; duration_minutes?: number; slot_minutes?: number }, ctx: ToolContext) {
   if (!args.start || !args.client_name) {
     throw new Error('start и client_name обязательны для createCalendarEvent');
   }
 
-  const slotMinutes = resolveDurationMinutes(args.slot_minutes, 60);
   const start = new Date(String(args.start));
-  const end = new Date(start.getTime() + slotMinutes * 60 * 1000).toISOString();
+  if (Number.isNaN(start.getTime())) {
+    throw new Error('start должен быть датой в формате ISO 8601');
+  }
+
+  // duration_minutes приоритетнее; slot_minutes оставлен как совместимый алиас.
+  const durationMinutes = resolveDurationMinutes(args.duration_minutes, args.slot_minutes);
+  const end = new Date(start.getTime() + durationMinutes * 60 * 1000).toISOString();
 
   try {
-    return createBooking(ctx.agentId, {
+    return await createBooking(ctx.agentId, {
       start: start.toISOString(),
       end,
       summary: `Встреча с ${String(args.client_name)}`,
-      description: args.notes ? String(args.notes) : undefined,
+      description: `Длительность: ${durationMinutes} мин`,
       leadId: resolveLeadIdForTool(undefined, ctx),
       agentIdValue: ctx.agentId,
       clientName: String(args.client_name),
       clientPhone: args.client_phone ? String(args.client_phone) : undefined,
       notes: args.notes ? String(args.notes) : undefined,
-      slotMinutes,
+      slotMinutes: durationMinutes,
     });
   } catch (error) {
     if (error instanceof CalendarNotConnectedError) {
@@ -180,7 +185,7 @@ async function createCalendarEvent(args: { start: string; client_name: string; c
 async function cancelCalendarEvent(args: { reason?: string }, ctx: ToolContext) {
   const reason = args.reason ? String(args.reason) : 'Отменено агентом';
   try {
-    return cancelBookingForLead(ctx.agentId, ctx.leadId, reason);
+    return await cancelBookingForLead(ctx.agentId, ctx.leadId, reason);
   } catch (error) {
     if (error instanceof CalendarNotConnectedError) {
       return { ok: false, reason: 'calendar_not_connected' };
