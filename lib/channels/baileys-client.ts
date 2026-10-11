@@ -17,7 +17,7 @@ import { understandMedia } from '@/lib/server/media-understanding';
 import { handleIncomingMessageWithDependencies } from './baileys-handler';
 import { splitAgentMessage, calculateTypingDelay } from '@/lib/server/ai/message-splitter';
 import { enqueueNotification } from '@/lib/notifications';
-import { discoverPersistedAuthAgentIds } from './baileys-cold-start';
+import { discoverPersistedAuthAgentIds, getReconnectDelayMs, restoreCredsFromBackupIfNeeded, shouldClearAuthStateOnDisconnect, writeCredsWithBackup } from './baileys-cold-start';
 
 const { normalizeConnectionStatus, buildChannelStatusUpdate } = require('@/lib/channels/status-utils');
 
@@ -37,6 +37,7 @@ interface BaileysClientEntry extends BaileysClientInfo {
   lastDisconnectTime?: number;
   reconnectTimer?: ReturnType<typeof setTimeout>;
   everConnected?: boolean;
+  saveCreds?: () => Promise<void>;
 }
 
 declare global {
@@ -44,6 +45,10 @@ declare global {
   var __baileysClients: Map<string, BaileysClientEntry> | undefined;
   // eslint-disable-next-line no-var
   var __baileysClientInitLocks: Map<string, Promise<BaileysClientEntry>> | undefined;
+  // eslint-disable-next-line no-var
+  var __baileysRestoreStarted: boolean | undefined;
+  // eslint-disable-next-line no-var
+  var __baileysShutdownBound: boolean | undefined;
 }
 
 const clientStore = globalThis.__baileysClients ?? new Map<string, BaileysClientEntry>();
@@ -100,12 +105,51 @@ async function restorePersistedWhatsAppSessions() {
 
   logger.info({ count: agentIds.length, agentIds }, 'Restoring persisted WhatsApp sessions from disk');
 
-  for (const agentId of agentIds) {
-    try {
-      await createBaileysClient(agentId);
-    } catch (error) {
-      await logSessionRestoreFailure(agentId, 'createBaileysClient_failed', error);
+  for (let index = 0; index < agentIds.length; index += 1) {
+    const agentId = agentIds[index];
+    let lastAttemptError: unknown;
+
+    for (let attempt = 1; attempt <= 8; attempt += 1) {
+      try {
+        await createBaileysClient(agentId);
+        lastAttemptError = undefined;
+        break;
+      } catch (error) {
+        lastAttemptError = error;
+        const delaySeconds = [5, 10, 20, 40, 60, 60, 60, 60][attempt - 1] ?? 60;
+        await logSessionRestoreFailure(agentId, `restore_attempt_${attempt}_failed`, error);
+        if (attempt < 8) {
+          logger.warn({ agentId, attempt, delaySeconds }, 'Retrying persisted WhatsApp restore after delay');
+          await new Promise((resolve) => setTimeout(resolve, delaySeconds * 1000));
+        }
+      }
     }
+
+    if (lastAttemptError) {
+      await logSessionRestoreFailure(agentId, 'restore_final_failure', lastAttemptError);
+    }
+
+    if (index < agentIds.length - 1) {
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+    }
+  }
+}
+
+export async function startWhatsAppRestore() {
+  if (process.env.NEXT_RUNTIME !== 'nodejs') {
+    return;
+  }
+
+  if (globalThis.__baileysRestoreStarted || process.env.WHATSAPP_RESTORE_ENABLED !== 'true') {
+    return;
+  }
+
+  globalThis.__baileysRestoreStarted = true;
+
+  try {
+    await restorePersistedWhatsAppSessions();
+  } catch (error) {
+    logger.error({ error }, 'Unhandled error while restoring persisted WhatsApp sessions');
   }
 }
 
@@ -137,6 +181,22 @@ function detachSocketListeners(sock: ReturnType<typeof makeWASocket> | undefined
     sock.ev.removeAllListeners('messages.upsert');
   } catch (error) {
     logger.warn({ error }, 'Failed to remove messages.upsert listeners from stale Baileys socket');
+  }
+}
+
+async function persistCredsSafely(agentId: string, credsPath: string, saveCreds: () => Promise<void>) {
+  try {
+    await saveCreds();
+    try {
+      const raw = await fs.readFile(credsPath, 'utf8');
+      if (raw) {
+        await writeCredsWithBackup(credsPath, raw);
+      }
+    } catch (error) {
+      logger.warn({ agentId, error }, 'Failed to write backup for Baileys creds');
+    }
+  } catch (error) {
+    logger.warn({ agentId, error }, 'Failed to persist Baileys creds');
   }
 }
 
@@ -285,8 +345,10 @@ async function createBaileysClient(agentId: string, forceNewAuth = false) {
     await ensureWhatsAppChannel(agentId);
 
     const authDir = path.join(authRoot, agentId);
+    await restoreCredsFromBackupIfNeeded(authDir);
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
     const { version } = await fetchLatestBaileysVersion();
+    const credsPath = path.join(authDir, 'creds.json');
 
     const sock = makeWASocket({
       logger,
@@ -296,13 +358,14 @@ async function createBaileysClient(agentId: string, forceNewAuth = false) {
       browser: ['SatuSystem', 'Baileys', '1.0.0'],
     });
 
-    sock.ev.on('creds.update', saveCreds);
-
     const clientEntry: BaileysClientEntry = {
       sock,
       status: 'disconnected',
       reconnectAttempts: 0,
+      saveCreds: async () => persistCredsSafely(agentId, credsPath, saveCreds),
     };
+
+    sock.ev.on('creds.update', () => clientEntry.saveCreds?.());
 
     clientStore.set(agentId, clientEntry);
 
@@ -342,15 +405,15 @@ async function createBaileysClient(agentId: string, forceNewAuth = false) {
 
       if (update.connection === 'close') {
         const statusCode = (update.lastDisconnect?.error as any)?.output?.statusCode;
-        const isLoggedOut = statusCode === DisconnectReason.loggedOut;
+        const isLoggedOut = statusCode === DisconnectReason.loggedOut || statusCode === 401;
         const isReplaced = statusCode === DisconnectReason.connectionReplaced || statusCode === 440;
-        console.log(JSON.stringify({ tag: 'WA_CLOSE', agentId, statusCode, reason: update.lastDisconnect?.error?.message, isLoggedOut, isReplaced }));
+        const lastErrorMessage = update.lastDisconnect?.error?.message ?? 'Baileys disconnect';
+        console.log(JSON.stringify({ tag: 'WA_CLOSE', agentId, statusCode, reason: lastErrorMessage, isLoggedOut, isReplaced }));
 
-        clientEntry.status = 'disconnected';
+        clientEntry.status = isLoggedOut ? 'error' : 'disconnected';
         clientEntry.qrDataUrl = undefined;
-        clientEntry.lastError = update.lastDisconnect?.error?.message;
+        clientEntry.lastError = lastErrorMessage;
         clientEntry.lastDisconnectTime = Date.now();
-        await syncChannelConnectionState(agentId, 'disconnected', false);
 
         if (clientEntry.reconnectTimer) {
           clearTimeout(clientEntry.reconnectTimer);
@@ -358,8 +421,14 @@ async function createBaileysClient(agentId: string, forceNewAuth = false) {
         }
 
         if (isLoggedOut) {
-          await clearAuthState(agentId);
-          await logSessionRestoreFailure(agentId, 'logged_out', update.lastDisconnect?.error?.message);
+          const loggedOutMessage = 'Сессия отозвана на телефоне, отсканируйте QR заново';
+          clientEntry.status = 'error';
+          clientEntry.lastError = loggedOutMessage;
+          await syncChannelConnectionState(agentId, 'error', false);
+          if (shouldClearAuthStateOnDisconnect(statusCode)) {
+            await clearAuthState(agentId);
+          }
+          await logSessionRestoreFailure(agentId, 'logged_out', loggedOutMessage);
           return;
         }
 
@@ -367,7 +436,20 @@ async function createBaileysClient(agentId: string, forceNewAuth = false) {
           clientEntry.status = 'error';
           clientEntry.lastError = 'Сессия открыта в другом месте';
           await syncChannelConnectionState(agentId, 'error', false);
-          logger.warn({ agentId, statusCode }, 'Baileys session replaced elsewhere; stopping reconnect');
+          logger.warn({ agentId, statusCode }, 'Baileys session replaced elsewhere; retrying reconnect with backoff');
+
+          const delayMs = getReconnectDelayMs(clientEntry.reconnectAttempts + 1, 'replaced');
+          clientEntry.reconnectAttempts += 1;
+          clientEntry.lastReconnectAt = Date.now();
+          await logSessionRestoreFailure(agentId, `replace_retry_${clientEntry.reconnectAttempts}`, clientEntry.lastError);
+          clientEntry.reconnectTimer = setTimeout(async () => {
+            clientStore.delete(agentId);
+            try {
+              await createBaileysClient(agentId);
+            } catch (err) {
+              logger.error({ agentId, err }, 'Реконнект для Baileys после replacement не удался');
+            }
+          }, delayMs);
           return;
         }
 
@@ -378,16 +460,15 @@ async function createBaileysClient(agentId: string, forceNewAuth = false) {
 
         clientEntry.reconnectAttempts += 1;
         clientEntry.lastReconnectAt = now;
-
-        if (clientEntry.reconnectAttempts > 5) {
+        const delayMs = getReconnectDelayMs(clientEntry.reconnectAttempts, 'generic');
+        if (clientEntry.lastError) {
           clientEntry.status = 'error';
-          clientEntry.lastError = 'Слишком много попыток переподключения, подключите заново вручную';
           await syncChannelConnectionState(agentId, 'error', false);
-          logger.error({ agentId, attempts: clientEntry.reconnectAttempts }, 'Baileys reconnect limit exceeded');
-          return;
+        } else {
+          await syncChannelConnectionState(agentId, 'disconnected', false);
         }
 
-        logger.warn({ agentId, statusCode, attempt: clientEntry.reconnectAttempts }, 'Соединение разорвано, переподключение через 5с');
+        logger.warn({ agentId, statusCode, attempt: clientEntry.reconnectAttempts, delayMs }, 'Соединение разорвано, переподключение по backoff');
 
         clientEntry.reconnectTimer = setTimeout(async () => {
           clientStore.delete(agentId);
@@ -396,7 +477,7 @@ async function createBaileysClient(agentId: string, forceNewAuth = false) {
           } catch (err) {
             logger.error({ agentId, err }, 'Реконнект для Baileys не удался');
           }
-        }, 5000);
+        }, delayMs);
       }
     });
 
@@ -550,5 +631,38 @@ export async function getBaileysStatus(agentId: string): Promise<BaileysClientIn
 }
 
 if (process.env.WHATSAPP_RESTORE_ENABLED === 'true') {
-  void restorePersistedWhatsAppSessions();
+  void startWhatsAppRestore();
+}
+
+const handleShutdown = async () => {
+  const shutdownTargets = Array.from(clientStore.values());
+
+  for (const entry of shutdownTargets) {
+    try {
+      if (typeof (entry.sock as any)?.ws?.close === 'function') {
+        (entry.sock as any).ws.close();
+      }
+      if (typeof (entry.sock as any)?.end === 'function') {
+        (entry.sock as any).end();
+      }
+      if (typeof entry.saveCreds === 'function') {
+        await Promise.race([
+          entry.saveCreds(),
+          new Promise((resolve) => setTimeout(resolve, 3000)),
+        ]);
+      }
+    } catch (error) {
+      logger.warn({ agentId: entry.sock?.user?.id, error }, 'Failed to gracefully close Baileys socket during shutdown');
+    }
+  }
+};
+
+if (!globalThis.__baileysShutdownBound) {
+  process.once('SIGINT', () => {
+    void handleShutdown();
+  });
+  process.once('SIGTERM', () => {
+    void handleShutdown();
+  });
+  globalThis.__baileysShutdownBound = true;
 }
