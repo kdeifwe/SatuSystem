@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { compileFlowToPrompt } from '../lib/funnel/compile.ts';
+import { normalizeFunnelFlow } from '../lib/funnel/normalize.ts';
 import { buildFunnelStepInstruction } from '../lib/ai/orchestrator.ts';
 import { resolveDialogueNodeExecution } from '../lib/server/ai/orchestrator.ts';
 
@@ -90,6 +91,18 @@ test('buildFunnelStepInstruction includes the current step context', () => {
 
   assert.match(instruction, /step-2/);
   assert.match(instruction, /advanceFunnelStep/);
+});
+
+test('normalizeFunnelFlow converts array steps into nodes/edges and entryNodeId', () => {
+  const flow = normalizeFunnelFlow([
+    { id: 'greeting', title: 'Greeting', order: 1, sampleMessage: 'Hi there', triggerDescription: 'Start chat' },
+    { id: 'offer', title: 'Offer', order: 2, sampleMessage: 'Here is offer', triggerDescription: 'Close' },
+  ]);
+
+  assert.ok(flow);
+  assert.equal(flow?.entryNodeId, 'greeting');
+  assert.deepEqual(flow?.nodes.map((node) => node.id), ['greeting', 'offer']);
+  assert.deepEqual(flow?.edges.map((edge) => ({ from: edge.from, to: edge.to })), [{ from: 'greeting', to: 'offer' }]);
 });
 
 test('buildFunnelStepInstruction does not hide searchKnowledgeBase for step-9', () => {

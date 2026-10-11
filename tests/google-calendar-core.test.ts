@@ -10,6 +10,8 @@ import { isSandboxToolAllowed } from '../lib/ai/tools/sandbox-allowlist.ts';
 import { buildSystemPrompt } from '../lib/ai/compile-system-prompt.ts';
 import { CalendarNotConnectedError, getCalendarClientForAgent } from '../lib/google-calendar/client.ts';
 import { MAX_TOOL_ROUNDS, getToolLoopStateForTest, retryEmptyFinalAnswerWithoutTools } from '../lib/server/ai/orchestrator.ts';
+import { getDateInPastCalendarError } from '../lib/ai/tools/executor.ts';
+import { getDateInPastCalendarError } from '../lib/ai/tools/executor.ts';
 
 function buildCalendarFallbackForTest(toolResults: Array<Record<string, unknown>>) {
   const failedResults = toolResults.filter((result) => Boolean(result.error));
@@ -46,6 +48,33 @@ test('resolveDurationMinutes applies priority, rounding and clamp constraints', 
   assert.equal(resolveDurationMinutes('bad', null, -12, '0'), DEFAULT_DURATION_MINUTES);
   assert.equal(MIN_DURATION_MINUTES, 15);
   assert.equal(MAX_DURATION_MINUTES, 240);
+});
+
+test('getDateInPastCalendarError rejects dates before the local Almaty date', () => {
+  const today = new Date();
+  const almatyDate = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Almaty',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(today);
+
+  const [y, m, d] = almatyDate.split('-').map(Number);
+  const previousDay = new Date(Date.UTC(y, m - 1, d - 1, 0, 0, 0));
+  const pastDate = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'UTC',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(previousDay);
+
+  assert.deepEqual(getDateInPastCalendarError(pastDate, 'Asia/Almaty'), {
+    ok: false,
+    reason: 'date_in_past',
+    message: 'Дата в прошлом. Вызови getCurrentDate и пересчитай дату.',
+  });
+
+  assert.equal(getDateInPastCalendarError(almatyDate, 'Asia/Almaty'), null);
 });
 
 test('buildBusyIntervals only expands all-day meetings by capacity and timed meetings stay single-block', () => {

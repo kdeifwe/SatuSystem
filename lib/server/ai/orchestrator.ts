@@ -14,7 +14,7 @@ import { applyFunnelRouting, resolvePostRoutingReply, upsertLeadFunnelState } fr
 import { buildConversationInsertData, buildSandboxConversationInsertData, buildSandboxLeadAttributes, isSandboxLeadAttributes } from '@/lib/ai/sandbox-context';
 import { tryBuildDeterministicFactAnswer } from '@/lib/server/ai/deterministic-facts';
 import { isValidLeadName } from '@/lib/server/lead-name';
-import { sanitizeAgentReply } from '@/lib/ai/response-sanitizer';
+import { sanitizeAgentReply, extractTextToolCalls } from '@/lib/ai/response-sanitizer';
 import { buildStickyFactsContextMessage, buildStickyFactsFromChunks, type StickyFact } from '@/lib/server/ai/sticky-facts';
 import { normalizeGeminiContentsToLlmMessages } from '@/lib/server/ai/gemini-message-normalizer';
 
@@ -301,7 +301,7 @@ export async function resolveDialogueNodeExecution(
   if (isScriptLikeNode) {
     const scriptParts = hasScriptParts
       ? currentDialogueNode!.script_parts!
-      : (legacyScriptText ? [legacyScriptText] : []);
+      : (legacyScriptText ? [legacyScriptText] : (currentDialogueNode?.content ? [currentDialogueNode.content] : []));
 
     if (scriptParts.length > 0) {
       const messageParts = handleScriptMessageParts(scriptParts, typingSimulationEnabled);
@@ -2047,8 +2047,13 @@ export async function runAgentTurn(
     // non-fatal
   }
   let currentParts = normalizeLlmResponseParts(response);
-  let finalAnswer = sanitizeAgentReply(extractTextFromParts(currentParts) || ((response as any).text ?? ''));
+  const rawInitialText = extractTextFromParts(currentParts) || ((response as any).text ?? '');
+  let finalAnswer = sanitizeAgentReply(rawInitialText);
   let toolCalls = tryExtractToolCalls(currentParts);
+  const textToolCallsFromInitialText = extractTextToolCalls(rawInitialText).filter((call) => allowedToolNames.includes(call.name));
+  if (toolCalls.length === 0 && textToolCallsFromInitialText.length > 0) {
+    toolCalls = textToolCallsFromInitialText;
+  }
   console.warn('[GEMINI_MODEL_RESPONSE_BEFORE_FOLLOWUP]', {
     agentId,
     conversationId,
@@ -2212,15 +2217,18 @@ export async function runAgentTurn(
     tokensInput += followUpResponse.payload.usageMetadata?.promptTokenCount ?? 0;
     tokensOutput += followUpResponse.payload.usageMetadata?.candidatesTokenCount ?? 0;
     currentParts = normalizeLlmResponseParts(followUpResponse);
-    finalAnswer = sanitizeAgentReply(extractTextFromParts(currentParts) || ((followUpResponse as any).text ?? finalAnswer));
+    const rawFollowUpText = extractTextFromParts(currentParts) || ((followUpResponse as any).text ?? finalAnswer);
+    finalAnswer = sanitizeAgentReply(rawFollowUpText);
+    const textToolCallsFromFollowUpText = extractTextToolCalls(rawFollowUpText).filter((call) => allowedToolNames.includes(call.name));
+    const parsedFollowUpToolCalls = tryExtractToolCalls(currentParts);
+    toolCalls = parsedFollowUpToolCalls.length > 0 ? parsedFollowUpToolCalls : textToolCallsFromFollowUpText;
     console.warn('[GEMINI_MODEL_RESPONSE_AFTER_FOLLOWUP]', {
       agentId,
       conversationId,
-      functionCalls: tryExtractToolCalls(currentParts).map((call) => ({ name: call.name, args: call.args })),
+      functionCalls: toolCalls.map((call) => ({ name: call.name, args: call.args })),
       responseText: finalAnswer,
     });
-    console.log('[PROD_TOOL_FOLLOWUP_RESPONSE]', { agentId, answer: finalAnswer, toolCalls: tryExtractToolCalls(currentParts) });
-    toolCalls = tryExtractToolCalls(currentParts);
+    console.log('[PROD_TOOL_FOLLOWUP_RESPONSE]', { agentId, answer: finalAnswer, toolCalls });
   }
 
   if (handoffTriggered) {
@@ -2306,13 +2314,11 @@ export async function runAgentTurn(
           ...fallbackPayload,
         },
         response: {
-          final: getEmptyResponseFallbackMessage(),
+          final: '',
           fallback_reason: 'empty_reply',
         },
       });
     }
-
-    finalAnswer = getEmptyResponseFallbackMessage();
   }
 
   // === PHASE B SECTION 2.4: Call B - Funnel Routing ===
