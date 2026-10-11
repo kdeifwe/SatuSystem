@@ -48,6 +48,102 @@ test('resolveDurationMinutes applies priority, rounding and clamp constraints', 
   assert.equal(MAX_DURATION_MINUTES, 240);
 });
 
+test('buildBusyIntervals only expands all-day meetings by capacity and timed meetings stay single-block', () => {
+  const timed = [
+    { status: 'confirmed', transparency: 'opaque', start: { dateTime: '2026-10-09T15:00:00+05:00' }, end: { dateTime: '2026-10-09T16:00:00+05:00' } },
+  ];
+  assert.deepEqual(buildBusyIntervals(timed, 'Asia/Almaty', 3), [{ start: '2026-10-09T10:00:00.000Z', end: '2026-10-09T11:00:00.000Z' }]);
+
+  const workingHours: WorkingHoursMap = {
+    mon: [], tue: [], wed: [], thu: [], fri: [['10:00', '24:00']], sat: [], sun: [],
+  };
+
+  const oneTimedBusy = computeFreeSlots({
+    date: '2026-10-09',
+    timezone: 'Asia/Almaty',
+    workingHours,
+    busy: buildBusyIntervals(timed, 'Asia/Almaty', 3),
+    slotMinutes: 60,
+    stepMinutes: 60,
+    bufferMinutes: 0,
+    minNoticeMinutes: 0,
+    now: new Date('2026-10-08T12:00:00+05:00'),
+    maxDaysAhead: 30,
+    capacity: 3,
+  });
+  assert.ok(oneTimedBusy.some((slot) => slot.start === '2026-10-09T15:00:00+05:00'));
+
+  const twoTimedBusy = computeFreeSlots({
+    date: '2026-10-09',
+    timezone: 'Asia/Almaty',
+    workingHours,
+    busy: [
+      ...buildBusyIntervals(timed, 'Asia/Almaty', 3),
+      ...buildBusyIntervals(timed, 'Asia/Almaty', 3),
+    ],
+    slotMinutes: 60,
+    stepMinutes: 60,
+    bufferMinutes: 0,
+    minNoticeMinutes: 0,
+    now: new Date('2026-10-08T12:00:00+05:00'),
+    maxDaysAhead: 30,
+    capacity: 3,
+  });
+  assert.ok(twoTimedBusy.some((slot) => slot.start === '2026-10-09T15:00:00+05:00'));
+
+  const threeTimedBusy = computeFreeSlots({
+    date: '2026-10-09',
+    timezone: 'Asia/Almaty',
+    workingHours,
+    busy: [
+      ...buildBusyIntervals(timed, 'Asia/Almaty', 3),
+      ...buildBusyIntervals(timed, 'Asia/Almaty', 3),
+      ...buildBusyIntervals(timed, 'Asia/Almaty', 3),
+    ],
+    slotMinutes: 60,
+    stepMinutes: 60,
+    bufferMinutes: 0,
+    minNoticeMinutes: 0,
+    now: new Date('2026-10-08T12:00:00+05:00'),
+    maxDaysAhead: 30,
+    capacity: 3,
+  });
+  assert.ok(!threeTimedBusy.some((slot) => slot.start === '2026-10-09T15:00:00+05:00'));
+  assert.ok(threeTimedBusy.some((slot) => slot.start === '2026-10-09T16:00:00+05:00'));
+
+  const singleCap = computeFreeSlots({
+    date: '2026-10-09',
+    timezone: 'Asia/Almaty',
+    workingHours,
+    busy: buildBusyIntervals(timed, 'Asia/Almaty', 1),
+    slotMinutes: 60,
+    stepMinutes: 60,
+    bufferMinutes: 0,
+    minNoticeMinutes: 0,
+    now: new Date('2026-10-08T12:00:00+05:00'),
+    maxDaysAhead: 30,
+    capacity: 1,
+  });
+  assert.ok(!singleCap.some((slot) => slot.start === '2026-10-09T15:00:00+05:00'));
+
+  const allDayBusy = computeFreeSlots({
+    date: '2026-10-09',
+    timezone: 'Asia/Almaty',
+    workingHours,
+    busy: buildBusyIntervals([
+      { status: 'confirmed', transparency: 'opaque', start: { date: '2026-10-09' }, end: { date: '2026-10-10' } },
+    ], 'Asia/Almaty', 3),
+    slotMinutes: 60,
+    stepMinutes: 60,
+    bufferMinutes: 0,
+    minNoticeMinutes: 0,
+    now: new Date('2026-10-08T12:00:00+05:00'),
+    maxDaysAhead: 30,
+    capacity: 3,
+  });
+  assert.equal(allDayBusy.length, 0);
+});
+
 test('buildBusyIntervals and isWithinWorkingHours handle all-day blocks and valid/invalid windows', () => {
   const items = [
     { status: 'confirmed', transparency: 'opaque', start: { date: '2026-10-09' }, end: { date: '2026-10-10' } },
@@ -56,7 +152,7 @@ test('buildBusyIntervals and isWithinWorkingHours handle all-day blocks and vali
     { status: 'confirmed', transparency: 'opaque', start: { dateTime: '2026-10-09T12:00:00+05:00' }, end: { dateTime: '2026-10-09T13:00:00+05:00' } },
   ];
   const busy = buildBusyIntervals(items, 'Asia/Almaty', 3);
-  assert.equal(busy.length, 6);
+  assert.equal(busy.length, 4);
   const allDayRange = {
     start: zonedDate('2026-10-09', '00:00:00', 'Asia/Almaty').toISOString(),
     end: zonedDate('2026-10-10', '00:00:00', 'Asia/Almaty').toISOString(),

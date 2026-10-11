@@ -84,7 +84,11 @@ function localTimeParts(date: Date, timezone: string): { hours: number; minutes:
   return { hours, minutes };
 }
 
-export function buildBusyIntervals(items: Array<{ status?: string | null; transparency?: string | null; start?: { date?: string | null; dateTime?: string | null } | null; end?: { date?: string | null; dateTime?: string | null } | null }>, timezone = DEFAULT_TIMEZONE, capacity = 1): BusyInterval[] {
+export function buildBusyIntervals(
+  items: Array<{ status?: string | null; transparency?: string | null; start?: { date?: string | null; dateTime?: string | null } | null; end?: { date?: string | null; dateTime?: string | null } | null }>,
+  timezone = DEFAULT_TIMEZONE,
+  capacity = 1,
+): BusyInterval[] {
   const result: BusyInterval[] = [];
   const normalizedCapacity = Number.isFinite(capacity) && capacity > 0 ? Math.trunc(capacity) : 1;
 
@@ -96,22 +100,24 @@ export function buildBusyIntervals(items: Array<{ status?: string | null; transp
     const endValue = item.end?.dateTime ?? item.end?.date;
     if (!startValue || !endValue) continue;
 
-    if (item.start.date && !item.start.dateTime) {
+    const isAllDayEvent = Boolean(item.start.date && !item.start.dateTime);
+    if (isAllDayEvent) {
       const allDayStart = zonedDate(item.start.date, '00:00:00', timezone).toISOString();
       const allDayEnd = zonedDate(item.end?.date ?? item.start.date, '00:00:00', timezone).toISOString();
+
+      // All-day events consume the whole day slot, so a capacity of 3 means the day is blocked 3 times.
       for (let index = 0; index < normalizedCapacity; index += 1) {
         result.push({ start: allDayStart, end: allDayEnd });
       }
       continue;
     }
 
+    // Timed events are a single busy interval regardless of capacity; capacity only matters for all-day events.
     const startMillis = new Date(startValue).getTime();
     const endMillis = new Date(endValue).getTime();
     if (!Number.isFinite(startMillis) || !Number.isFinite(endMillis)) continue;
 
-    for (let index = 0; index < normalizedCapacity; index += 1) {
-      result.push({ start: new Date(startMillis).toISOString(), end: new Date(endMillis).toISOString() });
-    }
+    result.push({ start: new Date(startMillis).toISOString(), end: new Date(endMillis).toISOString() });
   }
 
   return result;
