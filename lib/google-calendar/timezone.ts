@@ -18,6 +18,20 @@ export function zonedDate(date: string, time: string, timezone?: string): Date {
   return new Date(`${date}T${time}${getUtcOffset(timezone)}`);
 }
 
+/** Принимает ISO-дату без смещения и добавляет смещение таймзоны, если его нет. */
+export function parseCalendarStartDate(value: string, timezone = DEFAULT_TIMEZONE): Date {
+  const trimmed = String(value ?? '').trim();
+  if (!trimmed) {
+    throw new Error('start is required');
+  }
+
+  if (/[Zz]$|[+-]\d{2}:\d{2}$/.test(trimmed)) {
+    return new Date(trimmed);
+  }
+
+  return new Date(`${trimmed}${getUtcOffset(timezone)}`);
+}
+
 const WEEKDAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const;
 
 /** День недели для календарной даты YYYY-MM-DD, не зависит от пояса сервера. */

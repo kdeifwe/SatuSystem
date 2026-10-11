@@ -13,6 +13,7 @@ import { checkAvailability, createBooking, cancelBookingForLead } from '@/lib/go
 import { CalendarNotConnectedError } from '@/lib/google-calendar/client';
 import { resolveDurationMinutes } from '@/lib/google-calendar/duration';
 import { parseWorkingHours } from '@/lib/google-calendar/slots';
+import { parseCalendarStartDate } from '@/lib/google-calendar/timezone';
 import type { FunnelFlow } from '../../funnel/types.ts';
 
 export interface ToolContext {
@@ -128,6 +129,27 @@ async function dispatch(call: ToolCall, ctx: ToolContext): Promise<unknown> {
   }
 }
 
+function normalizeBookingCapacity(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 1;
+  const rounded = Math.trunc(parsed);
+  return rounded >= 1 ? rounded : 1;
+}
+
+async function getAgentCalendarSettings(agentId: string): Promise<{ workingHours: ReturnType<typeof parseWorkingHours>; capacity: number }> {
+  const supabase = createServiceClient();
+  const { data: agentRow } = await supabase
+    .from('agents')
+    .select('general_capabilities')
+    .eq('id', agentId)
+    .maybeSingle();
+  const capabilities = (agentRow?.general_capabilities ?? {}) as Record<string, unknown>;
+  return {
+    workingHours: parseWorkingHours(capabilities.working_hours),
+    capacity: normalizeBookingCapacity(capabilities.booking_capacity),
+  };
+}
+
 async function checkCalendarAvailability(args: { date: string; duration_minutes?: number }, ctx: ToolContext) {
   const date = String(args.date ?? '').trim();
   if (!date) {
@@ -137,21 +159,15 @@ async function checkCalendarAvailability(args: { date: string; duration_minutes?
     throw new Error('date должен быть в формате YYYY-MM-DD');
   }
 
-  const supabase = createServiceClient();
-  const { data: agentRow } = await supabase
-    .from('agents')
-    .select('general_capabilities')
-    .eq('id', ctx.agentId)
-    .maybeSingle();
-  const capabilities = (agentRow?.general_capabilities ?? {}) as Record<string, unknown>;
-  const workingHours = parseWorkingHours(capabilities.working_hours);
+  const calendarSettings = await getAgentCalendarSettings(ctx.agentId);
 
   try {
     return await checkAvailability({
       agentId: ctx.agentId,
       date,
       durationMinutes: resolveDurationMinutes(args.duration_minutes),
-      workingHours,
+      workingHours: calendarSettings.workingHours,
+      capacity: calendarSettings.capacity,
     });
   } catch (error) {
     if (error instanceof CalendarNotConnectedError) {
@@ -166,17 +182,17 @@ async function createCalendarEvent(args: { start: string; client_name: string; c
     throw new Error('start и client_name обязательны для createCalendarEvent');
   }
 
-  const start = new Date(String(args.start));
+  const start = parseCalendarStartDate(args.start, 'Asia/Almaty');
   if (Number.isNaN(start.getTime())) {
     throw new Error('start должен быть датой в формате ISO 8601');
   }
 
-  // duration_minutes приоритетнее; slot_minutes оставлен как совместимый алиас.
+  const calendarSettings = await getAgentCalendarSettings(ctx.agentId);
   const durationMinutes = resolveDurationMinutes(args.duration_minutes, args.slot_minutes);
   const end = new Date(start.getTime() + durationMinutes * 60 * 1000).toISOString();
 
   try {
-    return await createBooking(ctx.agentId, {
+    const result = await createBooking(ctx.agentId, {
       start: start.toISOString(),
       end,
       summary: `Встреча с ${String(args.client_name)}`,
@@ -187,7 +203,14 @@ async function createCalendarEvent(args: { start: string; client_name: string; c
       clientPhone: args.client_phone ? String(args.client_phone) : undefined,
       notes: args.notes ? String(args.notes) : undefined,
       slotMinutes: durationMinutes,
+      capacity: calendarSettings.capacity,
     });
+
+    if (result && typeof result === 'object' && (result as { reason?: unknown }).reason === 'slot_unavailable') {
+      return { ok: false, reason: 'slot_unavailable' };
+    }
+
+    return result;
   } catch (error) {
     if (error instanceof CalendarNotConnectedError) {
       return { ok: false, reason: 'calendar_not_connected' };

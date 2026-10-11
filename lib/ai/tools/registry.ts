@@ -256,7 +256,7 @@ export const PRODUCTION_TOOL_DECLARATIONS: GeminiFunctionDeclaration[] = [
   },
   {
     name: 'createCalendarEvent',
-    description: 'Создаёт запись клиента в Google Calendar агента. Окончание записи = start + duration_minutes (по умолчанию 60 минут, допустимо от 15 до 240); передавай ту же длительность, что и в checkCalendarAvailability. Сервер связывает запись с текущим лидом и агентом из контекста, не доверяет ID из модели.',
+    description: 'Создаёт запись клиента в Google Calendar агента. Окончание записи = start + duration_minutes (по умолчанию 60 минут, допустимо от 15 до 240); передавай ту же длительность, что и в checkCalendarAvailability. Сервер связывает запись с текущим лидом и агентом из контекста, не доверяет ID из модели. Если вернулся reason=slot_unavailable, время занято: снова вызови checkCalendarAvailability и предложи другие слоты.',
     parameters: {
       type: 'OBJECT',
       properties: {

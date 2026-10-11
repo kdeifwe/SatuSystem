@@ -14,6 +14,7 @@ export type BookingAvailabilityInput = {
   minNoticeMinutes?: number;
   maxDaysAhead?: number;
   now?: Date;
+  capacity?: number;
 };
 
 async function convertCalendarConnectionError<T>(operation: () => Promise<T>): Promise<T | { ok: false; reason: 'calendar_not_connected' }> {
@@ -27,6 +28,28 @@ async function convertCalendarConnectionError<T>(operation: () => Promise<T>): P
   }
 }
 
+function normalizeBookingCapacity(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 1;
+  const intValue = Math.trunc(parsed);
+  return intValue >= 1 ? intValue : 1;
+}
+
+function isEventBusy(item: { status?: string | null; transparency?: string | null; start?: { date?: string | null; dateTime?: string | null } | null; end?: { date?: string | null; dateTime?: string | null } | null }): boolean {
+  if (item.status === 'cancelled' || item.transparency === 'transparent') return false;
+  if (!item.start) return false;
+  const start = item.start.dateTime ?? item.start.date;
+  const end = item.end?.dateTime ?? item.end?.date;
+  return Boolean(start && end);
+}
+
+function overlapsWindow(start: Date, end: Date, busyStart: string | null | undefined, busyEnd: string | null | undefined): boolean {
+  if (!busyStart || !busyEnd) return false;
+  const busyStartMs = new Date(busyStart).getTime();
+  const busyEndMs = new Date(busyEnd).getTime();
+  return start.getTime() < busyEndMs && end.getTime() > busyStartMs;
+}
+
 export async function checkAvailability({
   agentId,
   date,
@@ -37,31 +60,38 @@ export async function checkAvailability({
   minNoticeMinutes = 120,
   maxDaysAhead = 30,
   now = new Date(),
+  capacity = 1,
 }: BookingAvailabilityInput) {
   return convertCalendarConnectionError(async () => {
     const auth = await getCalendarClientForAgent(agentId);
     const calendarApi = calendar({ version: 'v3', auth });
     const calendarId = getGoogleCalendarId();
-    const response = await calendarApi.freebusy.query({
-      requestBody: {
-        items: [{ id: calendarId }],
-        timeMin: zonedDate(date, '00:00:00', timezone).toISOString(),
-        timeMax: zonedDate(date, '23:59:59', timezone).toISOString(),
-      },
+    const response = await calendarApi.events.list({
+      calendarId,
+      timeMin: zonedDate(date, '00:00:00', timezone).toISOString(),
+      timeMax: zonedDate(date, '23:59:59', timezone).toISOString(),
+      singleEvents: true,
+      orderBy: 'startTime',
+      maxResults: 250,
     });
 
-    const calendars = (response as any)?.data?.calendars ?? {};
-    const calendarEntry = calendars[calendarId] ?? calendars.primary;
-    const calendarErrors = calendarEntry?.errors;
-    if (Array.isArray(calendarErrors) && calendarErrors.length > 0) {
-      // Не считать календарь свободным, если Google вернул ошибку доступа.
-      throw new Error(`Google Calendar freebusy error: ${JSON.stringify(calendarErrors)}`);
+    const items = (response as any)?.data?.items ?? [];
+    const busy: BusyInterval[] = [];
+    for (const item of items) {
+      if (!isEventBusy(item)) continue;
+      const startDate = item.start?.date;
+      const endDate = item.end?.date;
+      if (startDate && !item.start?.dateTime) {
+        const fullDayStart = zonedDate(startDate, '00:00:00', timezone).toISOString();
+        const fullDayEnd = endDate ? zonedDate(endDate, '00:00:00', timezone).toISOString() : zonedDate(startDate, '23:59:59', timezone).toISOString();
+        busy.push({ start: fullDayStart, end: fullDayEnd });
+        continue;
+      }
+      const eventStart = item.start?.dateTime ?? item.start?.date;
+      const eventEnd = item.end?.dateTime ?? item.end?.date;
+      if (!eventStart || !eventEnd) continue;
+      busy.push({ start: new Date(eventStart).toISOString(), end: new Date(eventEnd).toISOString() });
     }
-    const items = calendarEntry?.busy ?? [];
-    const busy: BusyInterval[] = (items ?? []).map((item: { start?: string | null; end?: string | null }) => ({
-      start: item.start ?? new Date().toISOString(),
-      end: item.end ?? new Date().toISOString(),
-    }));
 
     const defaultWorkingHours: WorkingHoursMap = {
       mon: [['09:00', '18:00']],
@@ -74,7 +104,6 @@ export async function checkAvailability({
     };
 
     const slotMinutes = resolveDurationMinutes(durationMinutes, 60);
-
     const slots = computeFreeSlots({
       date,
       timezone,
@@ -85,6 +114,7 @@ export async function checkAvailability({
       minNoticeMinutes,
       now,
       maxDaysAhead,
+      capacity,
     });
 
     return { slots };
@@ -99,6 +129,7 @@ export async function createBooking(agentId: string, input: {
   leadId: string;
   agentIdValue?: string;
   slotMinutes?: number;
+  capacity?: number;
   clientName?: string;
   clientPhone?: string;
   notes?: string;
@@ -111,6 +142,28 @@ export async function createBooking(agentId: string, input: {
     const startDate = new Date(input.start);
     const slotMinutes = resolveDurationMinutes(input.slotMinutes, 60);
     const endDate = input.end ? new Date(input.end) : new Date(startDate.getTime() + slotMinutes * 60 * 1000);
+    const capacity = normalizeBookingCapacity(input.capacity ?? 1);
+    const response = await calendarApi.events.list({
+      calendarId,
+      timeMin: startDate.toISOString(),
+      timeMax: endDate.toISOString(),
+      singleEvents: true,
+      orderBy: 'startTime',
+      maxResults: 250,
+    });
+
+    const busyCount = (response as any)?.data?.items?.filter((item: any) => {
+      if (item.status === 'cancelled' || item.transparency === 'transparent') return false;
+      const eventStart = item.start?.dateTime ?? item.start?.date;
+      const eventEnd = item.end?.dateTime ?? item.end?.date;
+      if (!eventStart || !eventEnd) return false;
+      return overlapsWindow(startDate, endDate, eventStart, eventEnd);
+    }).length ?? 0;
+
+    if (busyCount >= capacity) {
+      return { ok: false, reason: 'slot_unavailable' };
+    }
+
     const descriptionParts = [
       input.description,
       input.notes,

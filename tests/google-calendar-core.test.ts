@@ -1,7 +1,7 @@
 import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { computeFreeSlots } from '../lib/google-calendar/slots.ts';
+import { computeFreeSlots, parseWorkingHours } from '../lib/google-calendar/slots.ts';
 import { DEFAULT_DURATION_MINUTES, MIN_DURATION_MINUTES, MAX_DURATION_MINUTES, resolveDurationMinutes } from '../lib/google-calendar/duration.ts';
 import { buildToolDeclarationsForAgent } from '../lib/ai/tools/registry.ts';
 import { isSandboxToolAllowed } from '../lib/ai/tools/sandbox-allowlist.ts';
@@ -60,13 +60,13 @@ test('computeFreeSlots respects working hours, buffer, min_notice and day bounda
       sun: [],
     },
     busy: [
-      { start: '2026-10-09T10:00:00', end: '2026-10-09T11:00:00' },
-      { start: '2026-10-09T15:30:00', end: '2026-10-09T15:45:00' },
+      { start: '2026-10-09T10:00:00+05:00', end: '2026-10-09T11:00:00+05:00' },
+      { start: '2026-10-09T15:30:00+05:00', end: '2026-10-09T15:45:00+05:00' },
     ],
     slotMinutes: 90,
     bufferMinutes: 15,
     minNoticeMinutes: 60,
-    now: new Date('2026-10-08T12:00:00+06:00'),
+    now: new Date('2026-10-08T12:00:00+05:00'),
     maxDaysAhead: 30,
   });
 
@@ -74,6 +74,245 @@ test('computeFreeSlots respects working hours, buffer, min_notice and day bounda
   assert.ok(slots.every((slot) => slot.end > slot.start));
   assert.ok(slots.some((slot) => slot.start.includes('09:00')) || slots.some((slot) => slot.start.includes('11:00')));
   assert.ok(slots.some((slot) => slot.start.includes('11:00')));
+});
+
+test('slot computation is timezone invariant and respects explicit +05:00 busy windows', () => {
+  const busy = [{ start: '2026-10-09T10:00:00+05:00', end: '2026-10-09T11:00:00+05:00' }];
+  const slots = computeFreeSlots({
+    date: '2026-10-09',
+    timezone: 'Asia/Almaty',
+    workingHours: {
+      mon: [['09:00', '18:00']],
+      tue: [['09:00', '18:00']],
+      wed: [['09:00', '18:00']],
+      thu: [['09:00', '18:00']],
+      fri: [['09:00', '18:00']],
+      sat: [],
+      sun: [],
+    },
+    busy,
+    slotMinutes: 60,
+    stepMinutes: 30,
+    bufferMinutes: 0,
+    minNoticeMinutes: 0,
+    now: new Date('2026-10-08T12:00:00+05:00'),
+    maxDaysAhead: 30,
+  });
+
+  const starts = slots.map((slot) => slot.start);
+  assert.ok(starts.includes('2026-10-09T09:00:00+05:00'));
+  assert.ok(starts.includes('2026-10-09T11:00:00+05:00'));
+  assert.ok(!starts.includes('2026-10-09T09:30:00+05:00'));
+  assert.ok(!starts.includes('2026-10-09T10:00:00+05:00'));
+  assert.ok(!starts.includes('2026-10-09T10:30:00+05:00'));
+  assert.ok(starts.every((start) => start.includes('+05:00')));
+});
+
+test('parseWorkingHours supports 24:00 as the end of the day and computeFreeSlots respects capacity and end-of-day boundaries', () => {
+  assert.ok(parseWorkingHours({ mon: [['10:00', '24:00']] } as any));
+  assert.equal(parseWorkingHours({ mon: [['24:00', '24:30']] } as any), undefined);
+  assert.equal(parseWorkingHours({ mon: [['10:00', '25:00']] } as any), undefined);
+
+  const fullDaySlots = computeFreeSlots({
+    date: '2026-10-09',
+    timezone: 'Asia/Almaty',
+    workingHours: {
+      mon: [],
+      tue: [],
+      wed: [],
+      thu: [],
+      fri: [['10:00', '24:00']],
+      sat: [],
+      sun: [],
+    },
+    busy: [],
+    slotMinutes: 60,
+    stepMinutes: 30,
+    bufferMinutes: 0,
+    minNoticeMinutes: 0,
+    now: new Date('2026-10-08T12:00:00+05:00'),
+    maxDaysAhead: 30,
+  });
+
+  const fullDayStarts = fullDaySlots.map((slot) => slot.start);
+  assert.ok(fullDayStarts.includes('2026-10-09T10:00:00+05:00'));
+  assert.ok(fullDayStarts.includes('2026-10-09T23:00:00+05:00'));
+  assert.ok(!fullDayStarts.includes('2026-10-10T00:00:00+05:00'));
+  assert.ok(fullDaySlots.some((slot) => slot.start === '2026-10-09T23:00:00+05:00' && slot.end === '2026-10-10T00:00:00+05:00'));
+  assert.ok(!fullDayStarts.includes('2026-10-09T23:30:00+05:00'));
+
+  const threeBusyAtNoon = computeFreeSlots({
+    date: '2026-10-09',
+    timezone: 'Asia/Almaty',
+    workingHours: {
+      mon: [],
+      tue: [],
+      wed: [],
+      thu: [],
+      fri: [['10:00', '24:00']],
+      sat: [],
+      sun: [],
+    },
+    busy: [
+      { start: '2026-10-09T15:00:00+05:00', end: '2026-10-09T16:00:00+05:00' },
+      { start: '2026-10-09T15:00:00+05:00', end: '2026-10-09T16:00:00+05:00' },
+      { start: '2026-10-09T15:00:00+05:00', end: '2026-10-09T16:00:00+05:00' },
+    ],
+    slotMinutes: 60,
+    stepMinutes: 30,
+    bufferMinutes: 0,
+    minNoticeMinutes: 0,
+    now: new Date('2026-10-08T12:00:00+05:00'),
+    maxDaysAhead: 30,
+    capacity: 3,
+  });
+  assert.ok(!threeBusyAtNoon.some((slot) => slot.start === '2026-10-09T15:00:00+05:00'));
+  assert.ok(!threeBusyAtNoon.some((slot) => slot.start === '2026-10-09T15:30:00+05:00'));
+  assert.ok(threeBusyAtNoon.some((slot) => slot.start === '2026-10-09T16:00:00+05:00'));
+
+  const twoBusyAtNoon = computeFreeSlots({
+    date: '2026-10-09',
+    timezone: 'Asia/Almaty',
+    workingHours: {
+      mon: [],
+      tue: [],
+      wed: [],
+      thu: [],
+      fri: [['10:00', '24:00']],
+      sat: [],
+      sun: [],
+    },
+    busy: [
+      { start: '2026-10-09T15:00:00+05:00', end: '2026-10-09T16:00:00+05:00' },
+      { start: '2026-10-09T15:00:00+05:00', end: '2026-10-09T16:00:00+05:00' },
+    ],
+    slotMinutes: 60,
+    stepMinutes: 30,
+    bufferMinutes: 0,
+    minNoticeMinutes: 0,
+    now: new Date('2026-10-08T12:00:00+05:00'),
+    maxDaysAhead: 30,
+    capacity: 3,
+  });
+  assert.ok(twoBusyAtNoon.some((slot) => slot.start === '2026-10-09T15:00:00+05:00'));
+
+  const adjacencySlots = computeFreeSlots({
+    date: '2026-10-09',
+    timezone: 'Asia/Almaty',
+    workingHours: {
+      mon: [],
+      tue: [],
+      wed: [],
+      thu: [],
+      fri: [['10:00', '24:00']],
+      sat: [],
+      sun: [],
+    },
+    busy: [{ start: '2026-10-09T10:00:00+05:00', end: '2026-10-09T11:00:00+05:00' }],
+    slotMinutes: 60,
+    stepMinutes: 30,
+    bufferMinutes: 0,
+    minNoticeMinutes: 0,
+    now: new Date('2026-10-08T12:00:00+05:00'),
+    maxDaysAhead: 30,
+    capacity: 1,
+  });
+  assert.ok(adjacencySlots.some((slot) => slot.start === '2026-10-09T11:00:00+05:00'));
+});
+
+test('slots honor saturday hours, empty days, full days, future horizon and parseWorkingHours validation', () => {
+  const saturdaySlots = computeFreeSlots({
+    date: '2026-10-10',
+    timezone: 'Asia/Almaty',
+    workingHours: {
+      mon: [],
+      tue: [],
+      wed: [],
+      thu: [],
+      fri: [],
+      sat: [['10:00', '12:00']],
+      sun: [],
+    },
+    busy: [],
+    slotMinutes: 60,
+    bufferMinutes: 0,
+    minNoticeMinutes: 0,
+    now: new Date('2026-10-09T10:00:00+05:00'),
+    maxDaysAhead: 30,
+  });
+  assert.ok(saturdaySlots.length > 0);
+  assert.ok(saturdaySlots.every((slot) => slot.start.includes('+05:00')));
+
+  const emptyDay = computeFreeSlots({
+    date: '2026-10-11',
+    timezone: 'Asia/Almaty',
+    workingHours: {
+      mon: [],
+      tue: [],
+      wed: [],
+      thu: [],
+      fri: [],
+      sat: [],
+      sun: [],
+    },
+    busy: [],
+    slotMinutes: 60,
+    bufferMinutes: 0,
+    minNoticeMinutes: 0,
+    now: new Date('2026-10-10T09:00:00+05:00'),
+    maxDaysAhead: 30,
+  });
+  assert.deepEqual(emptyDay, []);
+
+  const fullDay = computeFreeSlots({
+    date: '2026-10-12',
+    timezone: 'Asia/Almaty',
+    workingHours: {
+      mon: [['09:00', '18:00']],
+      tue: [['09:00', '18:00']],
+      wed: [['09:00', '18:00']],
+      thu: [['09:00', '18:00']],
+      fri: [['09:00', '18:00']],
+      sat: [],
+      sun: [],
+    },
+    busy: [],
+    slotMinutes: 60,
+    stepMinutes: 30,
+    bufferMinutes: 0,
+    minNoticeMinutes: 0,
+    now: new Date('2026-10-11T09:00:00+05:00'),
+    maxDaysAhead: 30,
+  });
+  assert.ok(fullDay.length > 8);
+  assert.ok(fullDay.length <= 30);
+
+  const outOfRange = computeFreeSlots({
+    date: '2100-01-01',
+    timezone: 'Asia/Almaty',
+    workingHours: {
+      mon: [['09:00', '18:00']],
+      tue: [['09:00', '18:00']],
+      wed: [['09:00', '18:00']],
+      thu: [['09:00', '18:00']],
+      fri: [['09:00', '18:00']],
+      sat: [],
+      sun: [],
+    },
+    busy: [],
+    slotMinutes: 60,
+    bufferMinutes: 0,
+    minNoticeMinutes: 0,
+    now: new Date('2026-10-09T09:00:00+05:00'),
+    maxDaysAhead: 30,
+  });
+  assert.deepEqual(outOfRange, []);
+
+  assert.ok(parseWorkingHours({ mon: [['10:00', '20:00']], tue: [], wed: [], thu: [], fri: [], sat: [], sun: [] }));
+  assert.equal(parseWorkingHours(null), undefined);
+  assert.equal(parseWorkingHours([] as unknown[]), undefined);
+  assert.equal(parseWorkingHours({ mon: ['25:00'] } as any), undefined);
+  assert.equal(parseWorkingHours({ mon: [['10:00', '20:00', '22:00']] } as any), undefined);
 });
 
 test('service-account client throws when calendar env is missing', () => {
