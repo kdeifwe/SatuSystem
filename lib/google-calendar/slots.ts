@@ -29,6 +29,17 @@ function overlaps(startA: number, endA: number, startB: number, endB: number): b
   return startA < endB && endA > startB;
 }
 
+function clampSlotMinutes(slotMinutes: number): number {
+  if (!Number.isFinite(slotMinutes) || slotMinutes <= 0) {
+    return 60;
+  }
+  return Math.min(Math.max(Math.round(slotMinutes), 15), 240);
+}
+
+function startsAtExactBoundary(startMs: number, endMs: number, busyStartMs: number, busyEndMs: number): boolean {
+  return busyStartMs <= startMs && startMs === busyEndMs;
+}
+
 export function computeFreeSlots({
   date,
   timezone,
@@ -62,6 +73,7 @@ export function computeFreeSlots({
     return [];
   }
 
+  const normalizedSlotMinutes = clampSlotMinutes(slotMinutes);
   const result: FreeSlot[] = [];
   const busyDates = (busy ?? []).map((interval) => ({
     start: new Date(interval.start).getTime(),
@@ -74,20 +86,22 @@ export function computeFreeSlots({
 
   for (const window of normalizedWorkingHours) {
     let cursor = window.start;
-    while (cursor + slotMinutes <= window.end) {
+    while (cursor + normalizedSlotMinutes <= window.end) {
       const slotStartMinutes = cursor;
-      const slotEndMinutes = cursor + slotMinutes;
+      const slotEndMinutes = cursor + normalizedSlotMinutes;
       const slotStart = new Date(`${date}T${String(Math.floor(slotStartMinutes / 60)).padStart(2, '0')}:${String(slotStartMinutes % 60).padStart(2, '0')}:00`);
-      const slotEnd = new Date(slotStart.getTime() + slotMinutes * 60 * 1000);
+      const slotEnd = new Date(slotStart.getTime() + normalizedSlotMinutes * 60 * 1000);
 
       let blocked = false;
       for (const interval of busyDates) {
         const startBuffer = interval.start - bufferMinutes * 60 * 1000;
         const endBuffer = interval.end + bufferMinutes * 60 * 1000;
 
+        if (startsAtExactBoundary(slotStart.getTime(), slotEnd.getTime(), interval.start, interval.end)) {
+          continue;
+        }
+
         if (slotStart.getTime() >= interval.end && slotStart.getTime() < endBuffer) {
-          // Allow a slot to begin exactly at the end of a busy block. The buffered gap is for the end of the busy event,
-          // not for the exact next appointment boundary.
           continue;
         }
 
