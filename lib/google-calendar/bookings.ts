@@ -1,6 +1,7 @@
 import { calendar } from '@googleapis/calendar';
 import { getCalendarClientForAgent, CalendarNotConnectedError, getGoogleCalendarId } from './client';
 import { resolveDurationMinutes } from './duration';
+import { zonedDate } from './timezone';
 import { computeFreeSlots, type BusyInterval, type WorkingHoursMap } from './slots';
 
 export type BookingAvailabilityInput = {
@@ -44,8 +45,8 @@ export async function checkAvailability({
     const response = await calendarApi.freebusy.query({
       requestBody: {
         items: [{ id: calendarId }],
-        timeMin: new Date(`${date}T00:00:00`).toISOString(),
-        timeMax: new Date(`${date}T23:59:59`).toISOString(),
+        timeMin: zonedDate(date, '00:00:00', timezone).toISOString(),
+        timeMax: zonedDate(date, '23:59:59', timezone).toISOString(),
       },
     });
 

@@ -12,6 +12,7 @@ import { sendTelegramMedia } from '@/lib/channels/telegram-client';
 import { checkAvailability, createBooking, cancelBookingForLead } from '@/lib/google-calendar/bookings';
 import { CalendarNotConnectedError } from '@/lib/google-calendar/client';
 import { resolveDurationMinutes } from '@/lib/google-calendar/duration';
+import { parseWorkingHours } from '@/lib/google-calendar/slots';
 import type { FunnelFlow } from '../../funnel/types.ts';
 
 export interface ToolContext {
@@ -132,12 +133,25 @@ async function checkCalendarAvailability(args: { date: string; duration_minutes?
   if (!date) {
     throw new Error('date обязателен для checkCalendarAvailability');
   }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw new Error('date должен быть в формате YYYY-MM-DD');
+  }
+
+  const supabase = createServiceClient();
+  const { data: agentRow } = await supabase
+    .from('agents')
+    .select('general_capabilities')
+    .eq('id', ctx.agentId)
+    .maybeSingle();
+  const capabilities = (agentRow?.general_capabilities ?? {}) as Record<string, unknown>;
+  const workingHours = parseWorkingHours(capabilities.working_hours);
 
   try {
     return await checkAvailability({
       agentId: ctx.agentId,
       date,
       durationMinutes: resolveDurationMinutes(args.duration_minutes),
+      workingHours,
     });
   } catch (error) {
     if (error instanceof CalendarNotConnectedError) {
