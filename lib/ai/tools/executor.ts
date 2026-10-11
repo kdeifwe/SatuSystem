@@ -13,7 +13,7 @@ import { checkAvailability, createBooking, cancelBookingForLead } from '@/lib/go
 import { CalendarNotConnectedError } from '@/lib/google-calendar/client';
 import { resolveDurationMinutes } from '@/lib/google-calendar/duration';
 import { parseWorkingHours } from '@/lib/google-calendar/slots';
-import { parseCalendarStartDate } from '@/lib/google-calendar/timezone';
+import { parseCalendarStartDate, zonedDate } from '@/lib/google-calendar/timezone';
 import type { FunnelFlow } from '../../funnel/types.ts';
 
 export interface ToolContext {
@@ -150,6 +150,35 @@ async function getAgentCalendarSettings(agentId: string): Promise<{ workingHours
   };
 }
 
+export function getDateInPastCalendarError(date: string, timezone = 'Asia/Almaty'): { ok: false; reason: 'date_in_past'; message: string } | null {
+  const normalizedDate = String(date ?? '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalizedDate)) {
+    return null;
+  }
+
+  const todayFormatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  const todayParts = todayFormatter.formatToParts(new Date());
+  const todayMap = Object.fromEntries(todayParts.filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
+  const todayDate = `${todayMap.year}-${todayMap.month}-${todayMap.day}`;
+  const todayStart = zonedDate(todayDate, '00:00:00', timezone);
+  const requestedStart = zonedDate(normalizedDate, '00:00:00', timezone);
+
+  if (requestedStart.getTime() < todayStart.getTime()) {
+    return {
+      ok: false,
+      reason: 'date_in_past',
+      message: 'Дата в прошлом. Вызови getCurrentDate и пересчитай дату.',
+    };
+  }
+
+  return null;
+}
+
 async function checkCalendarAvailability(args: { date: string; duration_minutes?: number }, ctx: ToolContext) {
   const date = String(args.date ?? '').trim();
   if (!date) {
@@ -157,6 +186,11 @@ async function checkCalendarAvailability(args: { date: string; duration_minutes?
   }
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     throw new Error('date должен быть в формате YYYY-MM-DD');
+  }
+
+  const dateInPastError = getDateInPastCalendarError(date, 'Asia/Almaty');
+  if (dateInPastError) {
+    return dateInPastError;
   }
 
   const calendarSettings = await getAgentCalendarSettings(ctx.agentId);

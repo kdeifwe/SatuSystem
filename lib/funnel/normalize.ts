@@ -36,6 +36,44 @@ export function normalizeFunnelFlow(value: unknown): FunnelFlow | null {
     }
   }
 
+  if (Array.isArray(value)) {
+    const orderedSteps = [...value].map((step, index) => ({
+      ...step,
+      id: typeof step?.id === 'string' && step.id.trim().length > 0 ? step.id : `step-${index + 1}`,
+      title: typeof step?.title === 'string' && step.title.trim().length > 0 ? step.title : `Шаг ${index + 1}`,
+      order: typeof step?.order === 'number' ? step.order : index + 1,
+      sampleMessage: typeof step?.sampleMessage === 'string' && step.sampleMessage.trim().length > 0
+        ? step.sampleMessage
+        : (typeof step?.triggerDescription === 'string' ? step.triggerDescription : step?.title ?? `Шаг ${index + 1}`),
+      triggerDescription: typeof step?.triggerDescription === 'string' ? step.triggerDescription : 'Продолжить',
+    })).sort((a, b) => Number(a.order) - Number(b.order));
+
+    const nodes: FunnelNode[] = orderedSteps.map((step, index) => ({
+      id: normalizeNodeId(String(step.id), index),
+      title: String(step.title),
+      content: String(step.sampleMessage),
+      position: { x: index * 320, y: 0 },
+      message_type: 'script',
+      script_parts: [String(step.sampleMessage)],
+    }));
+
+    const edges: FunnelEdge[] = [];
+    for (let index = 0; index < nodes.length - 1; index += 1) {
+      edges.push({
+        id: `edge-${index + 1}`,
+        from: nodes[index].id,
+        to: nodes[index + 1].id,
+        label: orderedSteps[index]?.triggerDescription ?? 'продолжить',
+      });
+    }
+
+    return {
+      nodes,
+      edges,
+      entryNodeId: nodes[0]?.id ?? '',
+    };
+  }
+
   if (typeof value !== 'object') return null;
 
   const candidate = value as Partial<FunnelFlow> & LegacyDialogueFlow;
