@@ -2,7 +2,7 @@ import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { computeFreeSlots, parseWorkingHours } from '../lib/google-calendar/slots.ts';
-import { buildBusyIntervals, isWithinWorkingHours } from '../lib/google-calendar/bookings.ts';
+import { buildBusyIntervals, evaluateBooking, isWithinWorkingHours, createBooking } from '../lib/google-calendar/bookings.ts';
 import { zonedDate } from '../lib/google-calendar/timezone.ts';
 import { DEFAULT_DURATION_MINUTES, MIN_DURATION_MINUTES, MAX_DURATION_MINUTES, resolveDurationMinutes } from '../lib/google-calendar/duration.ts';
 import { buildToolDeclarationsForAgent } from '../lib/ai/tools/registry.ts';
@@ -106,6 +106,125 @@ test('buildBusyIntervals and isWithinWorkingHours handle all-day blocks and vali
     capacity: 1,
   });
   assert.ok(timezoneOverlap.some((slot) => slot.start === '2026-10-09T11:00:00+05:00'));
+});
+
+test('evaluateBooking validates working hours and capacity for booking decisions', () => {
+  const workingHours = {
+    mon: [], tue: [], wed: [], thu: [], fri: [['10:00', '24:00']], sat: [], sun: [],
+  } as WorkingHoursMap;
+
+  assert.deepEqual(
+    evaluateBooking({
+      start: '2026-10-09T23:00:00+05:00',
+      end: '2026-10-10T00:00:00+05:00',
+      items: [],
+      capacity: 1,
+      workingHours,
+      timezone: 'Asia/Almaty',
+    }),
+    { ok: true },
+  );
+
+  assert.deepEqual(
+    evaluateBooking({
+      start: '2026-10-09T09:30:00+05:00',
+      end: '2026-10-09T10:30:00+05:00',
+      items: [],
+      capacity: 1,
+      workingHours,
+      timezone: 'Asia/Almaty',
+    }),
+    { ok: false, reason: 'outside_working_hours' },
+  );
+
+  assert.deepEqual(
+    evaluateBooking({
+      start: '2026-10-09T15:00:00+05:00',
+      end: '2026-10-09T16:00:00+05:00',
+      items: [
+        { status: 'confirmed', start: { dateTime: '2026-10-09T15:00:00+05:00' }, end: { dateTime: '2026-10-09T16:00:00+05:00' } },
+        { status: 'confirmed', start: { dateTime: '2026-10-09T15:00:00+05:00' }, end: { dateTime: '2026-10-09T16:00:00+05:00' } },
+        { status: 'confirmed', start: { dateTime: '2026-10-09T15:00:00+05:00' }, end: { dateTime: '2026-10-09T16:00:00+05:00' } },
+      ],
+      capacity: 3,
+      workingHours,
+      timezone: 'Asia/Almaty',
+    }),
+    { ok: false, reason: 'slot_unavailable' },
+  );
+
+  assert.deepEqual(
+    evaluateBooking({
+      start: '2026-10-09T15:00:00+05:00',
+      end: '2026-10-09T16:00:00+05:00',
+      items: [
+        { status: 'confirmed', start: { dateTime: '2026-10-09T15:00:00+05:00' }, end: { dateTime: '2026-10-09T16:00:00+05:00' } },
+        { status: 'confirmed', start: { dateTime: '2026-10-09T15:00:00+05:00' }, end: { dateTime: '2026-10-09T16:00:00+05:00' } },
+      ],
+      capacity: 3,
+      workingHours,
+      timezone: 'Asia/Almaty',
+    }),
+    { ok: true },
+  );
+
+  assert.deepEqual(
+    evaluateBooking({
+      start: '2026-10-09T00:00:00+05:00',
+      end: '2026-10-10T00:00:00+05:00',
+      items: [
+        { status: 'confirmed', start: { date: '2026-10-09' }, end: { date: '2026-10-10' } },
+        { status: 'confirmed', start: { date: '2026-10-09' }, end: { date: '2026-10-10' } },
+        { status: 'confirmed', start: { date: '2026-10-09' }, end: { date: '2026-10-10' } },
+      ],
+      capacity: 3,
+      workingHours,
+      timezone: 'Asia/Almaty',
+    }),
+    { ok: false, reason: 'outside_working_hours' },
+  );
+});
+
+test('createBooking stops before insert when the slot is unavailable', async () => {
+  process.env.GOOGLE_SA_EMAIL = 'test@example.com';
+  process.env.GOOGLE_SA_PRIVATE_KEY = '-----BEGIN PRIVATE KEY-----\nkey\n-----END PRIVATE KEY-----\n';
+  process.env.GOOGLE_CALENDAR_ID = 'test-calendar-id';
+
+  const insert = mock.fn(async () => ({ data: { id: 'evt_123' } }));
+  const calendarApi = {
+    events: {
+      list: async () => ({
+        data: {
+          items: [
+            { status: 'confirmed', start: { dateTime: '2026-10-09T15:00:00+05:00' }, end: { dateTime: '2026-10-09T16:00:00+05:00' } },
+            { status: 'confirmed', start: { dateTime: '2026-10-09T15:00:00+05:00' }, end: { dateTime: '2026-10-09T16:00:00+05:00' } },
+            { status: 'confirmed', start: { dateTime: '2026-10-09T15:00:00+05:00' }, end: { dateTime: '2026-10-09T16:00:00+05:00' } },
+          ],
+        },
+      }),
+      insert,
+    },
+  };
+
+  const result = await createBooking(
+    'agent-1',
+    {
+      start: '2026-10-09T15:00:00+05:00',
+      end: '2026-10-09T16:00:00+05:00',
+      summary: 'Test booking',
+      leadId: 'lead-1',
+      capacity: 3,
+      workingHours: {
+        mon: [], tue: [], wed: [], thu: [], fri: [['10:00', '24:00']], sat: [], sun: [],
+      } as WorkingHoursMap,
+      timezone: 'Asia/Almaty',
+    },
+    async () => ({}) as any,
+    () => calendarApi as any,
+  );
+
+  assert.deepEqual(result, { ok: false, reason: 'slot_unavailable' });
+  assert.equal(insert.mock.callCount(), 0);
 });
 
 test('computeFreeSlots respects working hours, buffer, min_notice and day boundaries for variable duration', () => {

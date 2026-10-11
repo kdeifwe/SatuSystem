@@ -200,37 +200,78 @@ export async function checkAvailability({
   });
 }
 
-export async function createBooking(agentId: string, input: {
-  start: string;
-  end?: string;
-  summary: string;
-  description?: string;
-  leadId: string;
-  agentIdValue?: string;
-  slotMinutes?: number;
+export function evaluateBooking({
+  start,
+  end,
+  items,
+  capacity = 1,
+  workingHours,
+  timezone = DEFAULT_TIMEZONE,
+}: {
+  start: Date | string;
+  end: Date | string;
+  items: Array<{ status?: string | null; transparency?: string | null; start?: { date?: string | null; dateTime?: string | null } | null; end?: { date?: string | null; dateTime?: string | null } | null }>;
   capacity?: number;
-  clientName?: string;
-  clientPhone?: string;
-  notes?: string;
   workingHours?: WorkingHoursMap;
   timezone?: string;
-}) {
+}): { ok: true } | { ok: false; reason: 'outside_working_hours' | 'slot_unavailable' } {
+  const startDate = start instanceof Date ? start : new Date(start);
+  const endDate = end instanceof Date ? end : new Date(end);
+  const normalizedCapacity = normalizeBookingCapacity(capacity);
+
+  if (workingHours && timezone && !isWithinWorkingHours(startDate, endDate, workingHours, timezone)) {
+    return { ok: false, reason: 'outside_working_hours' };
+  }
+
+  let busyCount = 0;
+  for (const item of items ?? []) {
+    if (!item || item.status === 'cancelled' || item.transparency === 'transparent') continue;
+
+    const eventStart = item.start?.dateTime ?? item.start?.date;
+    const eventEnd = item.end?.dateTime ?? item.end?.date;
+    if (!eventStart || !eventEnd) continue;
+    if (!overlapsWindow(startDate, endDate, eventStart, eventEnd)) continue;
+
+    const overlapMultiplier = item.start?.date && !item.start?.dateTime ? normalizedCapacity : 1;
+    busyCount += overlapMultiplier;
+  }
+
+  if (busyCount >= normalizedCapacity) {
+    return { ok: false, reason: 'slot_unavailable' };
+  }
+
+  return { ok: true };
+}
+
+export async function createBooking(
+  agentId: string,
+  input: {
+    start: string;
+    end?: string;
+    summary: string;
+    description?: string;
+    leadId: string;
+    agentIdValue?: string;
+    slotMinutes?: number;
+    capacity?: number;
+    clientName?: string;
+    clientPhone?: string;
+    notes?: string;
+    workingHours?: WorkingHoursMap;
+    timezone?: string;
+  },
+  calendarClientFactory: (agentId: string) => Promise<unknown> = getCalendarClientForAgent,
+  calendarApiFactory: (config: { version: 'v3'; auth: any }) => any = calendar as any,
+) {
   return convertCalendarConnectionError(async () => {
-    const auth = await getCalendarClientForAgent(agentId);
-    const calendarApi = calendar({ version: 'v3', auth });
+    const auth = await calendarClientFactory(agentId);
+    const calendarApi = calendarApiFactory({ version: 'v3', auth });
     const calendarId = getGoogleCalendarId();
 
     const startDate = new Date(input.start);
     const slotMinutes = resolveDurationMinutes(input.slotMinutes, 60);
     const endDate = input.end ? new Date(input.end) : new Date(startDate.getTime() + slotMinutes * 60 * 1000);
     const capacity = normalizeBookingCapacity(input.capacity ?? 1);
-
-    if (input.workingHours && input.timezone) {
-      const isWithinHours = isBookingWithinWorkingHours(startDate, endDate, input.workingHours, input.timezone);
-      if (!isWithinHours) {
-        return { ok: false, reason: 'outside_working_hours' };
-      }
-    }
 
     const response = await calendarApi.events.list({
       calendarId,
@@ -241,18 +282,16 @@ export async function createBooking(agentId: string, input: {
       maxResults: 250,
     });
 
-    const busyCount = (response as any)?.data?.items?.reduce((count: number, item: any) => {
-      if (item.status === 'cancelled' || item.transparency === 'transparent') return count;
-      const eventStart = item.start?.dateTime ?? item.start?.date;
-      const eventEnd = item.end?.dateTime ?? item.end?.date;
-      if (!eventStart || !eventEnd) return count;
-      if (!overlapsWindow(startDate, endDate, eventStart, eventEnd)) return count;
-      const overlapMultiplier = item.start?.date && !item.start?.dateTime ? capacity : 1;
-      return count + overlapMultiplier;
-    }, 0) ?? 0;
-
-    if (busyCount >= capacity) {
-      return { ok: false, reason: 'slot_unavailable' };
+    const evaluation = evaluateBooking({
+      start: startDate,
+      end: endDate,
+      items: (response as any)?.data?.items ?? [],
+      capacity,
+      workingHours: input.workingHours,
+      timezone: input.timezone ?? DEFAULT_TIMEZONE,
+    });
+    if (!evaluation.ok) {
+      return evaluation;
     }
 
     const descriptionParts = [
