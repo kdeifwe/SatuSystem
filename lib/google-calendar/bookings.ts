@@ -1,7 +1,7 @@
 import { calendar } from '@googleapis/calendar';
 import { getCalendarClientForAgent, CalendarNotConnectedError, getGoogleCalendarId } from './client';
 import { resolveDurationMinutes } from './duration';
-import { zonedDate } from './timezone';
+import { zonedDate, weekdayKeyForDate, DEFAULT_TIMEZONE } from './timezone';
 import { computeFreeSlots, type BusyInterval, type WorkingHoursMap } from './slots';
 
 export type BookingAvailabilityInput = {
@@ -50,6 +50,63 @@ function overlapsWindow(start: Date, end: Date, busyStart: string | null | undef
   return start.getTime() < busyEndMs && end.getTime() > busyStartMs;
 }
 
+function parseClock(value: string): number {
+  if (value === '24:00') return 24 * 60;
+  const [hours, minutes] = value.split(':').map(Number);
+  return (Number.isFinite(hours) ? hours : 0) * 60 + (Number.isFinite(minutes) ? minutes : 0);
+}
+
+function localDateParts(date: Date, timezone: string): { year: string; month: string; day: string } {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  const parts = formatter.formatToParts(date);
+  const year = parts.find((part) => part.type === 'year')?.value ?? '1970';
+  const month = parts.find((part) => part.type === 'month')?.value ?? '01';
+  const day = parts.find((part) => part.type === 'day')?.value ?? '01';
+  return { year, month, day };
+}
+
+function localTimeParts(date: Date, timezone: string): { hours: number; minutes: number } {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+  const parts = formatter.formatToParts(date);
+  const hours = Number(parts.find((part) => part.type === 'hour')?.value ?? '0');
+  const minutes = Number(parts.find((part) => part.type === 'minute')?.value ?? '0');
+  return { hours, minutes };
+}
+
+export function isBookingWithinWorkingHours(start: Date, end: Date, workingHours?: WorkingHoursMap, timezone = DEFAULT_TIMEZONE): boolean {
+  if (!workingHours || !timezone) return true;
+  if (start.getTime() >= end.getTime()) return false;
+
+  const { year, month, day } = localDateParts(start, timezone);
+  const startDate = `${year}-${month}-${day}`;
+  const endDate = `${localDateParts(end, timezone).year}-${localDateParts(end, timezone).month}-${localDateParts(end, timezone).day}`;
+  if (startDate !== endDate) return false;
+
+  const dayKey = weekdayKeyForDate(startDate);
+  const windows = workingHours[dayKey] ?? [];
+  if (windows.length === 0) return false;
+
+  const startMinutes = localTimeParts(start, timezone).hours * 60 + localTimeParts(start, timezone).minutes;
+  const endMinutes = localTimeParts(end, timezone).hours * 60 + localTimeParts(end, timezone).minutes;
+
+  return windows.some(([from, to]) => {
+    const fromMinutes = parseClock(from);
+    const toMinutes = parseClock(to);
+    return startMinutes >= fromMinutes && endMinutes <= toMinutes;
+  });
+}
+
 export async function checkAvailability({
   agentId,
   date,
@@ -77,6 +134,7 @@ export async function checkAvailability({
 
     const items = (response as any)?.data?.items ?? [];
     const busy: BusyInterval[] = [];
+    const capacityLimit = normalizeBookingCapacity(capacity);
     for (const item of items) {
       if (!isEventBusy(item)) continue;
       const startDate = item.start?.date;
@@ -84,7 +142,9 @@ export async function checkAvailability({
       if (startDate && !item.start?.dateTime) {
         const fullDayStart = zonedDate(startDate, '00:00:00', timezone).toISOString();
         const fullDayEnd = endDate ? zonedDate(endDate, '00:00:00', timezone).toISOString() : zonedDate(startDate, '23:59:59', timezone).toISOString();
-        busy.push({ start: fullDayStart, end: fullDayEnd });
+        for (let i = 0; i < capacityLimit; i += 1) {
+          busy.push({ start: fullDayStart, end: fullDayEnd });
+        }
         continue;
       }
       const eventStart = item.start?.dateTime ?? item.start?.date;
@@ -133,6 +193,8 @@ export async function createBooking(agentId: string, input: {
   clientName?: string;
   clientPhone?: string;
   notes?: string;
+  workingHours?: WorkingHoursMap;
+  timezone?: string;
 }) {
   return convertCalendarConnectionError(async () => {
     const auth = await getCalendarClientForAgent(agentId);
@@ -143,6 +205,14 @@ export async function createBooking(agentId: string, input: {
     const slotMinutes = resolveDurationMinutes(input.slotMinutes, 60);
     const endDate = input.end ? new Date(input.end) : new Date(startDate.getTime() + slotMinutes * 60 * 1000);
     const capacity = normalizeBookingCapacity(input.capacity ?? 1);
+
+    if (input.workingHours && input.timezone) {
+      const isWithinHours = isBookingWithinWorkingHours(startDate, endDate, input.workingHours, input.timezone);
+      if (!isWithinHours) {
+        return { ok: false, reason: 'outside_working_hours' };
+      }
+    }
+
     const response = await calendarApi.events.list({
       calendarId,
       timeMin: startDate.toISOString(),
@@ -152,13 +222,15 @@ export async function createBooking(agentId: string, input: {
       maxResults: 250,
     });
 
-    const busyCount = (response as any)?.data?.items?.filter((item: any) => {
-      if (item.status === 'cancelled' || item.transparency === 'transparent') return false;
+    const busyCount = (response as any)?.data?.items?.reduce((count: number, item: any) => {
+      if (item.status === 'cancelled' || item.transparency === 'transparent') return count;
       const eventStart = item.start?.dateTime ?? item.start?.date;
       const eventEnd = item.end?.dateTime ?? item.end?.date;
-      if (!eventStart || !eventEnd) return false;
-      return overlapsWindow(startDate, endDate, eventStart, eventEnd);
-    }).length ?? 0;
+      if (!eventStart || !eventEnd) return count;
+      if (!overlapsWindow(startDate, endDate, eventStart, eventEnd)) return count;
+      const overlapMultiplier = item.start?.date && !item.start?.dateTime ? capacity : 1;
+      return count + overlapMultiplier;
+    }, 0) ?? 0;
 
     if (busyCount >= capacity) {
       return { ok: false, reason: 'slot_unavailable' };

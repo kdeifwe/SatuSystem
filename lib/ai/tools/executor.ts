@@ -204,10 +204,15 @@ async function createCalendarEvent(args: { start: string; client_name: string; c
       notes: args.notes ? String(args.notes) : undefined,
       slotMinutes: durationMinutes,
       capacity: calendarSettings.capacity,
+      workingHours: calendarSettings.workingHours,
+      timezone: 'Asia/Almaty',
     });
 
     if (result && typeof result === 'object' && (result as { reason?: unknown }).reason === 'slot_unavailable') {
       return { ok: false, reason: 'slot_unavailable' };
+    }
+    if (result && typeof result === 'object' && (result as { reason?: unknown }).reason === 'outside_working_hours') {
+      return { ok: false, reason: 'outside_working_hours' };
     }
 
     return result;

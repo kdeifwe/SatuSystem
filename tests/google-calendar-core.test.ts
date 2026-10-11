@@ -486,7 +486,8 @@ test('tool loop allows up to five rounds and logs leftover tool calls without si
 
 test('empty final answer retries without tools after a blank KB search round and returns the model text to the client', async () => {
   const callGemini = mock.fn(async (_modelName: string, _systemPrompt: string, contents: Array<Record<string, unknown>>, tools: Array<Record<string, unknown>>) => {
-    const lastMessage = String((contents.at(-1)?.parts?.[0] as { text?: string } | undefined)?.text ?? '');
+    const lastParts = Array.isArray(contents.at(-1)?.parts) ? (contents.at(-1)?.parts as Array<{ text?: string }>) : [];
+    const lastMessage = String((lastParts[0] as { text?: string } | undefined)?.text ?? '');
     assert.equal(Array.isArray(tools), true, 'no-tools retry should call Gemini with no tool declarations');
     assert.equal(tools.length, 0, 'retry path must turn tool calling off');
     assert.match(lastMessage, /Ответь клиенту на его последнее сообщение на его языке/i, 'retry prompt should tell Gemini to answer the client in their language');
