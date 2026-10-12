@@ -287,6 +287,43 @@ export function handleScriptMessageParts(
 
   return parts;
 }
+
+export function shouldSkipScriptNodeDelivery({
+  currentFunnelStep,
+  userMessage,
+  history = [],
+}: {
+  currentFunnelStep: string | null;
+  userMessage: string;
+  history?: Array<{ role?: string | null; text?: string | null }>;
+}) {
+  const stepName = String(currentFunnelStep ?? '').trim().toLowerCase();
+  if (!stepName || !userMessage.trim()) {
+    return false;
+  }
+
+  const isWelcomeStep = stepName === 'welcome' || stepName.includes('welcome') || stepName.includes('greeting');
+  if (!isWelcomeStep) {
+    return false;
+  }
+
+  const trimmedUserMessage = userMessage.trim();
+  const greetingOnly = /^(?:hello|hi|hey|здравствуйте|привет|сәлем|салам|salem)\b/i.test(trimmedUserMessage)
+    && trimmedUserMessage.length < 30
+    && !/[?]/.test(trimmedUserMessage);
+  if (greetingOnly) {
+    return false;
+  }
+
+  const hasPreviousAiReply = history.some((entry) => String(entry?.role ?? '').toLowerCase() === 'ai' && String(entry?.text ?? '').trim().length > 0);
+  if (hasPreviousAiReply) {
+    return true;
+  }
+
+  const meaningfulPatterns = /(?:какая|сколько|цена|стоимость|когда|во\s*сколько|время|как|что|хочу|нужно|подскажите|интересует|запис|брони|номер|телефон|имя|фамилия|посоветуйте|сделать|можно)/i;
+  return trimmedUserMessage.length > 24 || meaningfulPatterns.test(trimmedUserMessage) || /[?]/.test(trimmedUserMessage);
+}
+
 export async function resolveDialogueNodeExecution(
   flow: ReturnType<typeof normalizeFunnelFlow> | null | undefined,
   nodeId: string | null,
@@ -301,7 +338,7 @@ export async function resolveDialogueNodeExecution(
   if (isScriptLikeNode) {
     const scriptParts = hasScriptParts
       ? currentDialogueNode!.script_parts!
-      : (legacyScriptText ? [legacyScriptText] : (currentDialogueNode?.content ? [currentDialogueNode.content] : []));
+      : (legacyScriptText ? [legacyScriptText] : []);
 
     if (scriptParts.length > 0) {
       const messageParts = handleScriptMessageParts(scriptParts, typingSimulationEnabled);
@@ -358,6 +395,8 @@ export async function handleScriptNodeTurn({
   userMessage,
   routeExecutor = applyFunnelRouting,
   sendScriptImpl,
+  persistPendingScriptState,
+  history = [],
 }: {
   admin: ReturnType<typeof createAdminClient>;
   agentId: string;
@@ -370,7 +409,25 @@ export async function handleScriptNodeTurn({
   userMessage: string;
   routeExecutor?: typeof applyFunnelRouting;
   sendScriptImpl?: () => Promise<void> | void;
+  persistPendingScriptState?: (args: { currentNodeId: string | null; pendingScriptNodeId: string | null; pendingScriptReply: string | null; }) => Promise<void> | void;
+  history?: Array<{ role?: string | null; text?: string | null }>;
 }) {
+  if (shouldSkipScriptNodeDelivery({ currentFunnelStep, userMessage, history })) {
+    return {
+      shouldSendScript: false,
+      shouldRoutePendingReply: false,
+      currentFunnelStep,
+      routingOutcome: {
+        skippedClassifier: true,
+        condition: null,
+        targetNodeId: null,
+        shouldHandoff: false,
+        classifierResult: null,
+        handoffExecuted: false,
+      },
+    };
+  }
+
   const shouldRoutePendingScriptReply = Boolean(currentFunnelStep && pendingScriptNodeId && pendingScriptNodeId === currentFunnelStep);
 
   if (shouldRoutePendingScriptReply) {
@@ -386,10 +443,28 @@ export async function handleScriptNodeTurn({
       executeToolImpl: undefined,
     } as Parameters<typeof applyFunnelRouting>[0]);
 
+    const nextNodeId = routingOutcome.targetNodeId ?? currentFunnelStep;
+    if (typeof persistPendingScriptState === 'function') {
+      await persistPendingScriptState({
+        currentNodeId: nextNodeId,
+        pendingScriptNodeId: null,
+        pendingScriptReply: null,
+      });
+    } else if (leadId) {
+      await upsertLeadFunnelState(admin, leadId, agentId, {
+        currentNodeId: nextNodeId,
+        status: 'active',
+        isNoMatch: false,
+        lastTransitionAt: new Date().toISOString(),
+        pendingScriptNodeId: null,
+        pendingScriptReply: null,
+      });
+    }
+
     return {
       shouldSendScript: false,
       shouldRoutePendingReply: true,
-      currentFunnelStep: routingOutcome.targetNodeId ?? currentFunnelStep,
+      currentFunnelStep: nextNodeId,
       routingOutcome,
     };
   }
@@ -1864,8 +1939,8 @@ export async function runAgentTurn(
         status: 'active',
         isNoMatch: false,
         lastTransitionAt: new Date().toISOString(),
-        pendingScriptNodeId: currentFunnelStep,
-        pendingScriptReply: finalAnswer,
+        pendingScriptNodeId: null,
+        pendingScriptReply: null,
       });
     }
 

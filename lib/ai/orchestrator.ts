@@ -502,6 +502,7 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
     userMessage,
     routeExecutor: applyFunnelRouting,
     sendScriptImpl: async () => undefined,
+    history,
   });
 
   if (scriptTurnResolution.shouldRoutePendingReply) {
@@ -539,15 +540,15 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
     // Save script message
     const assistantMessageId = await appendMessage(admin, conversationId, 'ai', finalAnswer, []);
 
-    // Persist pending script state so следующий клиентский ответ может быть правильно маршрутизирован.
+    // Persist pending script state only for the next routed answer; clear immediately after the first send to avoid repeating the greeting on every turn.
     if (leadId) {
       await upsertLeadFunnelState(admin, leadId, agentId, {
         currentNodeId: currentNodeId,
         status: 'active',
         isNoMatch: false,
         lastTransitionAt: new Date().toISOString(),
-        pendingScriptNodeId: currentNodeId,
-        pendingScriptReply: finalAnswer,
+        pendingScriptNodeId: null,
+        pendingScriptReply: null,
       });
     }
 
