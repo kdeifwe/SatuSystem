@@ -186,3 +186,25 @@ test('node without message_type falls back to the dynamic path', async () => {
 
   assert.equal(result.mode, 'dynamic');
 });
+
+test('welcome script is skipped when client already asked a meaningful question or prior ai reply exists', async () => {
+  const { shouldSkipScriptNodeDelivery } = await import('../lib/server/ai/orchestrator.ts');
+
+  assert.equal(shouldSkipScriptNodeDelivery({
+    currentFunnelStep: 'welcome',
+    userMessage: 'Здравствуйте',
+    history: [],
+  }), false);
+
+  assert.equal(shouldSkipScriptNodeDelivery({
+    currentFunnelStep: 'welcome',
+    userMessage: 'Какая цена на курс?',
+    history: [],
+  }), true);
+
+  assert.equal(shouldSkipScriptNodeDelivery({
+    currentFunnelStep: 'welcome',
+    userMessage: 'Здравствуйте',
+    history: [{ role: 'ai', text: 'Здравствуйте!' }],
+  }), true);
+});

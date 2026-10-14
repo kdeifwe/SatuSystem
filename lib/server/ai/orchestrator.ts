@@ -15,8 +15,10 @@ import { buildConversationInsertData, buildSandboxConversationInsertData, buildS
 import { tryBuildDeterministicFactAnswer } from '@/lib/server/ai/deterministic-facts';
 import { isValidLeadName } from '@/lib/server/lead-name';
 import { sanitizeAgentReply, extractTextToolCalls } from '@/lib/ai/response-sanitizer';
+import { ALREADY_GREETED_NOTE, hasAssistantReplied, stripLeadingGreeting } from '@/lib/ai/greeting-guard';
 import { buildStickyFactsContextMessage, buildStickyFactsFromChunks, type StickyFact } from '@/lib/server/ai/sticky-facts';
 import { normalizeGeminiContentsToLlmMessages } from '@/lib/server/ai/gemini-message-normalizer';
+import { injectMediaSection, loadAgentMediaFiles, uniqueCategories, withMediaTool, SEND_MEDIA_TOOL, MAX_MEDIA_PER_TURN } from '@/lib/media/available';
 
 const ORCHESTRATOR_BUILD_TAG =
   process.env.ORCHESTRATOR_BUILD_TAG ||
@@ -132,10 +134,11 @@ export function buildAgentResponseLogMeta({
 
 export function getToolExecutionPolicy(toolName: string, toolUsageCounts: Record<string, number>) {
   const previousCalls = toolUsageCounts[toolName] ?? 0;
-  if (previousCalls >= 1) {
+  const maxCalls = toolName === SEND_MEDIA_TOOL ? MAX_MEDIA_PER_TURN : 1;
+  if (previousCalls >= maxCalls) {
     return {
       shouldExecute: false,
-      reason: `${toolName} already used once in this turn`,
+      reason: `${toolName} already used ${maxCalls} time(s) in this turn`,
     };
   }
 
@@ -287,6 +290,43 @@ export function handleScriptMessageParts(
 
   return parts;
 }
+
+export function shouldSkipScriptNodeDelivery({
+  currentFunnelStep,
+  userMessage,
+  history = [],
+}: {
+  currentFunnelStep: string | null;
+  userMessage: string;
+  history?: Array<{ role?: string | null; text?: string | null }>;
+}) {
+  const stepName = String(currentFunnelStep ?? '').trim().toLowerCase();
+  if (!stepName || !userMessage.trim()) {
+    return false;
+  }
+
+  const isWelcomeStep = stepName === 'welcome' || stepName.includes('welcome') || stepName.includes('greeting');
+  if (!isWelcomeStep) {
+    return false;
+  }
+
+  const trimmedUserMessage = userMessage.trim();
+  const greetingOnly = /^(?:hello|hi|hey|здравствуйте|привет|сәлем|салам|salem)\b/i.test(trimmedUserMessage)
+    && trimmedUserMessage.length < 30
+    && !/[?]/.test(trimmedUserMessage);
+  if (greetingOnly) {
+    return false;
+  }
+
+  const hasPreviousAiReply = history.some((entry) => String(entry?.role ?? '').toLowerCase() === 'ai' && String(entry?.text ?? '').trim().length > 0);
+  if (hasPreviousAiReply) {
+    return true;
+  }
+
+  const meaningfulPatterns = /(?:какая|сколько|цена|стоимость|когда|во\s*сколько|время|как|что|хочу|нужно|подскажите|интересует|запис|брони|номер|телефон|имя|фамилия|посоветуйте|сделать|можно)/i;
+  return trimmedUserMessage.length > 24 || meaningfulPatterns.test(trimmedUserMessage) || /[?]/.test(trimmedUserMessage);
+}
+
 export async function resolveDialogueNodeExecution(
   flow: ReturnType<typeof normalizeFunnelFlow> | null | undefined,
   nodeId: string | null,
@@ -301,7 +341,7 @@ export async function resolveDialogueNodeExecution(
   if (isScriptLikeNode) {
     const scriptParts = hasScriptParts
       ? currentDialogueNode!.script_parts!
-      : (legacyScriptText ? [legacyScriptText] : (currentDialogueNode?.content ? [currentDialogueNode.content] : []));
+      : (legacyScriptText ? [legacyScriptText] : []);
 
     if (scriptParts.length > 0) {
       const messageParts = handleScriptMessageParts(scriptParts, typingSimulationEnabled);
@@ -358,6 +398,8 @@ export async function handleScriptNodeTurn({
   userMessage,
   routeExecutor = applyFunnelRouting,
   sendScriptImpl,
+  persistPendingScriptState,
+  history = [],
 }: {
   admin: ReturnType<typeof createAdminClient>;
   agentId: string;
@@ -370,7 +412,25 @@ export async function handleScriptNodeTurn({
   userMessage: string;
   routeExecutor?: typeof applyFunnelRouting;
   sendScriptImpl?: () => Promise<void> | void;
+  persistPendingScriptState?: (args: { currentNodeId: string | null; pendingScriptNodeId: string | null; pendingScriptReply: string | null; }) => Promise<void> | void;
+  history?: Array<{ role?: string | null; text?: string | null }>;
 }) {
+  if (shouldSkipScriptNodeDelivery({ currentFunnelStep, userMessage, history })) {
+    return {
+      shouldSendScript: false,
+      shouldRoutePendingReply: false,
+      currentFunnelStep,
+      routingOutcome: {
+        skippedClassifier: true,
+        condition: null,
+        targetNodeId: null,
+        shouldHandoff: false,
+        classifierResult: null,
+        handoffExecuted: false,
+      },
+    };
+  }
+
   const shouldRoutePendingScriptReply = Boolean(currentFunnelStep && pendingScriptNodeId && pendingScriptNodeId === currentFunnelStep);
 
   if (shouldRoutePendingScriptReply) {
@@ -386,10 +446,28 @@ export async function handleScriptNodeTurn({
       executeToolImpl: undefined,
     } as Parameters<typeof applyFunnelRouting>[0]);
 
+    const nextNodeId = routingOutcome.targetNodeId ?? currentFunnelStep;
+    if (typeof persistPendingScriptState === 'function') {
+      await persistPendingScriptState({
+        currentNodeId: nextNodeId,
+        pendingScriptNodeId: null,
+        pendingScriptReply: null,
+      });
+    } else if (leadId) {
+      await upsertLeadFunnelState(admin, leadId, agentId, {
+        currentNodeId: nextNodeId,
+        status: 'active',
+        isNoMatch: false,
+        lastTransitionAt: new Date().toISOString(),
+        pendingScriptNodeId: null,
+        pendingScriptReply: null,
+      });
+    }
+
     return {
       shouldSendScript: false,
       shouldRoutePendingReply: true,
-      currentFunnelStep: routingOutcome.targetNodeId ?? currentFunnelStep,
+      currentFunnelStep: nextNodeId,
       routingOutcome,
     };
   }
@@ -1606,6 +1684,7 @@ function findUngroundedNumberClaims(finalAnswer: string, sourceText: string): st
 const ACTION_CLAIM_PATTERNS: Array<{ phrase: RegExp; expectedTool: string }> = [
   { phrase: /записал|сохранил (ваш|ваши|номер|телефон|имя)/i, expectedTool: 'update_lead_info' },
   { phrase: /оформил(а)? (заказ|счет|счёт)|отправил(а)? счет|отправил(а)? счёт/i, expectedTool: 'createKaspiInvoice' },
+  { phrase: /(отправил(а)?|прикрепил(а)?|высылаю|отправляю|прислал(а)?)\s+(вам\s+|Вам\s+)?(фото|фотографи|картинк|видео|прайс|каталог)/i, expectedTool: 'sendMediaToClient' },
   { phrase: /перевел(а)? на (оператора|менеджера|специалиста)|соединяю с оператором/i, expectedTool: 'redirectToOperator' },
 ];
 
@@ -1641,23 +1720,14 @@ export async function runAgentTurn(
   const configuredToolNames = Array.isArray(generalCapabilities.allowed_tools)
     ? (generalCapabilities.allowed_tools as string[]).filter((name) => typeof name === 'string')
     : [];
+  const mediaFiles = await loadAgentMediaFiles(admin, agentId);
   const allowedToolNames = configuredToolNames.length > 0
-    ? mergeAllowedToolNames(configuredToolNames, [])
-    : [];
+    ? withMediaTool(mergeAllowedToolNames(configuredToolNames, []), mediaFiles)
+    : withMediaTool([], mediaFiles);
 
   // Формируем toolDeclarations только для разрешённых тулов
   // Собираем доступные категории медиа для агента — используются для динамической декларации sendMediaToClient
-  const { data: mediaRows } = await admin
-    .from('kb_sources')
-    .select("category:metadata->>media_category")
-    .eq('agent_id', agentId)
-    .eq('status', 'done')
-    .not('metadata->>media_category', 'is', null);
-  const availableMediaCategories = Array.isArray(mediaRows)
-    ? Array.from(new Set(mediaRows.map((r: any) => String((r?.category ?? '')).trim()).filter(Boolean)))
-    : [];
-
-  const toolDeclarations = buildToolDeclarationsForAgent(allowedToolNames, generalCapabilities, agentData?.dialogue_flow, availableMediaCategories);
+  const toolDeclarations = buildToolDeclarationsForAgent(allowedToolNames, generalCapabilities, agentData?.dialogue_flow, uniqueCategories(mediaFiles), mediaFiles);
   const toolPayload = toolDeclarations.length > 0 ? (toolDeclarations as unknown as Array<Record<string, unknown>>) : [];
   console.log(`[AGENT_TOOLS] Agent ${agentId}: allowed tools: [${allowedToolNames.join(', ')}], declarations: [${toolDeclarations.map((d) => d.name).join(', ')}]`);
 
@@ -1802,7 +1872,11 @@ export async function runAgentTurn(
     leadContextItems.push(`Предыдущее завершённое общение:\n${previousConversationSummary}`);
   }
 
-  const fullSystemPrompt = basePrompt;
+  const alreadyGreeted = Boolean(conversationContext.conversationSummary)
+    || hasAssistantReplied(conversationContext.messagesAfterSummary as Array<{ role?: string }>);
+  const fullSystemPrompt = alreadyGreeted
+    ? `${mediaFiles.length > 0 ? injectMediaSection(basePrompt, mediaFiles) : basePrompt}\n\n${ALREADY_GREETED_NOTE}`
+    : mediaFiles.length > 0 ? injectMediaSection(basePrompt, mediaFiles) : basePrompt;
   const extraContextMessages: Array<{ role: string; parts: Array<{ text: string }> }> = [];
 
   if (leadAttributes && Object.keys(leadAttributes).length > 0) {
@@ -1864,8 +1938,8 @@ export async function runAgentTurn(
         status: 'active',
         isNoMatch: false,
         lastTransitionAt: new Date().toISOString(),
-        pendingScriptNodeId: currentFunnelStep,
-        pendingScriptReply: finalAnswer,
+        pendingScriptNodeId: null,
+        pendingScriptReply: null,
       });
     }
 
@@ -2049,6 +2123,13 @@ export async function runAgentTurn(
   let currentParts = normalizeLlmResponseParts(response);
   const rawInitialText = extractTextFromParts(currentParts) || ((response as any).text ?? '');
   let finalAnswer = sanitizeAgentReply(rawInitialText);
+  if (alreadyGreeted && finalAnswer) {
+    const withoutGreeting = stripLeadingGreeting(finalAnswer);
+    if (withoutGreeting !== finalAnswer) {
+      console.log('[GREETING_GUARD] stripped repeated greeting', { agentId, conversationId });
+      finalAnswer = withoutGreeting;
+    }
+  }
   let toolCalls = tryExtractToolCalls(currentParts);
   const textToolCallsFromInitialText = extractTextToolCalls(rawInitialText).filter((call) => allowedToolNames.includes(call.name));
   if (toolCalls.length === 0 && textToolCallsFromInitialText.length > 0) {
