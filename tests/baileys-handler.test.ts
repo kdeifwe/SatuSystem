@@ -102,10 +102,10 @@ test('Baileys handleIncomingMessage uses runAgentTurnWithLead and includes conve
         return { data: { id: 'message-test' }, error: null };
       }
 
-      if (query.table === 'messages' && query.selectString === 'sender, content') {
+      if (query.table === 'messages' && query.selectString === 'id, sender, content') {
         return { data: [
-          { sender: 'user', content: 'Привет' },
-          { sender: 'ai', content: 'Здравствуйте' },
+          { id: 'msg-prev-user', sender: 'user', content: 'Привет' },
+          { id: 'msg-prev-ai', sender: 'ai', content: 'Здравствуйте' },
         ], error: null };
       }
 
@@ -134,6 +134,7 @@ test('Baileys handleIncomingMessage uses runAgentTurnWithLead and includes conve
     ensureWhatsAppChannel: async () => ({ id: 'channel-test', org_id: 'org-test' }),
     runAgentTurnWithLead,
     logger: { error: () => undefined },
+    debounceMs: 0,
   });
 
   assert.ok(runAgentTurnWithLeadArgs, 'runAgentTurnWithLead should be called');
@@ -142,8 +143,8 @@ test('Baileys handleIncomingMessage uses runAgentTurnWithLead and includes conve
   assert.equal(runAgentTurnWithLeadArgs.userMessage, 'hello');
   assert.ok(Array.isArray(runAgentTurnWithLeadArgs.history), 'history should be an array');
   assert.ok(runAgentTurnWithLeadArgs.history.length > 0, 'history should not be empty');
-  assert.equal(runAgentTurnWithLeadArgs.history[0].role, 'model');
-  assert.equal(runAgentTurnWithLeadArgs.history[0].text, 'Здравствуйте');
+  assert.ok(runAgentTurnWithLeadArgs.history.some((entry: any) => entry.role === 'model' && entry.text === 'Здравствуйте'), 'history should retain the prior assistant reply');
   assert.equal(sendCalls.length, 1);
-  assert.equal(sendCalls[0].content.text, 'Привет, я помню прошлую переписку.');
+  // В истории уже есть ответ агента, поэтому повторное приветствие вырезается
+  assert.equal(sendCalls[0].content.text, 'Я помню прошлую переписку.');
 });

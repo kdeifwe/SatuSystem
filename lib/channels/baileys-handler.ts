@@ -2,6 +2,9 @@ import type { WAMessage } from '@whiskeysockets/baileys';
 import { splitAgentMessage, calculateTypingDelay } from '@/lib/server/ai/message-splitter';
 import { isValidLeadName } from '@/lib/server/lead-name';
 import { understandMedia, type MediaKind } from '@/lib/server/media-understanding';
+import { withLeadProcessingLock } from '@/lib/server/lead-processing-queue';
+import { stripLeadingGreeting, hasAssistantReplied } from '@/lib/ai/greeting-guard';
+import { createInboundBatcher } from './inbound-batcher';
 
 export interface BaileysHandlerDeps {
   createAdminClient: () => any;
@@ -18,7 +21,34 @@ export interface BaileysHandlerDeps {
   downloadMedia?: (message: WAMessage) => Promise<Buffer>;
   understandMedia?: typeof understandMedia;
   logger?: { error: (meta: any, message: string) => void };
+  /** Сколько мс тишины ждать после последнего сообщения клиента перед ответом (0 = отвечать сразу). */
+  debounceMs?: number;
+  /** Потолок ожидания, если клиент пишет без остановки. */
+  maxWaitMs?: number;
 }
+
+const DEFAULT_DEBOUNCE_MS = Number(process.env.WHATSAPP_DEBOUNCE_MS ?? 7000);
+const DEFAULT_MAX_WAIT_MS = Number(process.env.WHATSAPP_DEBOUNCE_MAX_WAIT_MS ?? 25000);
+
+interface PendingMessage {
+  agentId: string;
+  remoteJid: string;
+  leadId: string;
+  conversationId: string;
+  text: string;
+  userMessageId: string | null;
+  sock: { sendMessage: (jid: string, content: any) => Promise<any> };
+  deps: BaileysHandlerDeps;
+}
+
+const batcher = createInboundBatcher<PendingMessage>({
+  onFlush: async (_key, items) => {
+    await respondToBatch(items);
+  },
+  onError: (_key, error) => {
+    console.error('[baileys-handler] failed to process message batch', error);
+  },
+});
 
 function extractText(message: any) {
   if (!message) return null;
@@ -49,12 +79,12 @@ function detectMedia(message: any): { kind: MediaKind; mimeType: string; caption
   return null;
 }
 
-export async function handleIncomingMessageWithDependencies(
+async function ingestIncomingMessage(
   agentId: string,
   sock: { sendMessage: (jid: string, content: any) => Promise<any> },
   message: WAMessage,
   deps: BaileysHandlerDeps
-) {
+): Promise<PendingMessage | undefined> {
   const logger = deps.logger ?? { error: () => undefined };
 
   try {
@@ -177,27 +207,96 @@ export async function handleIncomingMessageWithDependencies(
       content: text,
       external_message_id: externalMessageId,
     }).select('id').single();
-    const currentUserMessageId = insertedUserMessage?.id ?? null;
+    const currentUserMessageId: string | null = insertedUserMessage?.id ?? null;
 
     if (!lead.ai_enabled) {
       return;
     }
 
+    return {
+      agentId,
+      remoteJid,
+      leadId: lead.id as string,
+      conversationId: conversation.id as string,
+      text,
+      userMessageId: currentUserMessageId,
+      sock,
+      deps,
+    } satisfies PendingMessage;
+  } catch (error) {
+    logger.error({ agentId, error }, 'Failed to process incoming WhatsApp message');
+  }
+}
+
+async function sendReplyParts(
+  sock: PendingMessage['sock'],
+  remoteJid: string,
+  parts: Array<{ text: string; delayMs: number }>,
+  typingSimulation: boolean | undefined
+) {
+  for (let i = 0; i < parts.length; i += 1) {
+    const part = parts[i];
+    const delay = i > 0 && typingSimulation !== false
+      ? Math.min(500, Math.max(100, part.delayMs || 100))
+      : 0;
+
+    if (delay > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+
+    await sock.sendMessage(remoteJid, { text: part.text });
+    // Ответ агента уже сохранён в БД через runAgentTurnWithLead
+  }
+}
+
+async function respondToBatch(items: PendingMessage[], options: { recheckAiEnabled?: boolean } = {}) {
+  const last = items[items.length - 1];
+  if (!last) return;
+
+  const { agentId, remoteJid, leadId, conversationId, sock, deps } = last;
+  const logger = deps.logger ?? { error: () => undefined };
+
+  try {
+    const admin = deps.createAdminClient();
+
+    if (options.recheckAiEnabled !== false && items.length > 0 && (deps.debounceMs ?? DEFAULT_DEBOUNCE_MS) > 0) {
+      const { data: freshLead } = await admin
+        .from('leads')
+        .select('ai_enabled')
+        .eq('id', leadId)
+        .maybeSingle();
+      if (freshLead && freshLead.ai_enabled === false) return;
+    }
+
+    const combinedText = items.map((item) => item.text.trim()).filter(Boolean).join('\n');
+    if (!combinedText) return;
+
+    const batchMessageIds = new Set(items.map((item) => item.userMessageId).filter(Boolean) as string[]);
+    const currentUserMessageId = last.userMessageId;
+
     const { data: history } = await admin
       .from('messages')
-      .select('sender, content')
-      .eq('conversation_id', conversation.id)
+      .select('id, sender, content')
+      .eq('conversation_id', conversationId)
       .order('created_at', { ascending: false })
-      .limit(10);
+      .limit(10 + items.length);
 
-    const historyFormatted = (history ?? [])
-      .reverse()
-      .slice(0, -1)
+    let historyRows: any[] = (history ?? []).slice().reverse();
+    if (batchMessageIds.size > 0 && historyRows.some((row) => row?.id && batchMessageIds.has(row.id))) {
+      historyRows = historyRows.filter((row) => !(row?.id && batchMessageIds.has(row.id)));
+    } else {
+      historyRows = historyRows.slice(0, -1);
+    }
+
+    const historyFormatted = historyRows
       .map((messageItem: any) => ({
         role: messageItem.sender === 'user' ? 'user' : 'model' as 'user' | 'model',
         text: messageItem.content ?? '',
       }))
-      .filter((item: { role: 'user' | 'model'; text: string }) => item.text.length > 0);
+      .filter((item: { role: 'user' | 'model'; text: string }) => item.text.length > 0)
+      .slice(-10);
+
+    const alreadyGreeted = hasAssistantReplied(historyFormatted);
 
     const { data: agent } = await admin
       .from('agents')
@@ -211,17 +310,26 @@ export async function handleIncomingMessageWithDependencies(
     }
 
     const systemPrompt = agent.system_prompt_compiled ?? `Ты ${agent.name}. Отвечай кратко и по-человечески.`;
-    const { answer, messageParts, splitMessages, typingSimulation } = await deps.runAgentTurnWithLead(
+    const { answer: rawAnswer, messageParts: rawMessageParts, splitMessages, typingSimulation } = await deps.runAgentTurnWithLead(
       agentId,
       systemPrompt,
-      text,
+      combinedText,
       historyFormatted,
-      lead.id,
+      leadId,
       currentUserMessageId ?? undefined
     );
 
+    const answer = alreadyGreeted ? stripLeadingGreeting(rawAnswer) : rawAnswer;
+    let messageParts = rawMessageParts;
+    if (alreadyGreeted && Array.isArray(rawMessageParts) && rawMessageParts.length > 0) {
+      const stripped = rawMessageParts
+        .map((part) => ({ ...part, text: stripLeadingGreeting(part.text) }))
+        .filter((part) => part.text.trim().length > 0);
+      messageParts = stripped.length > 0 ? stripped : rawMessageParts;
+    }
+
     const caps = agent.general_capabilities ?? {};
-    const maxParts = Math.min(3, Math.max(1, Number(caps.split_max_parts ?? 2)));
+    const maxParts = Math.min(3, Math.max(1, Number(caps.split_max_parts ?? 3)));
     const fallbackParts = splitAgentMessage(answer, caps.split_messages ?? true, maxParts).map((part, index) => ({
       text: part.text,
       delayMs: typingSimulation
@@ -232,20 +340,33 @@ export async function handleIncomingMessageWithDependencies(
       ? messageParts
       : fallbackParts).slice(0, maxParts);
 
-    for (let i = 0; i < parts.length; i += 1) {
-      const part = parts[i];
-      const delay = i > 0 && typingSimulation !== false
-        ? Math.min(500, Math.max(100, part.delayMs || 100))
-        : 0;
-
-      if (delay > 0) {
-        await new Promise((resolve) => setTimeout(resolve, delay));
-      }
-
-      await sock.sendMessage(remoteJid, { text: part.text });
-      // Ответ агента уже сохранён в БД через runAgentTurnWithLead
-    }
+    await sendReplyParts(sock, remoteJid, parts, typingSimulation);
   } catch (error) {
     logger.error({ agentId, error }, 'Failed to process incoming WhatsApp message');
   }
+}
+
+export async function handleIncomingMessageWithDependencies(
+  agentId: string,
+  sock: { sendMessage: (jid: string, content: any) => Promise<any> },
+  message: WAMessage,
+  deps: BaileysHandlerDeps
+) {
+  const lockKey = `wa-ingest:${agentId}:${String(message.key?.remoteJid ?? '')}`;
+
+  const pending = await withLeadProcessingLock(lockKey, () =>
+    ingestIncomingMessage(agentId, sock, message, deps)
+  );
+  if (!pending) return;
+
+  const debounceMs = deps.debounceMs ?? DEFAULT_DEBOUNCE_MS;
+  if (debounceMs <= 0) {
+    await respondToBatch([pending], { recheckAiEnabled: false });
+    return;
+  }
+
+  batcher.add(`${agentId}:${pending.remoteJid}`, pending, {
+    debounceMs,
+    maxWaitMs: deps.maxWaitMs ?? DEFAULT_MAX_WAIT_MS,
+  });
 }

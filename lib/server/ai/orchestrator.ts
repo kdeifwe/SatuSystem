@@ -15,8 +15,10 @@ import { buildConversationInsertData, buildSandboxConversationInsertData, buildS
 import { tryBuildDeterministicFactAnswer } from '@/lib/server/ai/deterministic-facts';
 import { isValidLeadName } from '@/lib/server/lead-name';
 import { sanitizeAgentReply, extractTextToolCalls } from '@/lib/ai/response-sanitizer';
+import { ALREADY_GREETED_NOTE, hasAssistantReplied, stripLeadingGreeting } from '@/lib/ai/greeting-guard';
 import { buildStickyFactsContextMessage, buildStickyFactsFromChunks, type StickyFact } from '@/lib/server/ai/sticky-facts';
 import { normalizeGeminiContentsToLlmMessages } from '@/lib/server/ai/gemini-message-normalizer';
+import { injectMediaSection, loadAgentMediaFiles, uniqueCategories, withMediaTool, SEND_MEDIA_TOOL, MAX_MEDIA_PER_TURN } from '@/lib/media/available';
 
 const ORCHESTRATOR_BUILD_TAG =
   process.env.ORCHESTRATOR_BUILD_TAG ||
@@ -132,10 +134,11 @@ export function buildAgentResponseLogMeta({
 
 export function getToolExecutionPolicy(toolName: string, toolUsageCounts: Record<string, number>) {
   const previousCalls = toolUsageCounts[toolName] ?? 0;
-  if (previousCalls >= 1) {
+  const maxCalls = toolName === SEND_MEDIA_TOOL ? MAX_MEDIA_PER_TURN : 1;
+  if (previousCalls >= maxCalls) {
     return {
       shouldExecute: false,
-      reason: `${toolName} already used once in this turn`,
+      reason: `${toolName} already used ${maxCalls} time(s) in this turn`,
     };
   }
 
@@ -1681,6 +1684,7 @@ function findUngroundedNumberClaims(finalAnswer: string, sourceText: string): st
 const ACTION_CLAIM_PATTERNS: Array<{ phrase: RegExp; expectedTool: string }> = [
   { phrase: /записал|сохранил (ваш|ваши|номер|телефон|имя)/i, expectedTool: 'update_lead_info' },
   { phrase: /оформил(а)? (заказ|счет|счёт)|отправил(а)? счет|отправил(а)? счёт/i, expectedTool: 'createKaspiInvoice' },
+  { phrase: /(отправил(а)?|прикрепил(а)?|высылаю|отправляю|прислал(а)?)\s+(вам\s+|Вам\s+)?(фото|фотографи|картинк|видео|прайс|каталог)/i, expectedTool: 'sendMediaToClient' },
   { phrase: /перевел(а)? на (оператора|менеджера|специалиста)|соединяю с оператором/i, expectedTool: 'redirectToOperator' },
 ];
 
@@ -1716,23 +1720,14 @@ export async function runAgentTurn(
   const configuredToolNames = Array.isArray(generalCapabilities.allowed_tools)
     ? (generalCapabilities.allowed_tools as string[]).filter((name) => typeof name === 'string')
     : [];
+  const mediaFiles = await loadAgentMediaFiles(admin, agentId);
   const allowedToolNames = configuredToolNames.length > 0
-    ? mergeAllowedToolNames(configuredToolNames, [])
-    : [];
+    ? withMediaTool(mergeAllowedToolNames(configuredToolNames, []), mediaFiles)
+    : withMediaTool([], mediaFiles);
 
   // Формируем toolDeclarations только для разрешённых тулов
   // Собираем доступные категории медиа для агента — используются для динамической декларации sendMediaToClient
-  const { data: mediaRows } = await admin
-    .from('kb_sources')
-    .select("category:metadata->>media_category")
-    .eq('agent_id', agentId)
-    .eq('status', 'done')
-    .not('metadata->>media_category', 'is', null);
-  const availableMediaCategories = Array.isArray(mediaRows)
-    ? Array.from(new Set(mediaRows.map((r: any) => String((r?.category ?? '')).trim()).filter(Boolean)))
-    : [];
-
-  const toolDeclarations = buildToolDeclarationsForAgent(allowedToolNames, generalCapabilities, agentData?.dialogue_flow, availableMediaCategories);
+  const toolDeclarations = buildToolDeclarationsForAgent(allowedToolNames, generalCapabilities, agentData?.dialogue_flow, uniqueCategories(mediaFiles), mediaFiles);
   const toolPayload = toolDeclarations.length > 0 ? (toolDeclarations as unknown as Array<Record<string, unknown>>) : [];
   console.log(`[AGENT_TOOLS] Agent ${agentId}: allowed tools: [${allowedToolNames.join(', ')}], declarations: [${toolDeclarations.map((d) => d.name).join(', ')}]`);
 
@@ -1877,7 +1872,11 @@ export async function runAgentTurn(
     leadContextItems.push(`Предыдущее завершённое общение:\n${previousConversationSummary}`);
   }
 
-  const fullSystemPrompt = basePrompt;
+  const alreadyGreeted = Boolean(conversationContext.conversationSummary)
+    || hasAssistantReplied(conversationContext.messagesAfterSummary as Array<{ role?: string }>);
+  const fullSystemPrompt = alreadyGreeted
+    ? `${mediaFiles.length > 0 ? injectMediaSection(basePrompt, mediaFiles) : basePrompt}\n\n${ALREADY_GREETED_NOTE}`
+    : mediaFiles.length > 0 ? injectMediaSection(basePrompt, mediaFiles) : basePrompt;
   const extraContextMessages: Array<{ role: string; parts: Array<{ text: string }> }> = [];
 
   if (leadAttributes && Object.keys(leadAttributes).length > 0) {
@@ -2124,6 +2123,13 @@ export async function runAgentTurn(
   let currentParts = normalizeLlmResponseParts(response);
   const rawInitialText = extractTextFromParts(currentParts) || ((response as any).text ?? '');
   let finalAnswer = sanitizeAgentReply(rawInitialText);
+  if (alreadyGreeted && finalAnswer) {
+    const withoutGreeting = stripLeadingGreeting(finalAnswer);
+    if (withoutGreeting !== finalAnswer) {
+      console.log('[GREETING_GUARD] stripped repeated greeting', { agentId, conversationId });
+      finalAnswer = withoutGreeting;
+    }
+  }
   let toolCalls = tryExtractToolCalls(currentParts);
   const textToolCallsFromInitialText = extractTextToolCalls(rawInitialText).filter((call) => allowedToolNames.includes(call.name));
   if (toolCalls.length === 0 && textToolCallsFromInitialText.length > 0) {
