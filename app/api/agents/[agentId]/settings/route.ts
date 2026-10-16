@@ -37,6 +37,13 @@ export async function PATCH(req: NextRequest, { params }: { params: { agentId: s
 
   const body = await req.json();
 
+  if ('model' in body) {
+    const model = typeof body.model === 'string' ? body.model.trim().toLowerCase() : '';
+    if (!['gemini-', 'deepseek-', 'anthropic/'].some((prefix) => model.startsWith(prefix))) {
+      return NextResponse.json({ error: 'Неизвестная модель' }, { status: 400 });
+    }
+  }
+
   const existing = await getAdmin()
     .from('agents')
     .select('org_id, system_prompt_compiled, general_capabilities')

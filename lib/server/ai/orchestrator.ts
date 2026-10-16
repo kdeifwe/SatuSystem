@@ -1,6 +1,6 @@
 import { searchKnowledgeBaseWithLinks } from '@/lib/knowledge-base/search';
 import type { KBSearchResult, LinkedKBChunkResult } from '@/lib/knowledge-base/search';
-import { geminiCountTokens, GEMINI_CHAT_MODEL, GEMINI_PROMPT_MODEL } from '@/lib/server/ai/gemini-client';
+import { geminiCountTokens, GEMINI_CHAT_MODEL, GEMINI_PROMPT_MODEL, resolveGeminiModel } from '@/lib/server/ai/gemini-client';
 import { llmClient, type LLMResponse } from './llm-client';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { splitAgentMessage, calculateTypingDelay } from '@/lib/server/ai/message-splitter';
@@ -232,6 +232,18 @@ async function getCachedAgent(
   const resolvedData = error ? null : (data as unknown as Record<string, unknown> | null);
   agentCache.set(key, { expiresAt: now + AGENT_CACHE_TTL_MS, data: resolvedData });
   return resolvedData;
+}
+
+const KNOWN_AGENT_MODEL_PREFIXES = ['gemini-', 'deepseek-', 'anthropic/'];
+
+export function resolveAgentChatModel(rawModel: unknown): string {
+  if (typeof rawModel !== 'string') return GEMINI_CHAT_MODEL;
+  const model = rawModel.trim();
+  if (!model) return GEMINI_CHAT_MODEL;
+  const lower = model.toLowerCase();
+  if (!KNOWN_AGENT_MODEL_PREFIXES.some((prefix) => lower.startsWith(prefix))) return GEMINI_CHAT_MODEL;
+  if (lower.startsWith('gemini-')) return resolveGeminiModel(model) || GEMINI_CHAT_MODEL;
+  return model;
 }
 
 function tryBuildDeterministicFactAnswerWithLogging(
@@ -1175,17 +1187,19 @@ export async function retryEmptyFinalAnswerWithoutTools({
   conversationContents,
   userMessage,
   callGeminiFn,
+  modelName,
 }: {
   agentId?: string;
   conversationId?: string;
   systemPrompt: string;
   conversationContents: Array<Record<string, unknown>>;
   userMessage: string;
+  modelName?: string;
   callGeminiFn: (modelName: string, systemPrompt: string, contents: Array<Record<string, unknown>>, tools: Array<Record<string, unknown>>) => Promise<GeminiClientResponse>;
 }): Promise<{ finalAnswer: string; retryAttempted: boolean; response?: GeminiClientResponse; currentParts?: Array<Record<string, unknown>> }> {
   const retryInstruction = `Ответь клиенту на его последнее сообщение на его языке. Не используй инструменты и не говори о внутренних рассуждениях. Ответь коротко, по существу, обычным текстом. Содержание сообщения клиента: "${userMessage}"`;
   const retryContents = [...conversationContents, { role: 'user', parts: [{ text: retryInstruction }] }];
-  const retryResponse = await callGeminiFn(GEMINI_CHAT_MODEL, systemPrompt, retryContents, []);
+  const retryResponse = await callGeminiFn(modelName ?? GEMINI_CHAT_MODEL, systemPrompt, retryContents, []);
   const retryParts = normalizeLlmResponseParts(retryResponse);
   const retryText = sanitizeAgentReply(extractTextFromParts(retryParts) || ((retryResponse as any).text ?? ''));
 
@@ -1712,8 +1726,9 @@ export async function runAgentTurn(
   const basePrompt = injectHandoffSection(systemPrompt, handoffConfig);
 
   // Читаем allowed_tools конкретного агента
-  const agentData = await getCachedAgent(admin, agentId, 'general_capabilities, dialogue_flow') as { general_capabilities?: Record<string, unknown> | null; dialogue_flow?: unknown } | null;
+  const agentData = await getCachedAgent(admin, agentId, 'general_capabilities, dialogue_flow, model') as { general_capabilities?: Record<string, unknown> | null; dialogue_flow?: unknown; model?: string | null } | null;
 
+  const agentChatModel = resolveAgentChatModel(agentData?.model);
   const generalCapabilities = (agentData?.general_capabilities as Record<string, unknown> | null) ?? {};
   const configuredToolNames = Array.isArray(generalCapabilities.allowed_tools)
     ? (generalCapabilities.allowed_tools as string[]).filter((name) => typeof name === 'string')
@@ -2028,7 +2043,7 @@ export async function runAgentTurn(
         conversation_id: conversationId,
         request: {
           type: 'deterministic_fact_answer',
-          model: GEMINI_CHAT_MODEL,
+          model: agentChatModel,
           user_message: userMessage,
           retrieval: {
             query: userMessage,
@@ -2090,7 +2105,7 @@ export async function runAgentTurn(
       extraUserContextMessages.push({ role: 'user', parts: [{ text: `Известное имя клиента: ${knownName}` }] });
     }
 
-    response = await callGemini(GEMINI_CHAT_MODEL, fullSystemPrompt, [
+    response = await callGemini(agentChatModel, fullSystemPrompt, [
       ...conversationContents,
       ...extraUserContextMessages,
       { role: 'user', parts: [{ text: userMessage }] },
@@ -2296,7 +2311,7 @@ export async function runAgentTurn(
     });
 
     const followUpResponse = await callGemini(
-      GEMINI_CHAT_MODEL,
+      agentChatModel,
       fullSystemPrompt,
       followUpHistory,
       toolPayload,
@@ -2361,7 +2376,8 @@ export async function runAgentTurn(
         systemPrompt: fullSystemPrompt,
         conversationContents,
         userMessage,
-        callGeminiFn: async (modelName, retrySystemPrompt, retryContents, retryTools) => callGemini(modelName, retrySystemPrompt, retryContents, retryTools),
+        modelName: agentChatModel,
+        callGeminiFn: async (modelName, retrySystemPrompt, retryContents, retryTools) => callGemini(modelName || agentChatModel, retrySystemPrompt, retryContents, retryTools),
       });
       if (retryResult.finalAnswer.trim()) {
         if (retryResult.response) {
@@ -2385,7 +2401,7 @@ export async function runAgentTurn(
       messages_in_context: conversationContext.messagesAfterSummary.length,
       context_token_count: conversationContext.contextTokenCount ?? null,
       promptTokenCount: response?.payload?.usageMetadata?.promptTokenCount ?? null,
-      model: GEMINI_CHAT_MODEL,
+      model: agentChatModel,
       retry_attempted: emptyReplyRetryAttempted,
       user_message: userMessage,
       handoff_triggered: handoffTriggered,
@@ -2585,13 +2601,13 @@ export async function runAgentTurn(
 
   const rawReply = extractTextFromParts(currentParts);
   if (conversationId) {
-    const logMeta = buildAgentResponseLogMeta({ llmResponse: response as any });
+    const logMeta = buildAgentResponseLogMeta({ activeModel: agentChatModel, llmResponse: response as any });
 
     await admin.from('ai_call_logs').insert({
       conversation_id: conversationId,
       request: {
         type: 'agent_response',
-        model: GEMINI_CHAT_MODEL,
+        model: agentChatModel,
         actual_provider: logMeta.actualProvider,
         actual_model: logMeta.actualModel,
         usage_metadata: logMeta.usageMetadata,
