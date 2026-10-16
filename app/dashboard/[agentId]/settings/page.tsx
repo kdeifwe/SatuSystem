@@ -16,9 +16,9 @@ const ALLOWED_AGENT_MODELS = new Set([
   'gemini-2.0-flash',
   'deepseek-v4-flash',
   'deepseek-v4-pro',
-  'gpt-5.4-mini',
-  'gpt-5.4',
-  'llama-3.3-70b-versatile',
+  'anthropic/claude-haiku-5.5',
+  'anthropic/claude-sonnet-5.5',
+  'anthropic/claude-opus-5.5',
 ]);
 
 function isAllowedAgentModel(model: unknown): model is string {
@@ -43,11 +43,11 @@ const modelGroups: Array<{
       { value: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash — самый быстрый и современный вариант для диалогов' },
       { value: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash-Lite — быстрый и дешёвый вариант для FAQ' },
       { value: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash — оптимальный вариант для большинства задач' },
+      { value: 'anthropic/claude-haiku-5.5', label: 'Claude Haiku 5.5 — быстрый и недорогой вариант от Anthropic' },
+      { value: 'anthropic/claude-sonnet-5.5', label: 'Claude Sonnet 5.5 — баланс качества и скорости, сильный в продающих диалогах' },
+      { value: 'anthropic/claude-opus-5.5', label: 'Claude Opus 5.5 — максимальное качество для сложных переговоров' },
       { value: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash — быстрый и экономный вариант' },
       { value: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro — мощный вариант для сложных диалогов' },
-      { value: 'gpt-5.4-mini', label: 'GPT-5.4 Mini — лёгкий и быстрый вариант от OpenAI' },
-      { value: 'gpt-5.4', label: 'GPT-5.4 — полнофункциональная модель от OpenAI' },
-      { value: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70b Versatile — большая модель для сложных задач' },
     ],
   },
   {

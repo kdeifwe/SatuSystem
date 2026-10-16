@@ -52,7 +52,13 @@ interface WizardState {
 }
 
 type Scenario = 'sales' | 'consultant' | 'support';
-type Model = 'gemini-3.8-flash' | 'gemini-3.5-flash-lite' | 'gemini-3.5-flash';
+type Model =
+  | 'gemini-3.8-flash'
+  | 'gemini-3.5-flash-lite'
+  | 'gemini-3.5-flash'
+  | 'anthropic/claude-haiku-5.5'
+  | 'anthropic/claude-sonnet-5.5'
+  | 'anthropic/claude-opus-5.5';
 type Currency = 'KZT' | 'USD' | 'EUR' | 'RUB';
 type Timezone = 'Asia/Almaty' | 'Europe/Moscow' | 'UTC';
 type Tone = 'Формальный' | 'Дружелюбный' | 'Нейтральный';
@@ -1242,6 +1248,9 @@ export default function CreateAgentPage() {
                           <option value="gemini-3.8-flash">gemini-3.8-flash</option>
                           <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite</option>
                           <option value="gemini-3.5-flash">gemini-3.5-flash</option>
+                          <option value="anthropic/claude-haiku-5.5">anthropic/claude-haiku-5.5</option>
+                          <option value="anthropic/claude-sonnet-5.5">anthropic/claude-sonnet-5.5</option>
+                          <option value="anthropic/claude-opus-5.5">anthropic/claude-opus-5.5</option>
                         </select>
                       </div>
                       <div>

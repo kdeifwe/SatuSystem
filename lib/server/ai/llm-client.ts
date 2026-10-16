@@ -1,7 +1,7 @@
 import { GEMINI_CHAT_MODEL } from './gemini-client';
 import { GeminiProvider } from './providers/gemini-provider';
 import { DeepSeekProvider } from './providers/deepseek-provider';
-import { GroqProvider } from './providers/groq-provider';
+import { OpenRouterProvider } from './providers/openrouter-provider';
 
 export interface LLMMessage {
   role: 'system' | 'user' | 'assistant';
@@ -105,12 +105,16 @@ export class UnifiedLLMClient {
 
   constructor() {
     this.providers = new Map();
-    this.fallbackChain = [
+    const configuredProviders = [
       process.env.PRIMARY_LLM_PROVIDER ?? 'gemini',
-      process.env.FALLBACK_LLM_PROVIDER ?? 'groq',
+      process.env.FALLBACK_LLM_PROVIDER ?? 'deepseek',
+      'openrouter',
     ]
-      .filter((provider): provider is string => Boolean(provider) && provider !== 'openai')
+      .map((provider) => provider?.trim().toLowerCase())
+      .filter((provider): provider is string => Boolean(provider) && provider !== 'openai' && provider !== 'groq' && provider !== 'llama' && provider !== 'gpt' && provider !== 'gpt4')
       .filter((provider, index, all) => all.indexOf(provider) === index);
+
+    this.fallbackChain = configuredProviders.length > 0 ? configuredProviders : ['gemini', 'deepseek', 'openrouter'];
 
     if (process.env.GEMINI_API_KEY) {
       this.providers.set('gemini', new GeminiProvider());
@@ -120,8 +124,8 @@ export class UnifiedLLMClient {
       this.providers.set('deepseek', new DeepSeekProvider());
     }
 
-    if (process.env.GROQ_API_KEY) {
-      this.providers.set('groq', new GroqProvider());
+    if (process.env.OPENROUTER_API_KEY) {
+      this.providers.set('openrouter', new OpenRouterProvider());
     }
   }
 
@@ -129,15 +133,15 @@ export class UnifiedLLMClient {
     const normalized = requestedModel.trim().toLowerCase();
     const isGemini = normalized.startsWith('gemini-');
     const isDeepSeek = normalized.startsWith('deepseek-');
-    const isGroqModel = normalized.startsWith('llama-') || normalized.startsWith('mixtral-');
+    const isOpenRouterModel = normalized.includes('/');
 
     if (providerName === 'gemini' && isGemini) return requestedModel;
     if (providerName === 'deepseek' && isDeepSeek) return requestedModel;
-    if (providerName === 'groq' && (isGroqModel || normalized.startsWith('gpt-') || normalized.startsWith('gpt4'))) return requestedModel;
+    if (providerName === 'openrouter' && isOpenRouterModel) return requestedModel;
 
     if (providerName === 'gemini') return process.env.GEMINI_CHAT_MODEL ?? GEMINI_CHAT_MODEL;
-    if (providerName === 'deepseek') return process.env.PRIMARY_LLM_MODEL ?? 'deepseek-v4-flash';
-    if (providerName === 'groq') return 'llama-3.3-70b-versatile';
+    if (providerName === 'deepseek') return process.env.DEEPSEEK_CHAT_MODEL ?? process.env.PRIMARY_LLM_MODEL ?? 'deepseek-v4-flash';
+    if (providerName === 'openrouter') return process.env.OPENROUTER_DEFAULT_MODEL ?? 'anthropic/claude-haiku-5.5';
 
     return requestedModel;
   }
@@ -145,17 +149,15 @@ export class UnifiedLLMClient {
   async generate(request: LLMRequest): Promise<LLMResponse> {
     const errors: string[] = [];
 
-    const model = (request.model || '').toLowerCase();
+    const model = (request.model || '').trim().toLowerCase();
     let targetProvider: string;
 
     if (model.startsWith('gemini-')) {
       targetProvider = 'gemini';
     } else if (model.startsWith('deepseek-')) {
       targetProvider = 'deepseek';
-    } else if (model.startsWith('gpt-') || model.startsWith('gpt4')) {
-      targetProvider = this.providers.has('groq') ? 'groq' : 'gemini';
-    } else if (model.startsWith('llama-') || model.startsWith('mixtral-')) {
-      targetProvider = 'groq';
+    } else if (model.includes('/')) {
+      targetProvider = 'openrouter';
     } else {
       targetProvider = process.env.PRIMARY_LLM_PROVIDER ?? 'gemini';
     }
