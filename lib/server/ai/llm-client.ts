@@ -141,7 +141,7 @@ export class UnifiedLLMClient {
 
     if (providerName === 'gemini') return process.env.GEMINI_CHAT_MODEL ?? GEMINI_CHAT_MODEL;
     if (providerName === 'deepseek') return process.env.DEEPSEEK_CHAT_MODEL ?? process.env.PRIMARY_LLM_MODEL ?? 'deepseek-v4-flash';
-    if (providerName === 'openrouter') return process.env.OPENROUTER_DEFAULT_MODEL ?? 'anthropic/claude-sonnet-5.5';
+    if (providerName === 'openrouter') return process.env.OPENROUTER_DEFAULT_MODEL ?? 'anthropic/claude-haiku-5.5';
 
     return requestedModel;
   }
