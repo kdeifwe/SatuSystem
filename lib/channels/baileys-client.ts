@@ -99,6 +99,13 @@ async function restorePersistedWhatsAppSessions() {
   await resetStaleChannelStatuses();
 
   const agentIds = await discoverPersistedAuthAgentIds(authRoot);
+  let rootListing: string[] = [];
+  try {
+    rootListing = await fs.readdir(authRoot);
+  } catch (e) {
+    rootListing = [`<readdir failed: ${(e as NodeJS.ErrnoException).code}>`];
+  }
+  console.log(JSON.stringify({ tag: 'WA_RESTORE', phase: 'discovered', cwd: process.cwd(), authRoot, rootListing, restorableAgentIds: agentIds }));
   if (agentIds.length === 0) {
     logger.info('No persisted WhatsApp auth sessions found for cold-start restore');
     return;
@@ -117,6 +124,7 @@ async function restorePersistedWhatsAppSessions() {
         break;
       } catch (error) {
         lastAttemptError = error;
+        console.log(JSON.stringify({ tag: 'WA_RESTORE', phase: 'attempt_failed', agentId, attempt, error: error instanceof Error ? error.message : String(error) }));
         const delaySeconds = [5, 10, 20, 40, 60, 60, 60, 60][attempt - 1] ?? 60;
         await logSessionRestoreFailure(agentId, `restore_attempt_${attempt}_failed`, error);
         if (attempt < 8) {
@@ -142,8 +150,10 @@ export async function startWhatsAppRestore() {
   }
 
   if (globalThis.__baileysRestoreStarted || process.env.WHATSAPP_RESTORE_ENABLED !== 'true') {
+    console.log(JSON.stringify({ tag: 'WA_RESTORE', phase: 'skipped', alreadyStarted: Boolean(globalThis.__baileysRestoreStarted), enabled: process.env.WHATSAPP_RESTORE_ENABLED }));
     return;
   }
+  console.log(JSON.stringify({ tag: 'WA_RESTORE', phase: 'start', pid: process.pid }));
 
   globalThis.__baileysRestoreStarted = true;
 
@@ -393,6 +403,7 @@ async function createBaileysClient(agentId: string, forceNewAuth = false) {
           clearTimeout(clientEntry.reconnectTimer);
           clientEntry.reconnectTimer = undefined;
         }
+        console.log(JSON.stringify({ tag: 'WA_OPEN', agentId, jid: sock.user?.id }));
         clientEntry.status = 'connected';
         clientEntry.everConnected = true;
         clientEntry.jid = sock.user?.id;
