@@ -60,6 +60,26 @@ globalThis.__baileysClientInitLocks = clientInitLocks;
 const authRoot = path.join(process.cwd(), 'baileys-auth');
 const logger = pino({ level: process.env.NODE_ENV === 'development' ? 'info' : 'warn' });
 
+
+function waLog(message: string, extra?: Record<string, unknown>) {
+  // Обычная строка в stdout: Railway показывает её как message, её видно в поиске по "[WA]"
+  console.log(`[WA] ${message}${extra ? ' ' + JSON.stringify(extra) : ''}`);
+}
+
+async function withTimeout<T>(label: string, promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`timeout after ${ms}ms: ${label}`)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export async function resetStaleChannelStatuses() {
   try {
     const admin = createAdminClient();
@@ -105,7 +125,7 @@ async function restorePersistedWhatsAppSessions() {
   } catch (e) {
     rootListing = [`<readdir failed: ${(e as NodeJS.ErrnoException).code}>`];
   }
-  console.log(JSON.stringify({ tag: 'WA_RESTORE', phase: 'discovered', cwd: process.cwd(), authRoot, rootListing, restorableAgentIds: agentIds }));
+  waLog('restore: discovered', { cwd: process.cwd(), authRoot, rootListing, restorableAgentIds: agentIds });
   if (agentIds.length === 0) {
     logger.info('No persisted WhatsApp auth sessions found for cold-start restore');
     return;
@@ -119,12 +139,14 @@ async function restorePersistedWhatsAppSessions() {
 
     for (let attempt = 1; attempt <= 8; attempt += 1) {
       try {
+        waLog('restore: creating client', { agentId, attempt });
         await createBaileysClient(agentId);
+        waLog('restore: client created', { agentId, attempt });
         lastAttemptError = undefined;
         break;
       } catch (error) {
         lastAttemptError = error;
-        console.log(JSON.stringify({ tag: 'WA_RESTORE', phase: 'attempt_failed', agentId, attempt, error: error instanceof Error ? error.message : String(error) }));
+        waLog('restore: attempt FAILED', { agentId, attempt, error: error instanceof Error ? error.message : String(error) });
         const delaySeconds = [5, 10, 20, 40, 60, 60, 60, 60][attempt - 1] ?? 60;
         await logSessionRestoreFailure(agentId, `restore_attempt_${attempt}_failed`, error);
         if (attempt < 8) {
@@ -150,10 +172,10 @@ export async function startWhatsAppRestore() {
   }
 
   if (globalThis.__baileysRestoreStarted || process.env.WHATSAPP_RESTORE_ENABLED !== 'true') {
-    console.log(JSON.stringify({ tag: 'WA_RESTORE', phase: 'skipped', alreadyStarted: Boolean(globalThis.__baileysRestoreStarted), enabled: process.env.WHATSAPP_RESTORE_ENABLED }));
+    waLog('restore: skipped', { alreadyStarted: Boolean(globalThis.__baileysRestoreStarted), enabled: process.env.WHATSAPP_RESTORE_ENABLED });
     return;
   }
-  console.log(JSON.stringify({ tag: 'WA_RESTORE', phase: 'start', pid: process.pid }));
+  waLog('restore: start', { pid: process.pid });
 
   globalThis.__baileysRestoreStarted = true;
 
@@ -352,20 +374,33 @@ async function createBaileysClient(agentId: string, forceNewAuth = false) {
   }
 
   const initializationPromise = (async () => {
+    waLog('create client: start', { agentId, forceNewAuth });
     await ensureAuthDir(agentId);
-    await ensureWhatsAppChannel(agentId);
+    waLog('create client: auth dir ok', { agentId });
+    await withTimeout('ensureWhatsAppChannel', ensureWhatsAppChannel(agentId), 20_000);
+    waLog('create client: channel ok', { agentId });
 
     const authDir = path.join(authRoot, agentId);
     await restoreCredsFromBackupIfNeeded(authDir);
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
-    const { version } = await fetchLatestBaileysVersion();
+    waLog('create client: auth state loaded', { agentId, registered: Boolean((state.creds as any)?.registered) });
+
+    // fetchLatestBaileysVersion ходит на GitHub без таймаута — не даём ему повесить подключение
+    let version: [number, number, number] | undefined;
+    try {
+      const latest = await withTimeout('fetchLatestBaileysVersion', fetchLatestBaileysVersion(), 8_000);
+      version = latest.version as [number, number, number];
+    } catch (error) {
+      waLog('create client: version fetch failed, using Baileys default', { agentId, error: error instanceof Error ? error.message : String(error) });
+    }
     const credsPath = path.join(authDir, 'creds.json');
+    waLog('create client: creating socket', { agentId, version });
 
     const sock = makeWASocket({
       logger,
       printQRInTerminal: false,
       auth: state,
-      version,
+      ...(version ? { version } : {}),
       browser: ['SatuSystem', 'Baileys', '1.0.0'],
     });
 
@@ -403,7 +438,7 @@ async function createBaileysClient(agentId: string, forceNewAuth = false) {
           clearTimeout(clientEntry.reconnectTimer);
           clientEntry.reconnectTimer = undefined;
         }
-        console.log(JSON.stringify({ tag: 'WA_OPEN', agentId, jid: sock.user?.id }));
+        waLog('connection OPEN', { agentId, jid: sock.user?.id });
         clientEntry.status = 'connected';
         clientEntry.everConnected = true;
         clientEntry.jid = sock.user?.id;
@@ -421,7 +456,7 @@ async function createBaileysClient(agentId: string, forceNewAuth = false) {
         const isLoggedOut = statusCode === DisconnectReason.loggedOut || statusCode === 401;
         const isReplaced = statusCode === DisconnectReason.connectionReplaced || statusCode === 440;
         const lastErrorMessage = update.lastDisconnect?.error?.message ?? 'Baileys disconnect';
-        console.log(JSON.stringify({ tag: 'WA_CLOSE', agentId, statusCode, reason: lastErrorMessage, isLoggedOut, isReplaced }));
+        waLog('connection CLOSE', { agentId, statusCode, reason: lastErrorMessage, isLoggedOut, isReplaced });
 
         clientEntry.status = isLoggedOut ? 'error' : 'disconnected';
         clientEntry.qrDataUrl = undefined;
