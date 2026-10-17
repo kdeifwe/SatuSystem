@@ -17,7 +17,7 @@ import { understandMedia } from '@/lib/server/media-understanding';
 import { handleIncomingMessageWithDependencies } from './baileys-handler';
 import { splitAgentMessage, calculateTypingDelay } from '@/lib/server/ai/message-splitter';
 import { enqueueNotification } from '@/lib/notifications';
-import { discoverPersistedAuthAgentIds, getReconnectDelayMs, restoreCredsFromBackupIfNeeded, shouldClearAuthStateOnDisconnect, writeCredsWithBackup } from './baileys-cold-start';
+import { discoverPersistedAuthAgentIds, getReconnectDelayMs, restoreCredsFromBackupIfNeeded, writeCredsWithBackup } from './baileys-cold-start';
 
 const { normalizeConnectionStatus, buildChannelStatusUpdate } = require('@/lib/channels/status-utils');
 
@@ -37,6 +37,7 @@ interface BaileysClientEntry extends BaileysClientInfo {
   lastDisconnectTime?: number;
   reconnectTimer?: ReturnType<typeof setTimeout>;
   everConnected?: boolean;
+  createdAt: number;
   saveCreds?: () => Promise<void>;
 }
 
@@ -362,6 +363,7 @@ async function createBaileysClient(agentId: string, forceNewAuth = false) {
       sock,
       status: 'disconnected',
       reconnectAttempts: 0,
+      createdAt: Date.now(),
       saveCreds: async () => persistCredsSafely(agentId, credsPath, saveCreds),
     };
 
@@ -425,9 +427,8 @@ async function createBaileysClient(agentId: string, forceNewAuth = false) {
           clientEntry.status = 'error';
           clientEntry.lastError = loggedOutMessage;
           await syncChannelConnectionState(agentId, 'error', false);
-          if (shouldClearAuthStateOnDisconnect(statusCode)) {
-            await clearAuthState(agentId);
-          }
+          // 401 = сессия отозвана: ключи мертвы, чистим, чтобы следующий connect выдал QR
+          await clearAuthState(agentId);
           await logSessionRestoreFailure(agentId, 'logged_out', loggedOutMessage);
           return;
         }
@@ -505,20 +506,16 @@ export async function getBaileysClient(agentId: string, options?: { forceNewAuth
   const existing = clientStore.get(agentId);
 
   if (existing && !options?.forceNewAuth) {
-    // If the existing entry is in a disconnected/error state and there's no active reconnect timer,
-    // treat it as stale: try to close and recreate.
-    if ((existing.status === 'disconnected' || existing.status === 'error') && !existing.reconnectTimer) {
-      try {
-        const logoutHandler = (existing.sock as typeof existing.sock & { logout?: () => Promise<void> }).logout;
-        if (typeof logoutHandler === 'function') {
-          await logoutHandler.call(existing.sock);
-        } else if ((existing.sock as any)?.ws?.close) {
-          try { (existing.sock as any).ws.close(); } catch (e) { /* ignore */ }
-        }
-      } catch (err) {
+    // Сокет ещё поднимается (после рестарта/реконнекта) — не трогаем его.
+    // Раньше тут вызывался logout(), который отзывал сессию на стороне WhatsApp.
+    const isStillConnecting = Date.now() - existing.createdAt < 90_000;
+    const isStale = (existing.status === 'disconnected' || existing.status === 'error') && !existing.reconnectTimer;
+
+    if (isStale && !isStillConnecting) {
+      // Только закрываем транспорт, БЕЗ logout: ключи остаются валидными.
+      try { (existing.sock as any)?.end?.(undefined); } catch (err) {
         logger.warn({ agentId, err }, 'Failed to close stale Baileys socket');
       }
-
       clientStore.delete(agentId);
       clientInitLocks.delete(agentId);
     } else {
