@@ -21,6 +21,13 @@ export function shouldClearAuthStateOnDisconnect(statusCode?: number): boolean {
   return statusCode === undefined || statusCode === 0 || statusCode === 1 ? true : statusCode !== 401 && statusCode !== 440;
 }
 
+// У Baileys сессия, привязанная по QR, хранит registered: false. Признак привязки: creds.me.id.
+function hasPairedSession(creds: any): boolean {
+  if (!creds) return false;
+  if (creds.registered === true) return true;
+  return typeof creds.me?.id === 'string' && creds.me.id.length > 0;
+}
+
 async function readJsonIfPresent(filePath: string): Promise<Record<string, unknown> | null> {
   try {
     const raw = await fs.readFile(filePath, 'utf8');
@@ -52,12 +59,12 @@ export async function restoreCredsFromBackupIfNeeded(dirPath: string): Promise<b
   const backupPath = `${credsPath}.bak`;
 
   const primary = await readJsonIfPresent(credsPath);
-  if (primary && primary.registered === true) {
+  if (hasPairedSession(primary)) {
     return true;
   }
 
   const backup = await readJsonIfPresent(backupPath);
-  if (backup && backup.registered === true) {
+  if (hasPairedSession(backup)) {
     await writeCredsWithBackup(credsPath, JSON.stringify(backup, null, 2));
     return true;
   }
@@ -77,12 +84,12 @@ export async function discoverPersistedAuthAgentIds(authRoot: string): Promise<s
 
           try {
             const primary = await readJsonIfPresent(credsPath);
-            if (primary && primary.registered === true) {
+            if (hasPairedSession(primary)) {
               return entry.name;
             }
 
             const backup = await readJsonIfPresent(`${credsPath}.bak`);
-            if (backup && backup.registered === true) {
+            if (hasPairedSession(backup)) {
               await writeCredsWithBackup(credsPath, JSON.stringify(backup, null, 2));
               return entry.name;
             }
