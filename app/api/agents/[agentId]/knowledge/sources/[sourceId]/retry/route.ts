@@ -3,12 +3,12 @@ import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { processSource } from '@/lib/server/knowledge/processor';
 import { processInstagramSource } from '@/lib/server/knowledge/instagram';
+import { requireAgentAccess } from '@/lib/server/require-auth';
 
 export async function POST(req: Request, { params }: { params: { agentId: string; sourceId: string } }) {
   try {
-    const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return NextResponse.json({ error: 'Не авторизован' }, { status: 401 });
+    const access = await requireAgentAccess(params.agentId);
+    if (!access.ok) return access.response;
 
     const admin = createAdminClient();
     const { data: source, error: fetchError } = await admin

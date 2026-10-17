@@ -3,6 +3,7 @@ import { createClient as createUserClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { sendWhatsAppText } from '@/lib/channels/baileys-client';
 import { sendTelegramText } from '@/lib/channels/telegram-client';
+import { KB_MEDIA_PREFIX, resolveMime, detectMediaKind } from '@/lib/media/files';
 
 function errorResponse(message: string, status = 500) {
   return NextResponse.json({ error: message }, { status });
@@ -16,7 +17,7 @@ export async function GET(request: NextRequest, { params }: { params: { conversa
   const admin = createAdminClient();
   const { data, error } = await admin
     .from('messages')
-    .select('id, sender, content, tool_calls, created_at')
+    .select('id, sender, content, tool_calls, media_url, created_at')
     .eq('conversation_id', params.conversationId)
     .order('created_at', { ascending: true });
 
@@ -24,7 +25,26 @@ export async function GET(request: NextRequest, { params }: { params: { conversa
     return errorResponse(error.message);
   }
 
-  return NextResponse.json(data ?? []);
+  // media_url хранит путь в хранилище (kb-files: — файлы агента, иначе messages-media — входящие голосовые/фото).
+  // Отдаём свежие signed URL, чтобы оператор видел, какое фото ушло клиенту.
+  const rows = await Promise.all(
+    (data ?? []).map(async (row: any) => {
+      const { media_url: mediaUrl, ...rest } = row;
+      if (!mediaUrl) return { ...rest, media: null };
+      try {
+        if (/^https?:\/\//i.test(mediaUrl)) return { ...rest, media: { url: mediaUrl, kind: 'image' } };
+        const isKb = mediaUrl.startsWith(KB_MEDIA_PREFIX);
+        const path = isKb ? mediaUrl.slice(KB_MEDIA_PREFIX.length) : mediaUrl;
+        const { data: signed } = await admin.storage.from(isKb ? 'kb-files' : 'messages-media').createSignedUrl(path, 3600);
+        const kind = detectMediaKind(resolveMime(path)) ?? 'document';
+        return { ...rest, media: signed?.signedUrl ? { url: signed.signedUrl, kind } : null };
+      } catch {
+        return { ...rest, media: null };
+      }
+    }),
+  );
+
+  return NextResponse.json(rows);
 }
 
 export async function POST(request: NextRequest, { params }: { params: { conversationId: string } }) {

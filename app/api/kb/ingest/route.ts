@@ -1,5 +1,5 @@
 import { createAdminClient } from '@/lib/supabase/admin';
-import { requireOwnerOrAdminApi } from '@/lib/server/require-auth';
+import { requireOwnerOrAdminApi, requireAgentAccess } from '@/lib/server/require-auth';
 
 export const maxDuration = 120;
 
@@ -22,6 +22,10 @@ export async function POST(request: Request) {
     if (error || !source) {
       return Response.json({ error: 'source not found' }, { status: 404 });
     }
+
+    // Источник должен принадлежать агенту организации пользователя (иначе можно запускать обработку чужих источников).
+    const agentAuth = await requireAgentAccess(source.agent_id);
+    if (!agentAuth.ok) return agentAuth.response;
 
     try {
       await processSource(sourceId, source.agent_id, source.metadata?.use_ai !== false);

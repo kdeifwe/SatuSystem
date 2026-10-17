@@ -7,6 +7,7 @@ import { cookies } from 'next/headers';
 import { extractTextFromBuffer } from '@/lib/knowledge-base/extractor';
 import MEDIA_CATEGORIES from '@/lib/media/categories';
 import { processKBSource } from '@/lib/knowledge-base/processor';
+import { requireAgentAccess } from '@/lib/server/require-auth';
 
 const MAX_FILE_SIZE_MB = 20;
 const ALLOWED_TYPES: Record<string, string> = {
@@ -37,6 +38,10 @@ export async function POST(req: NextRequest) {
   if (!file || !agentId) {
     return NextResponse.json({ error: 'file and agentId are required' }, { status: 400 });
   }
+
+  // Пользователь должен быть owner/admin организации этого агента (RLS — вторая линия защиты).
+  const agentAccess = await requireAgentAccess(agentId);
+  if (!agentAccess.ok) return agentAccess.response;
 
   // Validate size first
   if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {

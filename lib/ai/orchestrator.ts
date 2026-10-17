@@ -9,6 +9,7 @@ import { sanitizeAgentReply } from './response-sanitizer.ts';
 import { buildFinalSynthesisContents, buildRetryContents } from './retry-context.ts';
 import { shouldBypassStyleValidation, shouldUseFallbackReply } from './response-policy';
 import { normalizeFunnelFlow } from '../funnel/normalize.ts';
+import { loadAgentMediaFiles, uniqueCategories, withMediaTool, injectMediaSection } from '../media/available.ts';
 import { applyFunnelRouting, resolvePostRoutingReply, upsertLeadFunnelState } from '../funnel/routing.ts';
 import { handleScriptNodeTurn, shouldRenderScriptMessage } from '../server/ai/orchestrator.ts';
 import { buildSandboxLeadAttributes, isSandboxLeadAttributes, buildSandboxConversationInsertData } from './sandbox-context';
@@ -430,22 +431,14 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
     ? (generalCapabilities.allowed_tools as string[]).filter((name) => typeof name === 'string')
     : [];
 
-  const allowedToolNames = configuredAllowedTools.length > 0
-    ? mergeAllowedToolNames(configuredAllowedTools, [])
-    : [];
+  // Медиатека агента — как и в боевом пути, sendMediaToClient включается автоматически при наличии файлов.
+  const mediaFiles = await loadAgentMediaFiles(admin, agentId);
+  const allowedToolNames = withMediaTool(
+    configuredAllowedTools.length > 0 ? mergeAllowedToolNames(configuredAllowedTools, []) : [],
+    mediaFiles,
+  );
 
-  // Gather available media categories for this agent (used to dynamically build sendMediaToClient)
-  const { data: mediaRows } = await admin
-    .from('kb_sources')
-    .select("category:metadata->>media_category")
-    .eq('agent_id', agentId)
-    .eq('status', 'done')
-    .not('metadata->>media_category', 'is', null);
-  const availableMediaCategories = Array.isArray(mediaRows)
-    ? Array.from(new Set(mediaRows.map((r: any) => String((r?.category ?? '')).trim()).filter(Boolean)))
-    : [];
-
-  const toolDecls = buildToolDeclarationsForAgent(allowedToolNames, generalCapabilities, agent.dialogue_flow, availableMediaCategories);
+  const toolDecls = buildToolDeclarationsForAgent(allowedToolNames, generalCapabilities, agent.dialogue_flow, uniqueCategories(mediaFiles), mediaFiles);
   const allowedToolDeclarations = toolDecls.length > 0 ? [{ functionDeclarations: toolDecls }] : [];
 
   const typingSimulation = Boolean((generalCapabilities?.typing_simulation) ?? true);
@@ -510,7 +503,7 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
   }
 
   let stepInstruction = buildFunnelStepInstruction(currentNodeId);
-  let promptWithCurrentStep = `${compiledPrompt}${stepInstruction}`;
+  let promptWithCurrentStep = `${injectMediaSection(compiledPrompt, mediaFiles)}${stepInstruction}`;
   let bypassStyleValidation = shouldBypassStyleValidation(agent.dialogue_flow, currentNodeId);
 
   const baseContents: Array<Record<string, unknown>> = [
@@ -655,7 +648,7 @@ export async function runAgentTurn(agentId: string, systemPrompt: string, userMe
         if (stepId && stepId !== currentNodeId) {
           currentNodeId = stepId;
           stepInstruction = buildFunnelStepInstruction(currentNodeId);
-          promptWithCurrentStep = `${compiledPrompt}${stepInstruction}`;
+          promptWithCurrentStep = `${injectMediaSection(compiledPrompt, mediaFiles)}${stepInstruction}`;
           bypassStyleValidation = shouldBypassStyleValidation(agent.dialogue_flow, currentNodeId);
           console.log('[AGENT] advanceFunnelStep changed current node:', { agentId, conversationId, currentNodeId });
         }

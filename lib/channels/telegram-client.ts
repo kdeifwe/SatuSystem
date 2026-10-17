@@ -29,10 +29,40 @@ export async function sendTelegramText(channelId: string, externalId: string, co
   }
 }
 
+function escapeTelegramHtml(text: string) {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+async function postTelegramMultipart(
+  token: string,
+  method: 'sendPhoto' | 'sendVideo' | 'sendDocument',
+  field: 'photo' | 'video' | 'document',
+  chatId: string,
+  data: Buffer,
+  mime: string,
+  fileName: string,
+  caption?: string,
+) {
+  const form = new FormData();
+  form.append('chat_id', chatId);
+  if (caption) {
+    form.append('caption', escapeTelegramHtml(caption));
+    form.append('parse_mode', 'HTML');
+  }
+  if (method === 'sendVideo') form.append('supports_streaming', 'true');
+  form.append(field, new Blob([new Uint8Array(data)], { type: mime }), fileName);
+
+  const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, { method: 'POST', body: form });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || !payload.ok) {
+    throw new Error(payload.description ?? `Telegram ${method} failed`);
+  }
+}
+
 export async function sendTelegramMedia(
   channelId: string,
   externalId: string,
-  opts: { url: string; mimeType?: string; caption?: string },
+  opts: { url?: string; buffer?: Buffer; mimeType?: string; caption?: string; fileName?: string },
 ) {
   const admin = createAdminClient();
   const { data: channel, error } = await admin
@@ -50,30 +80,32 @@ export async function sendTelegramMedia(
     throw new Error('Telegram bot token or chat id is missing');
   }
 
-  const mime = opts.mimeType ?? '';
-  let endpoint = '';
-  let body: Record<string, unknown> = { chat_id: externalId, caption: opts.caption ?? undefined, parse_mode: 'HTML' };
-
-  if (mime.startsWith('image/') || /\.(jpg|jpeg|png|gif)$/i.test(opts.url)) {
-    endpoint = `https://api.telegram.org/bot${token}/sendPhoto`;
-    // Telegram accepts URL in `photo` field
-    (body as any).photo = opts.url;
-  } else if (mime.startsWith('video/') || /\.(mp4|mov|webm)$/i.test(opts.url)) {
-    endpoint = `https://api.telegram.org/bot${token}/sendVideo`;
-    (body as any).video = opts.url;
-  } else {
-    endpoint = `https://api.telegram.org/bot${token}/sendDocument`;
-    (body as any).document = opts.url;
+  let data = opts.buffer;
+  if (!data && opts.url) {
+    const res = await fetch(opts.url);
+    if (!res.ok) throw new Error(`Failed to download media: ${res.status}`);
+    data = Buffer.from(await res.arrayBuffer());
   }
+  if (!data) throw new Error('No media provided');
 
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+  const mime = opts.mimeType || 'application/octet-stream';
+  const fileName = opts.fileName || 'file';
 
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok || !payload.ok) {
-    throw new Error(payload.description ?? 'Telegram media send failed');
+  if (mime.startsWith('image/') && mime !== 'image/gif') {
+    try {
+      await postTelegramMultipart(token, 'sendPhoto', 'photo', externalId, data, mime, fileName, opts.caption);
+      return;
+    } catch (e) {
+      // Telegram отклоняет фото с экстремальными размерами/пропорциями — отправляем как документ без потери файла.
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!/PHOTO_|IMAGE_|dimension|too big|file is too/i.test(msg)) throw e;
+    }
+    await postTelegramMultipart(token, 'sendDocument', 'document', externalId, data, mime, fileName, opts.caption);
+  } else if (mime === 'image/gif') {
+    await postTelegramMultipart(token, 'sendDocument', 'document', externalId, data, mime, fileName, opts.caption);
+  } else if (mime.startsWith('video/')) {
+    await postTelegramMultipart(token, 'sendVideo', 'video', externalId, data, mime, fileName, opts.caption);
+  } else {
+    await postTelegramMultipart(token, 'sendDocument', 'document', externalId, data, mime, fileName, opts.caption);
   }
 }

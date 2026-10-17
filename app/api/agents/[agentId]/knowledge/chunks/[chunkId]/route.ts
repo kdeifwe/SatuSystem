@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { normalizeCategory } from '@/lib/ai/knowledge/categories';
 import { embedText } from '@/lib/server/knowledge/processor';
+import { requireAgentAccess } from '@/lib/server/require-auth';
 
 function errorResponse(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
@@ -14,9 +15,8 @@ export async function PUT(
   { params }: { params: { agentId: string; chunkId: string } }
 ) {
   try {
-    const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return NextResponse.json({ error: 'Не авторизован' }, { status: 401 });
+    const access = await requireAgentAccess(params.agentId);
+    if (!access.ok) return access.response;
 
     const body = await request.json();
     const admin = createAdminClient();
@@ -82,9 +82,8 @@ export async function DELETE(
   { params }: { params: { agentId: string; chunkId: string } }
 ) {
   try {
-    const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return NextResponse.json({ error: 'Не авторизован' }, { status: 401 });
+    const access = await requireAgentAccess(params.agentId);
+    if (!access.ok) return access.response;
 
     const admin = createAdminClient();
     const { error } = await admin
