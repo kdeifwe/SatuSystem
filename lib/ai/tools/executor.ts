@@ -612,7 +612,16 @@ async function sendMediaToClient(args: { file_id?: string; category?: string; ca
   const caption = typeof args.caption === 'string' && args.caption.trim() ? args.caption.trim().slice(0, 900) : undefined;
 
   if (ctx.isSandbox) {
-    return { success: true, sandbox_mode: true, simulated: true, file: { id: file.id, title: file.title, category: file.category } };
+    // В песочнице реальной отправки нет, но отдаём ссылку, чтобы интерфейс показал вложение.
+    const { data: sandboxUrl } = await supabase.storage.from('kb-files').createSignedUrl(file.storagePath, 3600);
+    return {
+      success: true,
+      sandbox_mode: true,
+      simulated: true,
+      file: { id: file.id, title: file.title, category: file.category },
+      media: sandboxUrl?.signedUrl ? { url: sandboxUrl.signedUrl, kind: file.kind ?? 'document', title: file.title } : null,
+      hint: 'Файл показан клиенту. Напиши короткую фразу-подводку без ссылок.',
+    };
   }
 
   // Получатель: берём доверенный ctx.leadId, а не данные от модели.
