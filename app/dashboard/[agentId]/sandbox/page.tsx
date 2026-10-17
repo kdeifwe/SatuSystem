@@ -25,6 +25,7 @@ interface Message {
   timestamp: Date;
   pending?: boolean;
   retrievalDebug?: RetrievalDebug;
+  media?: Array<{ url: string; kind: string; title: string }>;
 }
 
 export default function SandboxPage({ params }: { params: { agentId: string } }) {
@@ -144,6 +145,13 @@ export default function SandboxPage({ params }: { params: { agentId: string } })
       }
 
       const retrievalDebug = data.retrievalDebug ?? null;
+      // Файлы из медиатеки показываем отдельными сообщениями перед текстом, как в реальном чате.
+      const mediaMessages: Message[] = (Array.isArray(data.media) ? data.media : []).map((item: { url: string; kind: string; title: string }) => ({
+        role: 'assistant' as const,
+        content: '',
+        timestamp: new Date(),
+        media: [item],
+      }));
       const parts = Array.isArray(data.messageParts) && data.messageParts.length
         ? data.messageParts
         : [{ text: answer, delayMs: 0 }];
@@ -152,7 +160,7 @@ export default function SandboxPage({ params }: { params: { agentId: string } })
       console.log('[Sandbox] messageParts count:', data.messageParts?.length);
 
       if (parts.length > 1 && data.splitMessages) {
-        setMessages((current) => current.slice(0, assistantIndex));
+        setMessages((current) => [...current.slice(0, assistantIndex), ...mediaMessages]);
         for (const [index, part] of parts.entries()) {
           if (index > 0) {
             await new Promise((resolve) => setTimeout(resolve, part.delayMs));
@@ -164,10 +172,10 @@ export default function SandboxPage({ params }: { params: { agentId: string } })
         }
       } else {
         setMessages((current) =>
-          current.map((message, messageIndex) =>
+          current.flatMap((message, messageIndex) =>
             messageIndex === assistantIndex
-              ? { ...message, content: answer, pending: false, retrievalDebug }
-              : message,
+              ? [...mediaMessages, { ...message, content: answer, pending: false, retrievalDebug }]
+              : [message],
           ),
         );
       }
@@ -333,6 +341,20 @@ export default function SandboxPage({ params }: { params: { agentId: string } })
                   <div
                     className={`${message.role === 'user' ? 'rounded-br-sm bg-[color:var(--color-chalk)] text-[color:var(--color-carbon)]' : message.role === 'system' ? 'bg-transparent px-0 py-0 text-[color:var(--color-smoke)]' : 'rounded-bl-sm border border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] text-[color:var(--color-chalk)]'} max-w-[75%] rounded-2xl px-4 py-3 text-sm`}
                   >
+                    {message.media?.map((item, mediaIndex) => {
+                      if (item.kind === 'image') {
+                        // eslint-disable-next-line @next/next/no-img-element
+                        return <img key={mediaIndex} src={item.url} alt={item.title} className="max-h-64 w-full rounded-xl object-cover" loading="lazy" />;
+                      }
+                      if (item.kind === 'video') {
+                        return <video key={mediaIndex} src={item.url} controls preload="metadata" className="max-h-64 w-full rounded-xl" />;
+                      }
+                      return (
+                        <a key={mediaIndex} href={item.url} target="_blank" rel="noreferrer" className="block text-xs underline">
+                          Открыть файл: {item.title}
+                        </a>
+                      );
+                    })}
                     {message.content}
                     {message.role === 'assistant' && message.retrievalDebug ? (
                       <div className="mt-3 space-y-2 border-t border-[color:var(--color-graphite)] pt-3 text-xs">

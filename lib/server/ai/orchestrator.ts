@@ -47,6 +47,7 @@ export interface AgentTurnResult {
   splitMessages: boolean;
   typingSimulation: boolean;
   handoffMessage?: string;
+  media?: Array<{ url: string; kind: string; title: string }>;
   toolsUsed?: string[];
   tokensInput?: number;
   tokensOutput?: number;
@@ -2171,6 +2172,7 @@ export async function runAgentTurn(
   let toolsUsed: string[] = [];
   const toolUsageCounts: Record<string, number> = {};
   const accumulatedToolHistory: Array<Record<string, unknown>> = [];
+  const sandboxMedia: Array<{ url: string; kind: string; title: string }> = [];
 
   while (iterations < MAX_TOOL_ROUNDS && toolCalls.length > 0) {
     iterations += 1;
@@ -2211,7 +2213,14 @@ export async function runAgentTurn(
       toolsUsed.push(toolCall.name);
       console.log('[PROD_TOOL] calling', { agentId, conversationId, name: toolCall.name, args: toolCall.args });
       const toolResult = await executeTool(toolCall as ToolCall, toolContext);
-      toolResults.push({ name: toolCall.name, result: toolResult.result, error: toolResult.error });
+      // Ссылка на файл нужна только интерфейсу песочницы, модели её не отдаём.
+      let resultForModel: unknown = toolResult.result;
+      if (toolCall.name === SEND_MEDIA_TOOL && toolResult.result && typeof toolResult.result === 'object') {
+        const { media: mediaItem, ...restResult } = toolResult.result as { media?: { url: string; kind: string; title: string } | null } & Record<string, unknown>;
+        if (mediaItem?.url) sandboxMedia.push(mediaItem);
+        resultForModel = restResult;
+      }
+      toolResults.push({ name: toolCall.name, result: resultForModel, error: toolResult.error });
       console.log('[PROD_TOOL_RESULT]', { agentId, name: toolCall.name, result: toolResult.result, error: toolResult.error });
 
       if (toolResult.error) {
@@ -2661,6 +2670,7 @@ export async function runAgentTurn(
     splitMessages,
     typingSimulation,
     handoffMessage,
+    media: sandboxMedia.length > 0 ? sandboxMedia : undefined,
     toolsUsed,
     tokensInput,
     tokensOutput,
