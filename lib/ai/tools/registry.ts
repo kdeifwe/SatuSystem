@@ -1,5 +1,6 @@
 import { normalizeFunnelFlow } from '../../funnel/normalize.ts';
 import { MEDIA_CATEGORIES } from '../../media/categories.ts';
+import { categoryLabel, type MediaFileInfo } from '../../media/available.ts';
 
 export interface GeminiFunctionDeclaration {
   name: string;
@@ -11,7 +12,32 @@ export interface GeminiFunctionDeclaration {
   };
 }
 
-function buildSendMediaDeclaration(availableCategories: string[]): GeminiFunctionDeclaration | null {
+function buildSendMediaDeclaration(availableCategories: string[], files: MediaFileInfo[] = []): GeminiFunctionDeclaration | null {
+  // Новый режим: модель выбирает конкретный файл по file_id (название + описание в тексте).
+  if (files.length > 0) {
+    const shown = files.slice(0, 30);
+    return {
+      name: 'sendMediaToClient',
+      description:
+        'Отправляет клиенту в чат файл (фото, видео, PDF) из медиатеки агента. ' +
+        'Вызывай, когда клиент просит фото/прайс/каталог или когда фото помогает продать. ' +
+        'Файл отправляется реально, ссылку в тексте писать не нужно.',
+      parameters: {
+        type: 'OBJECT',
+        properties: {
+          file_id: {
+            type: 'STRING',
+            description: `ID файла. Доступные: ${shown.map((f) => `${f.id} = «${f.title}» (${categoryLabel(f.category)})${f.description ? `: ${f.description}` : ''}`).join('; ')}`,
+            enum: shown.map((f) => f.id),
+          },
+          caption: { type: 'STRING', description: 'Короткая подпись к файлу (необязательно, до 200 символов).' },
+        },
+        required: ['file_id'],
+      },
+    };
+  }
+
+  // Совместимость: режим по категориям (отправляется последний загруженный файл категории).
   const cats = Array.isArray(availableCategories) ? availableCategories.map((c) => String(c).trim()).filter(Boolean) : [];
   const matched = MEDIA_CATEGORIES.filter((mc) => cats.includes(mc.id));
   if (matched.length === 0) return null;
@@ -120,6 +146,7 @@ export function buildToolDeclarationsForAgent(
   generalCapabilities: unknown,
   _flow: unknown,
   availableMediaCategories: string[] = [],
+  availableMediaFiles: MediaFileInfo[] = [],
 ): GeminiFunctionDeclaration[] {
   function normalizeToolName(name: string): string {
     return String(name).replace(/[^a-z0-9]+/gi, '').toLowerCase();
@@ -178,8 +205,8 @@ export function buildToolDeclarationsForAgent(
   const sendMediaNormalized = normalizeToolName('sendMediaToClient');
   if (normalizedAllowed.has(sendMediaNormalized)) {
     try {
-      if (Array.isArray(availableMediaCategories) && availableMediaCategories.length > 0) {
-        const sendDecl = buildSendMediaDeclaration(availableMediaCategories);
+      if ((Array.isArray(availableMediaCategories) && availableMediaCategories.length > 0) || availableMediaFiles.length > 0) {
+        const sendDecl = buildSendMediaDeclaration(availableMediaCategories, availableMediaFiles);
         // buildSendMediaDeclaration may return null if none of the available categories
         // match known MEDIA_CATEGORIES — in that case do not add the tool.
         if (sendDecl) {

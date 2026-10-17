@@ -4,6 +4,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { normalizeCategory } from '@/lib/ai/knowledge/categories';
 import { embedText } from '@/lib/server/knowledge/processor';
 import { buildManualChunkMetadata } from '@/lib/knowledge-base/classification';
+import { requireAgentAccess } from '@/lib/server/require-auth';
 
 const ALLOWED_TYPES = ['product', 'faq', 'procedure', 'contact', 'file', 'other', 'qa', 'contacts'];
 
@@ -69,9 +70,8 @@ export async function GET(request: NextRequest, { params }: { params: { agentId:
 
 export async function POST(request: NextRequest, { params }: { params: { agentId: string } }) {
   try {
-    const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return NextResponse.json({ error: 'Не авторизован' }, { status: 401 });
+    const access = await requireAgentAccess(params.agentId);
+    if (!access.ok) return access.response;
 
     const body = await request.json();
     const type = getType(body.type);

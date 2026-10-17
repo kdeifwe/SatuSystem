@@ -26,6 +26,7 @@ interface MessageItem {
   content: string;
   created_at: string;
   pending?: boolean;
+  media?: { url: string; kind: 'image' | 'video' | 'document' } | null;
 }
 
 export default function DialogsPage({ params }: { params: { agentId: string } }) {
@@ -144,6 +145,7 @@ export default function DialogsPage({ params }: { params: { agentId: string } })
         sender: message.sender,
         content: message.content,
         created_at: message.created_at,
+        media: message.media ?? null,
       })));
     } catch {
       setMessages([]);
@@ -329,7 +331,17 @@ export default function DialogsPage({ params }: { params: { agentId: string } })
                             : 'rounded-br-sm bg-[color:var(--color-graphite)] text-[color:var(--color-chalk)]'
                       }`}>
                         {message.sender === 'operator' && <p className="mb-1 text-[10px] text-[color:var(--color-smoke)]">Оператор</p>}
-                        <p className="whitespace-pre-wrap">{message.content}</p>
+                        {message.media?.kind === 'image' && (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={message.media.url} alt="Вложение" className="mb-2 max-h-64 w-full rounded-xl object-cover" loading="lazy" />
+                        )}
+                        {message.media?.kind === 'video' && (
+                          <video src={message.media.url} controls preload="metadata" className="mb-2 max-h-64 w-full rounded-xl" />
+                        )}
+                        {message.media?.kind === 'document' && (
+                          <a href={message.media.url} target="_blank" rel="noreferrer" className="mb-2 block text-xs underline">Открыть файл</a>
+                        )}
+                        {message.content ? <p className="whitespace-pre-wrap">{message.content}</p> : null}
                         <p className={`mt-1 text-[10px] ${message.sender === 'user' ? 'text-gray-400' : 'text-white/70'}`}>
                           {new Date(message.created_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
                         </p>

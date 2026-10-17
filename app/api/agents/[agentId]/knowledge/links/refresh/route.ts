@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { requireAgentAccess } from '@/lib/server/require-auth';
 
 export async function POST(_request: NextRequest, { params }: { params: { agentId: string } }) {
   try {
-    const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return NextResponse.json({ error: 'Не авторизован' }, { status: 401 });
+    const access = await requireAgentAccess(params.agentId);
+    if (!access.ok) return access.response;
 
     const admin = createAdminClient();
     const { error } = await admin.rpc('refresh_kb_chunk_links', {

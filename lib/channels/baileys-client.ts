@@ -553,7 +553,7 @@ export async function sendWhatsAppText(agentId: string, remoteJid: string, conte
 export async function sendWhatsAppMedia(
   agentId: string,
   remoteJid: string,
-  opts: { url?: string; buffer?: Buffer; mimeType?: string; caption?: string },
+  opts: { url?: string; buffer?: Buffer; mimeType?: string; caption?: string; fileName?: string },
 ) {
   const entry = clientStore.get(agentId);
   if (!entry?.sock) {
@@ -583,7 +583,7 @@ export async function sendWhatsAppMedia(
     message = { video: data, mimetype: mime, caption: opts.caption ?? undefined };
   } else {
     // documents (including PDF) as document buffer with filename
-    message = { document: data, mimetype: mime, fileName: 'file', caption: opts.caption ?? undefined };
+    message = { document: data, mimetype: mime, fileName: opts.fileName || 'file', caption: opts.caption ?? undefined };
   }
 
   await entry.sock.sendMessage(remoteJid, message);

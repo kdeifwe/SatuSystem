@@ -15,6 +15,8 @@ import { resolveDurationMinutes } from '@/lib/google-calendar/duration';
 import { parseWorkingHours } from '@/lib/google-calendar/slots';
 import { parseCalendarStartDate, zonedDate } from '@/lib/google-calendar/timezone';
 import type { FunnelFlow } from '../../funnel/types.ts';
+import { toMediaFileInfo, SEND_MEDIA_TOOL, type MediaFileInfo } from '../../media/available.ts';
+import { KB_MEDIA_PREFIX } from '../../media/files.ts';
 
 export interface ToolContext {
   leadId: string;
@@ -43,7 +45,10 @@ export async function executeTool(call: ToolCall, context: ToolContext): Promise
 
 async function dispatch(call: ToolCall, ctx: ToolContext): Promise<unknown> {
   const { allowedToolNames, hasExplicitAllowList } = await getAllowedToolNamesForAgent(ctx.agentId);
-  if (!hasExplicitAllowList || !allowedToolNames.includes(call.name)) {
+  // sendMediaToClient включается автоматически, когда у агента есть медиафайлы;
+  // наличие файла и принадлежность агенту проверяются внутри самой функции.
+  const isAutoEnabledMediaTool = call.name === SEND_MEDIA_TOOL;
+  if (!isAutoEnabledMediaTool && (!hasExplicitAllowList || !allowedToolNames.includes(call.name))) {
     await logRejectedToolCall(ctx, call.name, allowedToolNames);
     return {
       rejected: true,
@@ -95,8 +100,7 @@ async function dispatch(call: ToolCall, ctx: ToolContext): Promise<unknown> {
     case 'getCurrentDate':
       return getCurrentDate(ctx);
     case 'sendMediaToClient':
-      if (ctx.isSandbox) return { success: true, sandbox_mode: true, simulated: true };
-      return sendMediaToClient(call.args as { category: string; caption?: string }, ctx);
+      return sendMediaToClient(call.args as { file_id?: string; category?: string; caption?: string }, ctx);
     case 'update_lead_status':
       return updateLeadStatus(call.args as { lead_id: string; status: string }, ctx);
     case 'updateLeadStatus':
@@ -566,80 +570,123 @@ async function getCurrentDate(ctx: ToolContext) {
 
 
 
-async function sendMediaToClient(args: { category: string; caption?: string }, ctx: ToolContext) {
+const MEDIA_DEDUP_WINDOW_MS = 10 * 60 * 1000;
+
+async function resolveMediaFile(
+  supabase: ReturnType<typeof createServiceClient>,
+  agentId: string,
+  args: { file_id?: string; category?: string },
+): Promise<MediaFileInfo | null> {
+  let query = supabase
+    .from('kb_sources')
+    .select('id, title, metadata, file_path, created_at')
+    .eq('agent_id', agentId)
+    .eq('type', 'file');
+
+  if (args.file_id) {
+    query = query.eq('id', String(args.file_id));
+  } else if (args.category) {
+    query = query.filter('metadata->>media_category', 'eq', String(args.category));
+  } else {
+    return null;
+  }
+
+  const { data, error } = await query.order('created_at', { ascending: false }).limit(1);
+  if (error || !Array.isArray(data) || data.length === 0) return null;
+  const info = toMediaFileInfo(data[0]);
+  return info && info.storagePath ? info : null;
+}
+
+async function sendMediaToClient(args: { file_id?: string; category?: string; caption?: string }, ctx: ToolContext) {
   const supabase = createServiceClient();
 
-  // Find the most recent file for this agent with exact media_category match
-  const { data: sources, error: sourcesError } = await supabase
-    .from('kb_sources')
-    .select('id, title, metadata, file_path')
-    .eq('agent_id', ctx.agentId)
-    .eq('status', 'done')
-    .eq('type', 'file')
-    .filter("metadata->>media_category", 'eq', args.category)
-    .order('created_at', { ascending: false })
-    .limit(1);
-
-  if (sourcesError) {
-    return { success: false, reason: `db_error: ${sourcesError.message}` };
+  const file = await resolveMediaFile(supabase, ctx.agentId, args ?? {});
+  if (!file || !file.storagePath) {
+    return {
+      success: false,
+      reason: 'not_found',
+      hint: 'Такого файла нет в медиатеке. Не обещай отправить его — ответь текстом.',
+    };
   }
 
-  const source = Array.isArray(sources) && sources.length > 0 ? sources[0] : null;
-  if (!source) {
-    return { success: false, reason: 'not_found' };
+  const caption = typeof args.caption === 'string' && args.caption.trim() ? args.caption.trim().slice(0, 900) : undefined;
+
+  if (ctx.isSandbox) {
+    return { success: true, sandbox_mode: true, simulated: true, file: { id: file.id, title: file.title, category: file.category } };
   }
 
-  const storagePath = source.metadata?.storage_path ?? source.file_path;
-  if (!storagePath) return { success: false, reason: 'no_storage_path' };
+  // Получатель: берём доверенный ctx.leadId, а не данные от модели.
+  let leadId: string | null = ctx.leadId || null;
+  if (!leadId && ctx.conversationId) {
+    const { data: conv } = await supabase.from('conversations').select('lead_id').eq('id', ctx.conversationId).maybeSingle();
+    leadId = conv?.lead_id ?? null;
+  }
+  if (!leadId) return { success: false, reason: 'no_recipient' };
 
-  // Create signed URL for delivery
-  const { data: urlData, error: urlError } = await supabase.storage.from('kb-files').createSignedUrl(storagePath, 3600);
+  const { data: lead } = await supabase.from('leads').select('external_id, channel_id').eq('id', leadId).maybeSingle();
+  if (!lead?.external_id || !lead?.channel_id) return { success: false, reason: 'no_recipient' };
+
+  const { data: channel } = await supabase.from('channels').select('type').eq('id', lead.channel_id).maybeSingle();
+  const channelType = channel?.type ?? null;
+
+  // Защита от повторной отправки одного и того же файла подряд (цикл модели / двойной вызов).
+  const mediaMarker = `${KB_MEDIA_PREFIX}${file.storagePath}`;
+  if (ctx.conversationId) {
+    const since = new Date(Date.now() - MEDIA_DEDUP_WINDOW_MS).toISOString();
+    const { data: recent } = await supabase
+      .from('messages')
+      .select('id')
+      .eq('conversation_id', ctx.conversationId)
+      .eq('media_url', mediaMarker)
+      .gte('created_at', since)
+      .limit(1);
+    if (Array.isArray(recent) && recent.length > 0) {
+      return { success: true, already_sent: true, file: { id: file.id, title: file.title }, hint: 'Этот файл уже отправлен клиенту несколько минут назад.' };
+    }
+  }
+
+  const { data: urlData, error: urlError } = await supabase.storage.from('kb-files').createSignedUrl(file.storagePath, 600);
   if (urlError || !urlData?.signedUrl) {
     return { success: false, reason: `sign_url_failed: ${urlError?.message ?? 'unknown'}` };
   }
 
-  // Resolve conversation -> lead -> channel -> external id
-  const { data: conv } = await supabase.from('conversations').select('lead_id').eq('id', ctx.conversationId).single();
-  if (!conv?.lead_id) return { success: false, reason: 'no_conversation' };
-
-  const { data: lead } = await supabase.from('leads').select('external_id, channel_id').eq('id', conv.lead_id).single();
-  if (!lead?.external_id || !lead?.channel_id) return { success: false, reason: 'no_recipient' };
-
-  const { data: channel } = await supabase.from('channels').select('type').eq('id', lead.channel_id).single();
-  const channelType = channel?.type ?? null;
-
-  if (ctx.isSandbox) {
-    // In sandbox mode, skip actual sends but return the signed URL
-    return { success: true, sandbox_mode: true, url: urlData.signedUrl };
-  }
-
+  const fileName = file.storagePath.split('/').pop() || 'file';
   try {
     if (channelType === 'whatsapp') {
-      // sendWhatsAppMedia will download the URL into Buffer and send
-      await sendWhatsAppMedia(ctx.agentId, String(lead.external_id), { url: urlData.signedUrl, mimeType: source.metadata?.mime_type, caption: args.caption });
+      await sendWhatsAppMedia(ctx.agentId, String(lead.external_id), { url: urlData.signedUrl, mimeType: file.mimeType, caption, fileName });
     } else if (channelType === 'telegram') {
-      await sendTelegramMedia(lead.channel_id, String(lead.external_id), { url: urlData.signedUrl, mimeType: source.metadata?.mime_type, caption: args.caption });
+      await sendTelegramMedia(lead.channel_id, String(lead.external_id), { url: urlData.signedUrl, mimeType: file.mimeType, caption, fileName });
     } else {
-      return { success: false, reason: 'unsupported_channel' };
+      return {
+        success: false,
+        reason: 'unsupported_channel',
+        hint: 'В этом канале отправка файлов не поддерживается. Опиши товар словами и не обещай прислать фото.',
+      };
     }
   } catch (err: any) {
-    return { success: false, reason: `send_failed: ${err?.message ?? String(err)}` };
+    console.error('[TOOL] sendMediaToClient failed', { agentId: ctx.agentId, channelType, error: err?.message ?? String(err) });
+    return {
+      success: false,
+      reason: `send_failed: ${err?.message ?? String(err)}`,
+      hint: 'Файл не доставлен. Не говори клиенту, что отправил его.',
+    };
   }
 
-  // Log outgoing message
-  try {
-    await supabase.from('messages').insert({
-      conversation_id: ctx.conversationId,
-      sender: 'ai',
-      content: args.caption ?? null,
-      media_url: urlData.signedUrl,
-    });
-  } catch (e) {
-    // non-fatal
-    console.warn('[TOOL] Failed to log outgoing media message', e);
-  }
+  // В историю пишем путь (не signed URL, он протухает) и текст-маркер, чтобы модель видела, что файл уже отправлен.
+  const { error: logError } = await supabase.from('messages').insert({
+    conversation_id: ctx.conversationId,
+    sender: 'ai',
+    content: caption ?? `📎 ${file.title}`,
+    media_url: mediaMarker,
+  });
+  if (logError) console.warn('[TOOL] Failed to log outgoing media message', logError.message);
 
-  return { success: true, url: urlData.signedUrl };
+  return {
+    success: true,
+    delivered: true,
+    file: { id: file.id, title: file.title, category: file.category },
+    hint: 'Файл уже доставлен клиенту. Напиши короткую фразу-подводку без ссылок.',
+  };
 }
 
 async function updateLeadStatus(args: { lead_id: string; status: string }, ctx: ToolContext) {

@@ -3,6 +3,8 @@ import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { processSource, embedText } from '@/lib/server/knowledge/processor';
 import MEDIA_CATEGORIES from '@/lib/media/categories';
+import { validateMediaFile } from '@/lib/media/files';
+import { requireAgentAccess } from '@/lib/server/require-auth';
 
 const ALLOWED_TYPES = ['product', 'qa', 'procedure', 'contacts', 'file', 'other'];
 
@@ -59,9 +61,8 @@ export async function GET(request: NextRequest, { params }: { params: { agentId:
 
 export async function POST(request: NextRequest, { params }: { params: { agentId: string } }) {
   try {
-    const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return NextResponse.json({ error: 'Не авторизован' }, { status: 401 });
+    const access = await requireAgentAccess(params.agentId);
+    if (!access.ok) return access.response;
 
     const admin = createAdminClient();
     const contentType = request.headers.get('content-type') || '';
@@ -73,6 +74,7 @@ export async function POST(request: NextRequest, { params }: { params: { agentId
     let useAI = true;
     let inlineInPrompt = false;
     let mediaCategory: string | null = null;
+    let mediaDescription = '';
 
     if (contentType.includes('multipart/form-data')) {
       const formData = await request.formData();
@@ -84,6 +86,7 @@ export async function POST(request: NextRequest, { params }: { params: { agentId
       useAI = String(formData.get('useAI') || 'true') !== 'false';
       inlineInPrompt = String(formData.get('inlineInPrompt') || 'false') === 'true';
       mediaCategory = String(formData.get('media_category') || '').trim() || null;
+      mediaDescription = String(formData.get('media_description') || '').trim().slice(0, 500);
     } else {
       const body = await request.json();
       file = null;
@@ -101,8 +104,25 @@ export async function POST(request: NextRequest, { params }: { params: { agentId
     }
 
     if (file) {
-      const sanitizedName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-      const sourceTitle = `${file.name} - ${new Date().toISOString().slice(0, 10)}`;
+      const isMedia = Boolean(mediaCategory);
+
+      // Доступ (owner/admin этого агента) уже проверен выше для всего POST.
+      let mediaMime = file.type;
+      let mediaKind: 'image' | 'video' | 'document' | null = null;
+      if (isMedia) {
+        const check = validateMediaFile(file);
+        if (!check.ok) return NextResponse.json({ error: check.error }, { status: 400 });
+        mediaMime = check.mime;
+        mediaKind = check.kind;
+      }
+
+      const sanitizedName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_') || 'file';
+      const mediaTitle = title || file.name.replace(/\.[^.]+$/, '');
+      const sourceTitle = isMedia ? mediaTitle : `${file.name} - ${new Date().toISOString().slice(0, 10)}`;
+      const mediaMeta = isMedia
+        ? { media_category: mediaCategory, media_title: mediaTitle, media_description: mediaDescription, original_name: file.name }
+        : {};
+
       const { data: sourceData, error: insertError } = await admin
         .from('kb_sources')
         .insert([
@@ -115,8 +135,8 @@ export async function POST(request: NextRequest, { params }: { params: { agentId
             metadata: {
               storage_path: `${params.agentId}/${sourceTitle}/${sanitizedName}`,
               use_ai: useAI,
-              mime_type: file.type,
-              ...(mediaCategory ? { media_category: mediaCategory } : {}),
+              mime_type: mediaMime,
+              ...mediaMeta,
             },
           },
         ])
@@ -133,7 +153,7 @@ export async function POST(request: NextRequest, { params }: { params: { agentId
       const { error: uploadError } = await admin.storage
         .from('kb-files')
         .upload(storagePath, buffer, {
-          contentType: file.type,
+          contentType: mediaMime,
         });
 
       if (uploadError) {
@@ -141,28 +161,31 @@ export async function POST(request: NextRequest, { params }: { params: { agentId
         return NextResponse.json({ error: uploadError.message }, { status: 500 });
       }
 
+      // Фото и видео — только для отправки клиенту: текст из них не извлекается, источник сразу «готов».
+      // (Раньше статус оставался processing навсегда, и sendMediaToClient файл не находил.)
+      const skipProcessing = isMedia && mediaKind !== 'document';
+
       await admin
         .from('kb_sources')
         .update({
           file_path: storagePath,
+          ...(skipProcessing ? { status: 'done' } : {}),
           metadata: {
             storage_path: storagePath,
             use_ai: useAI,
-            mime_type: file.type,
-            ...(mediaCategory ? { media_category: mediaCategory } : {}),
+            mime_type: mediaMime,
+            ...mediaMeta,
+            ...(skipProcessing ? { processed_at: new Date().toISOString(), chunks_count: 0 } : {}),
           },
         })
         .eq('id', sourceId);
 
-      // If a media_category was provided, skip Kb text extraction/processing
-      // (images/videos are stored as media and should not run the text extractor).
-      if (!mediaCategory) {
+      // PDF с категорией: и отправляем клиенту, и читаем текст в базу знаний (processSource сохраняет metadata).
+      if (!skipProcessing) {
         setImmediate(() => processSource(sourceId, params.agentId, useAI).catch((err) => console.error('[processSource] failed:', err)));
-      } else {
-        console.log(`[KB] Skipping processing for media source ${sourceId} (media_category=${mediaCategory})`);
       }
 
-      return NextResponse.json({ sourceId, status: 'processing' });
+      return NextResponse.json({ sourceId, status: skipProcessing ? 'done' : 'processing' });
     }
 
     if (url) {
