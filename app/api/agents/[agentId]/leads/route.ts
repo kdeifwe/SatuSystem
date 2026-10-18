@@ -67,9 +67,15 @@ export async function GET(req: NextRequest, { params }: { params: { agentId: str
       phone: resolveLeadPhone(lead),
       conversation_id: conv.id,
       last_message: msgs[0]?.content?.slice(0, 60) ?? null,
+      last_message_at: msgs[0]?.created_at ?? lead.updated_at ?? lead.created_at,
     });
   }
   console.timeEnd('build:lead-list');
 
-  return NextResponse.json({ leads: Array.from(leadsMap.values()) });
+  // Свежие переписки сверху: сортируем по времени последнего сообщения, а не по дате начала диалога.
+  const leads = Array.from(leadsMap.values()).sort(
+    (a, b) => new Date(b.last_message_at).getTime() - new Date(a.last_message_at).getTime(),
+  );
+
+  return NextResponse.json({ leads });
 }
