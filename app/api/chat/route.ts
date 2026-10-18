@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient, getServerUser } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { getOrgMembership } from '@/lib/server/permissions';
 import { runAgentTurn } from '@/lib/server/ai/orchestrator';
 import { splitAgentMessage, calculateTypingDelay } from '@/lib/server/ai/message-splitter';
 
@@ -15,16 +16,22 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    const admin = createAdminClient();
+    const { data: agent } = await admin
+      .from('agents')
+      .select('system_prompt_compiled, name, org_id')
+      .eq('id', agentId)
+      .maybeSingle();
+
+    // Без этой проверки любой залогиненный пользователь мог читать базу знаний чужого агента.
+    const membership = agent ? await getOrgMembership(admin, user.id, agent.org_id) : null;
+    if (!agent || !membership) {
+      return NextResponse.json({ error: 'Агент не найден' }, { status: 404 });
+    }
+
     let finalSystemPrompt = systemPrompt;
 
     if (!finalSystemPrompt) {
-      const admin = createAdminClient();
-      const { data: agent } = await admin
-        .from('agents')
-        .select('system_prompt_compiled, name')
-        .eq('id', agentId)
-        .single();
-
       finalSystemPrompt =
         agent?.system_prompt_compiled ??
         `Ты ${agent?.name ?? 'ИИ-агент'}. Помогай пользователям.`;

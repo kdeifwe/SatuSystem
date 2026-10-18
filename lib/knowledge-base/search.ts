@@ -2,7 +2,8 @@ import { createClient } from '@supabase/supabase-js';
 import { generateQueryEmbedding } from './embeddings';
 
 const searchCache = new Map<string, { results: KBSearchResult[]; expiresAt: number }>();
-const SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
+// 60 с вместо 5 мин: после правки базы знаний агент не должен долго отвечать по старым данным.
+const SEARCH_CACHE_TTL_MS = 60 * 1000;
 
 type BilingualTermRule = {
   pattern: string;
@@ -56,8 +57,33 @@ async function checkAndLogEmbeddingProviders(agentId: string): Promise<void> {
   }
 }
 
-function getCacheKey(agentId: string, query: string): string {
-  return `${agentId}:${query.toLowerCase().trim()}`;
+function getCacheKey(agentId: string, query: string, grade: number | null = null): string {
+  return `${agentId}:${grade ?? 'any'}:${query.toLowerCase().trim()}`;
+}
+
+const SEARCH_CACHE_MAX_ENTRIES = 500;
+
+function setSearchCache(key: string, results: KBSearchResult[]) {
+  const now = Date.now();
+  if (searchCache.size >= SEARCH_CACHE_MAX_ENTRIES) {
+    for (const [k, v] of searchCache) {
+      if (v.expiresAt <= now) searchCache.delete(k);
+    }
+    // если всё ещё полно — выкидываем самые старые записи
+    while (searchCache.size >= SEARCH_CACHE_MAX_ENTRIES) {
+      const oldest = searchCache.keys().next().value;
+      if (oldest === undefined) break;
+      searchCache.delete(oldest);
+    }
+  }
+  searchCache.set(key, { results, expiresAt: now + SEARCH_CACHE_TTL_MS });
+}
+
+/** Сбросить кэш поиска агента после изменения базы знаний. */
+export function invalidateKnowledgeSearchCache(agentId: string) {
+  for (const key of searchCache.keys()) {
+    if (key.startsWith(`${agentId}:`)) searchCache.delete(key);
+  }
 }
 
 function getAdminClient() {
@@ -331,7 +357,7 @@ async function searchKnowledgeBaseSingleQuery(
   originalQuery?: string | null,
 ): Promise<KBSearchResult[]> {
   const supabase = getAdminClient();
-  const queryEmbedding = queryEmbeddingOverride ?? await generateQueryEmbedding(originalQuery ?? queryVariant);
+  const queryEmbedding = queryEmbeddingOverride ?? await generateQueryEmbedding(queryVariant);
 
   // Fire-and-forget check of embedding providers for this agent (cached by TTL)
   // Do not await — this must not block the hot search path.
@@ -342,7 +368,7 @@ async function searchKnowledgeBaseSingleQuery(
     const res = await supabase.rpc('search_knowledge_base', {
       p_agent_id: agentId,
       query_embedding: queryEmbedding,
-      p_query_text: originalQuery ?? queryVariant,
+      p_query_text: queryVariant,
       match_count: topK,
       similarity_threshold: threshold,
     });
@@ -406,7 +432,8 @@ export async function searchKnowledgeBaseBilingual(
   leadGrade: number | string | null = null,
   queryEmbeddingOverride: unknown | null = null,
 ): Promise<KBSearchResult[]> {
-  const cacheKey = getCacheKey(agentId, query);
+  const normalizedGradeForCache = parseLeadGrade(leadGrade);
+  const cacheKey = getCacheKey(agentId, query, normalizedGradeForCache);
   const cached = searchCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
     console.log('[KB] CACHE HIT', { query });
@@ -436,16 +463,21 @@ export async function searchKnowledgeBaseBilingual(
 
   const { query_ru, query_kk } = fastBilingualMap(query, termMap);
 
-  const [ruResults, kkResults] = await Promise.all([
-    searchKnowledgeBaseSingleQuery(agentId, query_ru, topK, threshold, queryEmbeddingOverride, query),
-    searchKnowledgeBaseSingleQuery(agentId, query_kk, topK, threshold, queryEmbeddingOverride, query),
-  ]);
+  // Эмбеддинг считаем один раз на запрос; идентичные варианты не ищем дважды.
+  const sharedEmbedding = queryEmbeddingOverride ?? await generateQueryEmbedding(query);
+  const variants = Array.from(new Set([query_ru, query_kk].map((v) => v.trim()).filter(Boolean)));
+  if (variants.length === 0) variants.push(query);
+  const variantResults = await Promise.all(
+    variants.map((variant) => searchKnowledgeBaseSingleQuery(agentId, variant, topK, threshold, sharedEmbedding, query)),
+  );
+  const ruResults = variantResults[0];
+  const kkResults = variantResults[1] ?? [];
 
   // Merge RU/KK results and ensure a global sort by similarity so the combined
   // list is globally ordered (avoids two internally-sorted lists being concatenated).
   let mergedResults = mergeSearchResults(ruResults, kkResults);
   mergedResults.sort((a, b) => b.similarity - a.similarity);
-  const normalizedGrade = parseLeadGrade(leadGrade);
+  const normalizedGrade = normalizedGradeForCache;
 
   let finalResults = normalizedGrade !== null
     ? mergedResults.filter((chunk) => isChunkAllowedForLead(chunk, normalizedGrade))
@@ -460,7 +492,7 @@ export async function searchKnowledgeBaseBilingual(
   // Return the ranked list (sorted by rankingScore inside `rankKnowledgeBaseChunks`).
   // Do NOT override this with a pure similarity-only sort here — that would erase
   // the effects of keywordBonus and priorityBoost and cause a regression.
-  searchCache.set(cacheKey, { results: ranked, expiresAt: Date.now() + SEARCH_CACHE_TTL_MS });
+  setSearchCache(cacheKey, ranked);
 
   return ranked;
 }
