@@ -106,7 +106,7 @@ async function generateTouchText(params: {
   now: Date;
 }): Promise<{ text: string | null; skip: boolean }> {
   const { admin, agent, lead, conversationId, attemptIndex, cfg, timezone, now } = params;
-  const total = cfg.schedule_hours.length;
+  const total = cfg.schedule_minutes.length;
   const firstName = usableFirstName(lead.name);
 
   if (cfg.message_mode === 'fixed_templates') {
@@ -302,7 +302,7 @@ async function processAgent(ctx: {
     return;
   }
 
-  const minDelay = Math.min(...cfg.schedule_hours);
+  const minDelayMinutes = Math.min(...cfg.schedule_minutes);
   const sinceMs = Math.max(
     now.getTime() - cfg.max_silence_hours * 3600_000,
     cfg.activated_at ? new Date(cfg.activated_at).getTime() : 0,
@@ -311,7 +311,7 @@ async function processAgent(ctx: {
   const { data: candidates, error: rpcError } = await admin.rpc('find_repeat_touch_candidates', {
     p_agent_id: agentId,
     p_since: new Date(sinceMs).toISOString(),
-    p_min_silence_hours: minDelay,
+    p_min_silence_hours: minDelayMinutes / 60,
   });
   if (rpcError) throw new Error(`find_repeat_touch_candidates: ${rpcError.message}`);
 
@@ -328,11 +328,11 @@ async function processAgent(ctx: {
     }
 
     const attempts = cand.touches_since_user;
-    const maxTouches = cfg.schedule_hours.length;
+    const maxTouches = cfg.schedule_minutes.length;
     const lastAt = new Date(cand.last_message_at);
 
     if (attempts < maxTouches) {
-      const delayMs = cfg.schedule_hours[attempts] * 3600_000;
+      const delayMs = cfg.schedule_minutes[attempts] * 60_000;
       if (now.getTime() - lastAt.getTime() < delayMs) {
         skip('too_early');
         continue;
