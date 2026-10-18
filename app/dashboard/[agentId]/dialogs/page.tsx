@@ -16,6 +16,7 @@ interface Lead {
   created_at: string;
   updated_at: string;
   last_message?: string;
+  last_message_at?: string | null;
   channel_type?: string;
   ai_enabled?: boolean;
   conversation_id?: string;
@@ -286,7 +287,7 @@ export default function DialogsPage({ params }: { params: { agentId: string } })
               <div className="mb-1 flex items-center justify-between">
                 <span className="truncate text-sm font-medium text-[color:var(--color-chalk)]">{leadTitle(lead)}</span>
                 <span className="ml-2 flex-shrink-0 text-[10px] text-[color:var(--color-smoke)]">
-                  {formatDistanceToNow(new Date(lead.updated_at ?? lead.created_at), { locale: ru, addSuffix: true })}
+                  {formatDistanceToNow(new Date(lead.last_message_at ?? lead.updated_at ?? lead.created_at), { locale: ru, addSuffix: true })}
                 </span>
               </div>
               <div className="flex items-center gap-2">
