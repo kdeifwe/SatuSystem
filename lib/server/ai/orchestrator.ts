@@ -1323,8 +1323,6 @@ async function callGemini(
       ...normalizeGeminiContentsToLlmMessages(contents),
     ];
 
-    console.error('[FC-DEBUG] outgoing messages:', JSON.stringify(messages, null, 2));
-
     let llmResponse = await llmClient.generate({
       model: activeModel,
       messages,
@@ -1473,7 +1471,11 @@ ${serializeMessagesForSummary(messagesToCompress)}\n`;
     { temperature: 0.2, topP: 0.25, maxOutputTokens: 1024 },
   );
 
-  const summaryText = extractTextFromParts(res.payload.parts);
+  const summaryText = extractTextFromParts(res.payload.parts).trim();
+  if (!summaryText) {
+    // Пустое резюме нельзя сохранять: сообщения пометились бы «сжатыми» и пропали из контекста.
+    throw new Error('summary is empty');
+  }
   const latencyMs = Date.now() - start;
   const tokensInput = res.payload.usageMetadata?.promptTokenCount ?? 0;
   const tokensOutput = res.payload.usageMetadata?.candidatesTokenCount ?? 0;
@@ -1595,6 +1597,17 @@ async function buildConversationContext(
     contextTokenCount: totalTokens,
     contextTokenCountFallback: tokenEstimateFallback,
   };
+}
+
+/**
+ * Короткие реплики («а сколько стоит?», «а доставка?») без контекста находят мусор.
+ * Добавляем предыдущую реплику клиента, если текущая короткая.
+ */
+export function buildRetrievalQuery(userMessage: string, history: ChatMessage[] = []): string {
+  const current = userMessage.trim();
+  if (current.length >= 40) return current;
+  const lastUser = [...history].reverse().find((m) => m.role === 'user' && m.text.trim() && m.text.trim() !== current);
+  return lastUser ? `${lastUser.text.trim().slice(0, 200)} ${current}` : current;
 }
 
 export async function runAgentTurnWithLead(
@@ -1751,12 +1764,24 @@ export async function runAgentTurn(
   let resolvedConversationId: string | null = conversationId ?? null;
   let resolvedUserMessageId: string | null = userMessageId ?? null;
 
+  let retrievalHistory: ChatMessage[] = history;
+  if (retrievalHistory.length === 0 && resolvedConversationId) {
+    try {
+      let q = admin.from('messages').select('content').eq('conversation_id', resolvedConversationId).eq('sender', 'user').order('created_at', { ascending: false }).limit(2);
+      if (resolvedUserMessageId) q = q.neq('id', resolvedUserMessageId);
+      const { data: prevUser } = await q;
+      retrievalHistory = (prevUser ?? []).reverse().map((m: { content: string | null }) => ({ role: 'user' as const, text: m.content ?? '' }));
+    } catch {
+      // не критично: ищем по одному текущему сообщению
+    }
+  }
+
   let contextData: any = null;
   let retrieval: any = null;
   try {
     [contextData, retrieval] = await Promise.all([
       ensureLeadContext(admin, agentId, userMessage, resolvedLeadId ?? undefined, resolvedUserMessageId ?? undefined),
-      searchKnowledgeBaseWithLinks(agentId, userMessage, 5, 0.35, undefined),
+      searchKnowledgeBaseWithLinks(agentId, buildRetrievalQuery(userMessage, retrievalHistory), 5, 0.35, undefined),
     ]);
   } catch (e) {
     console.error('[SANDBOX_LEAD_DEBUG] Promise.all threw', { error: e instanceof Error ? e.message : String(e) });
@@ -1895,6 +1920,13 @@ export async function runAgentTurn(
     mediaFiles,
   );
   const extraContextMessages: Array<{ role: string; parts: Array<{ text: string }> }> = [];
+
+  if (conversationContext.conversationSummary) {
+    extraContextMessages.push({
+      role: 'user',
+      parts: [{ text: `Резюме более ранней части этого диалога (ранние сообщения опущены):\n${conversationContext.conversationSummary}` }],
+    });
+  }
 
   if (leadAttributes && Object.keys(leadAttributes).length > 0) {
     extraContextMessages.push({
@@ -2093,18 +2125,17 @@ export async function runAgentTurn(
   let tokensInput = 0;
   let tokensOutput = 0;
 
-  try {
-    const extraUserContextMessages = [...extraContextMessages];
-    const knownName = leadAttributes && typeof leadAttributes === 'object' ? (leadAttributes as any).whatsapp_push_name : null;
-    if (typeof knownName === 'string' && isValidLeadName(knownName)) {
-      extraUserContextMessages.push({ role: 'user', parts: [{ text: `Известное имя клиента: ${knownName}` }] });
-    }
+  const extraUserContextMessages = [...extraContextMessages];
+  const knownName = leadAttributes && typeof leadAttributes === 'object' ? (leadAttributes as any).whatsapp_push_name : null;
+  if (typeof knownName === 'string' && isValidLeadName(knownName)) {
+    extraUserContextMessages.push({ role: 'user', parts: [{ text: `Известное имя клиента: ${knownName}` }] });
+  }
+  // Единый контекст для первого вызова, tool follow-up и retry: история + KB + лид + sticky facts.
+  const contextualHistory = [...conversationContents, ...extraUserContextMessages];
+  const baseContents = [...contextualHistory, { role: 'user', parts: [{ text: userMessage }] }];
 
-    response = await callGemini(agentChatModel, fullSystemPrompt, [
-      ...conversationContents,
-      ...extraUserContextMessages,
-      { role: 'user', parts: [{ text: userMessage }] },
-    ], toolPayload);
+  try {
+    response = await callGemini(agentChatModel, fullSystemPrompt, baseContents, toolPayload);
     tokensInput += response.payload.usageMetadata?.promptTokenCount ?? 0;
     tokensOutput += response.payload.usageMetadata?.candidatesTokenCount ?? 0;
   } catch (err) {
@@ -2303,8 +2334,7 @@ export async function runAgentTurn(
     );
 
     const followUpHistory = [
-      ...conversationContents,
-      { role: 'user', parts: [{ text: userMessage }] },
+      ...baseContents,
       ...accumulatedToolHistory,
     ];
     console.warn('[GEMINI_ROLE_TRACE] before tool follow-up', {
@@ -2377,7 +2407,7 @@ export async function runAgentTurn(
         agentId,
         conversationId,
         systemPrompt: fullSystemPrompt,
-        conversationContents,
+        conversationContents: contextualHistory,
         userMessage,
         modelName: agentChatModel,
         callGeminiFn: async (modelName, retrySystemPrompt, retryContents, retryTools) => callGemini(modelName || agentChatModel, retrySystemPrompt, retryContents, retryTools),

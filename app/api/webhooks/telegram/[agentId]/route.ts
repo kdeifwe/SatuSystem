@@ -18,6 +18,10 @@ function getAdmin() {
   );
 }
 
+// Обработка идёт внутри запроса: на serverless фоновая работа после ответа не гарантируется.
+// Повторную доставку от Telegram при долгом ответе гасит идемпотентность по external_message_id.
+export const maxDuration = 60;
+
 export async function POST(
   req: NextRequest,
   { params }: { params: { agentId: string } }
@@ -73,10 +77,11 @@ export async function POST(
     return NextResponse.json({ ok: true });
   }
 
-  // Запускаем обработку асинхронно
-  handleUpdate(body, params.agentId).catch(err =>
-    console.error('[TG webhook] Unhandled error:', err)
-  );
+  try {
+    await handleUpdate(body, params.agentId);
+  } catch (err) {
+    console.error('[TG webhook] Unhandled error:', err);
+  }
 
   return NextResponse.json({ ok: true });
 }
@@ -387,12 +392,12 @@ async function handleUpdate(update: any, agentId: string) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           chat_id: chatId, 
+          // Без parse_mode: текст LLM с «<» или «&» иначе даёт 400 и клиент остаётся без ответа.
           text: part.text,
-          parse_mode: 'HTML',
         }),
       });
 
-      const sendData = await sendRes.json();
+      const sendData = await sendRes.json().catch(() => ({ ok: false }));
         console.log('[TG webhook] Message sent:', sendData.ok, sendData.error_code);
         if (!sendRes.ok || !sendData?.ok) {
           try {
@@ -425,7 +430,8 @@ async function handleUpdate(update: any, agentId: string) {
           }
         }
 
-      // Сохраняем ответ AI
+      // Сохраняем ответ AI только если он реально доставлен
+      if (!sendRes.ok || !sendData?.ok) continue;
       await admin.from('messages').insert({
         conversation_id: conversation.id,
         sender: 'ai',
