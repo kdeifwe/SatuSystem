@@ -28,6 +28,7 @@ import {
   type TelegramExtensionSettings,
   type TelegramMember,
 } from './actions';
+import RepeatTouchesPanel from './RepeatTouchesPanel';
 import { getDefaultConfig } from '../../../../lib/telegram-extension-config';
 
 type ExtensionKey =
@@ -1103,6 +1104,8 @@ export default function ExtensionsPage({ params }: { params: { agentId: string }
                   </button>
                 </div>
               </div>
+            ) : selectedExtension.key === 'repeat_touches' ? (
+              <RepeatTouchesPanel agentId={params.agentId} />
             ) : (
               <div className="mt-6 space-y-4">
                 <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-4">
