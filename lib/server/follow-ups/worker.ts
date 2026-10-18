@@ -1,4 +1,4 @@
-import { createAdminClient } from '@/lib/supabase/admin';
+import { createClient } from '@supabase/supabase-js';
 import { llmClient, type LLMMessage } from '@/lib/server/ai/llm-client';
 import { GEMINI_CHAT_MODEL } from '@/lib/server/ai/gemini-client';
 import { isWithinWorkHours } from '@/lib/extensions/work-hours';
@@ -8,7 +8,19 @@ import { sendInstagramText } from '@/lib/channels/instagram-client';
 import { enqueueNotification } from '@/lib/notifications';
 import { normalizeRepeatTouchesConfig, type RepeatTouchesConfig } from './config';
 
-type Admin = ReturnType<typeof createAdminClient>;
+// Клиент без кэша: Next.js 14 кэширует fetch (Data Cache), из-за чего воркер мог читать устаревшие данные
+// и вообще не обращаться к базе. Здесь каждый запрос принудительно идёт в сеть.
+function createWorkerClient() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL ?? '';
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? '';
+  if (!url || !key) throw new Error('SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY are not set');
+  return createClient(url, key, {
+    auth: { persistSession: false, autoRefreshToken: false },
+    global: { fetch: (input, init) => fetch(input, { ...init, cache: 'no-store' }) },
+  });
+}
+
+type Admin = ReturnType<typeof createWorkerClient>;
 
 const MAX_SENDS_PER_AGENT_PER_RUN = 5;
 const LLM_FAILURE_COOLDOWN_MS = 15 * 60 * 1000;
@@ -33,6 +45,7 @@ export interface RepeatTouchesRunResult {
   planned: Array<{ leadId: string; touch: number }>;
   skipped: Record<string, number>;
   errors: string[];
+  diag: Array<Record<string, unknown>>;
 }
 
 function sleep(ms: number) {
@@ -239,9 +252,9 @@ async function notifyExhausted(admin: Admin, agent: any, lead: any, cand: Candid
 export async function runRepeatTouches(options: { now?: Date; dryRun?: boolean } = {}): Promise<RepeatTouchesRunResult> {
   const now = options.now ?? new Date();
   const dryRun = Boolean(options.dryRun);
-  const admin = createAdminClient();
+  const admin = createWorkerClient();
 
-  const result: RepeatTouchesRunResult = { agents: 0, candidates: 0, sent: 0, planned: [], skipped: {}, errors: [] };
+  const result: RepeatTouchesRunResult = { agents: 0, candidates: 0, sent: 0, planned: [], skipped: {}, errors: [], diag: [] };
   const skip = (reason: string) => {
     result.skipped[reason] = (result.skipped[reason] ?? 0) + 1;
   };
@@ -290,6 +303,7 @@ async function processAgent(ctx: {
     .eq('id', agentId)
     .maybeSingle();
   if (!agent || agent.is_active === false || agent.deleted_at) {
+    result.diag.push({ agentId, reason: 'agent_inactive', found: Boolean(agent), is_active: agent?.is_active ?? null });
     skip('agent_inactive');
     return;
   }
@@ -297,7 +311,9 @@ async function processAgent(ctx: {
   const { data: org } = await admin.from('organizations').select('timezone').eq('id', agent.org_id).maybeSingle();
   const timezone = org?.timezone || 'Asia/Almaty';
 
-  if (!isWithinWorkHours(now, timezone, { startHour: cfg.window_start_hour, endHour: cfg.window_end_hour })) {
+  const inWindow = isWithinWorkHours(now, timezone, { startHour: cfg.window_start_hour, endHour: cfg.window_end_hour });
+  if (!inWindow) {
+    result.diag.push({ agentId, reason: 'outside_window', timezone, now: now.toISOString(), window: [cfg.window_start_hour, cfg.window_end_hour] });
     skip('outside_window');
     return;
   }
@@ -317,6 +333,14 @@ async function processAgent(ctx: {
 
   const list = (candidates ?? []) as Candidate[];
   result.candidates += list.length;
+  result.diag.push({
+    agentId,
+    timezone,
+    since: new Date(sinceMs).toISOString(),
+    minDelayMinutes,
+    schedule_minutes: cfg.schedule_minutes,
+    rpcRows: list.length,
+  });
 
   const stopStatuses = new Set(cfg.stop_statuses);
   let sentThisRun = 0;

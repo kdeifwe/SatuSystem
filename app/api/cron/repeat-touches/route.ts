@@ -4,6 +4,8 @@ import { runRepeatTouches } from '@/lib/server/follow-ups/worker';
 const AUTH_HEADER = 'authorization';
 
 export const dynamic = 'force-dynamic';
+export const fetchCache = 'force-no-store';
+export const revalidate = 0;
 
 // Повторные касания (касание №2, №3 для замолчавших лидов).
 // ?dry=1 — ничего не отправлять, только показать, кому и какое касание было бы отправлено.
