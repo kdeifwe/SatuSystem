@@ -6,12 +6,13 @@ export async function withLeadProcessingLock<T>(leadKey: string, callback: () =>
     .catch(() => undefined)
     .then(() => callback());
 
-  leadProcessingQueues.set(leadKey, next.catch(() => undefined));
+  const tail = next.catch(() => undefined);
+  leadProcessingQueues.set(leadKey, tail);
 
   try {
     return await next;
   } finally {
-    if (leadProcessingQueues.get(leadKey) === next) {
+    if (leadProcessingQueues.get(leadKey) === tail) {
       leadProcessingQueues.delete(leadKey);
     }
   }
