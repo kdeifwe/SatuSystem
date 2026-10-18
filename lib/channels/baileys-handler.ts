@@ -132,6 +132,24 @@ async function ingestIncomingMessage(
     const rawPushName = message.pushName ?? null;
     const userName = typeof rawPushName === 'string' && rawPushName.trim().length > 0 ? rawPushName.trim() : remoteJid;
 
+    const altJid = String((message.key as any)?.remoteJidAlt ?? '');
+    const phoneJid = remoteJid.endsWith('@s.whatsapp.net') ? remoteJid : altJid.endsWith('@s.whatsapp.net') ? altJid : '';
+    let whatsappPhone = phoneJid ? phoneJid.split('@')[0].split(':')[0] : null;
+
+    const hasLidMappingHook = Boolean((sock as any)?.signalRepository?.lidMapping?.getPNForLID);
+
+    if (!whatsappPhone && remoteJid.endsWith('@lid') && hasLidMappingHook) {
+      try {
+        const pn = await (sock as any)?.signalRepository?.lidMapping?.getPNForLID?.(remoteJid);
+        const d = String(pn ?? '').split('@')[0].split(':')[0].replace(/\D/g, '');
+        if (d.length >= 7 && d.length <= 15) {
+          whatsappPhone = d;
+        }
+      } catch {
+        // Baileys v7+ fallback is optional and not required for the main flow.
+      }
+    }
+
     let { data: lead } = await admin
       .from('leads')
       .select('id, ai_enabled, attributes, name')
@@ -140,7 +158,10 @@ async function ingestIncomingMessage(
       .maybeSingle();
 
     if (!lead) {
-      const attrs = rawPushName ? { whatsapp_push_name: rawPushName } : null;
+      const attrs = {
+        ...(rawPushName ? { whatsapp_push_name: rawPushName } : {}),
+        ...(whatsappPhone ? { whatsapp_phone: whatsappPhone } : {}),
+      };
       const insertPayload: any = {
         org_id: channel.org_id,
         channel_id: channel.id,
@@ -149,7 +170,7 @@ async function ingestIncomingMessage(
         ai_enabled: true,
       };
 
-      if (attrs) insertPayload.attributes = attrs;
+      if (Object.keys(attrs).length > 0) insertPayload.attributes = attrs;
       if (rawPushName && isValidLeadName(rawPushName)) insertPayload.name = rawPushName;
       // if name invalid, leave DB default (e.g. "Новый лид")
 
@@ -166,11 +187,15 @@ async function ingestIncomingMessage(
       lead = newLead;
     } else {
       // Existing lead: persist raw pushName in attributes for audit/history
-      if (rawPushName) {
+      if (rawPushName || whatsappPhone) {
         const existingAttrs = (lead.attributes as Record<string, unknown> | null) ?? {};
-        const mergedAttrs = { ...existingAttrs, whatsapp_push_name: rawPushName };
+        const mergedAttrs = {
+          ...existingAttrs,
+          ...(rawPushName ? { whatsapp_push_name: rawPushName } : {}),
+          ...(whatsappPhone ? { whatsapp_phone: whatsappPhone } : {}),
+        };
         const updatePayload: any = { attributes: mergedAttrs };
-        if (isValidLeadName(rawPushName)) {
+        if (rawPushName && isValidLeadName(rawPushName)) {
           updatePayload.name = rawPushName;
         }
         try {
