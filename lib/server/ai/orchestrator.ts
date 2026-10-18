@@ -233,7 +233,10 @@ async function getCachedAgent(
 
   const { data, error } = await admin.from('agents').select(select).eq('id', agentId).single();
   const resolvedData = error ? null : (data as unknown as Record<string, unknown> | null);
-  agentCache.set(key, { expiresAt: now + AGENT_CACHE_TTL_MS, data: resolvedData });
+  // Ошибку БД не кэшируем: иначе «Агент не найден» держится весь TTL.
+  if (!error && resolvedData) {
+    agentCache.set(key, { expiresAt: now + AGENT_CACHE_TTL_MS, data: resolvedData });
+  }
   return resolvedData;
 }
 
