@@ -26,6 +26,7 @@ interface Message {
   pending?: boolean;
   retrievalDebug?: RetrievalDebug;
   media?: Array<{ url: string; kind: string; title: string }>;
+  audioUrl?: string;
 }
 
 export default function SandboxPage({ params }: { params: { agentId: string } }) {
@@ -38,6 +39,11 @@ export default function SandboxPage({ params }: { params: { agentId: string } })
   const [isStartingSession, setIsStartingSession] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
 
   useEffect(() => {
     fetch(`/api/agents/${params.agentId}/info`)
@@ -92,15 +98,15 @@ export default function SandboxPage({ params }: { params: { agentId: string } })
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  async function sendMessage() {
-    if (!input.trim() || isLoading) return;
+  async function sendMessage(override?: { text: string; audioUrl?: string }) {
+    const userMessage = (override ? override.text : input).trim();
+    if (!userMessage || isLoading) return;
 
-    const userMessage = input.trim();
-    setInput('');
+    if (!override) setInput('');
 
     const nextMessages: Message[] = [
       ...messages,
-      { role: 'user', content: userMessage, timestamp: new Date() },
+      { role: 'user', content: userMessage, timestamp: new Date(), audioUrl: override?.audioUrl },
     ];
     const assistantIndex = nextMessages.length;
     setMessages(nextMessages);
@@ -197,6 +203,66 @@ export default function SandboxPage({ params }: { params: { agentId: string } })
     } finally {
       setIsLoading(false);
     }
+  }
+
+  async function sendVoice(blob: Blob) {
+    if (blob.size < 2000) {
+      setVoiceError('Слишком короткая запись, попробуйте ещё раз.');
+      return;
+    }
+
+    setIsTranscribing(true);
+    try {
+      const form = new FormData();
+      const extension = blob.type.includes('mp4') ? 'm4a' : 'webm';
+      form.append('file', new File([blob], `voice.${extension}`, { type: blob.type }));
+
+      const response = await fetch(`/api/agents/${params.agentId}/sandbox/transcribe`, { method: 'POST', body: form });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.text) {
+        throw new Error(data.error || 'Не удалось расшифровать голосовое');
+      }
+
+      setIsTranscribing(false);
+      await sendMessage({ text: data.text, audioUrl: URL.createObjectURL(blob) });
+    } catch (err: any) {
+      setVoiceError(err?.message || 'Не удалось расшифровать голосовое');
+    } finally {
+      setIsTranscribing(false);
+    }
+  }
+
+  async function startRecording() {
+    if (isRecording || isTranscribing || isLoading) return;
+    setVoiceError(null);
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'].find((type) => MediaRecorder.isTypeSupported(type));
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+
+      chunksRef.current = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) chunksRef.current.push(event.data);
+      };
+      recorder.onstop = () => {
+        stream.getTracks().forEach((track) => track.stop());
+        const blob = new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' });
+        chunksRef.current = [];
+        void sendVoice(blob);
+      };
+
+      recorder.start();
+      recorderRef.current = recorder;
+      setIsRecording(true);
+    } catch {
+      setVoiceError('Нет доступа к микрофону. Разрешите микрофон для этого сайта в браузере.');
+    }
+  }
+
+  function stopRecording() {
+    recorderRef.current?.stop();
+    setIsRecording(false);
   }
 
   async function startNewSandboxSession() {
@@ -355,6 +421,7 @@ export default function SandboxPage({ params }: { params: { agentId: string } })
                         </a>
                       );
                     })}
+                    {message.audioUrl ? <audio src={message.audioUrl} controls className="mb-2 w-full" /> : null}
                     {message.content}
                     {message.role === 'assistant' && message.retrievalDebug ? (
                       <div className="mt-3 space-y-2 border-t border-[color:var(--color-graphite)] pt-3 text-xs">
@@ -440,17 +507,30 @@ export default function SandboxPage({ params }: { params: { agentId: string } })
             />
             <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2 text-[color:var(--color-smoke)]">
               <Paperclip size={16} />
-              <Mic size={16} />
+              <button
+                type="button"
+                onClick={isRecording ? stopRecording : startRecording}
+                disabled={isLoading || isTranscribing}
+                title={isRecording ? 'Остановить и отправить' : 'Записать голосовое'}
+                className={`rounded-full p-1.5 transition disabled:opacity-40 ${isRecording ? 'animate-pulse bg-red-500 text-white' : 'hover:text-[color:var(--color-chalk)]'}`}
+              >
+                <Mic size={16} />
+              </button>
             </div>
           </div>
           <button
-            onClick={sendMessage}
+            onClick={() => sendMessage()}
             disabled={!input.trim() || isLoading}
             className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-[color:var(--color-chalk)] text-[color:var(--color-carbon)] transition-all hover:opacity-95 disabled:opacity-40"
           >
             <Send size={16} strokeWidth={1.5} />
           </button>
         </div>
+        {isRecording || isTranscribing || voiceError ? (
+          <p className={`mt-2 text-center text-xs ${voiceError ? 'text-red-400' : 'text-[color:var(--color-smoke)]'}`}>
+            {isRecording ? '● Идёт запись… нажмите на микрофон, чтобы отправить' : isTranscribing ? 'Расшифровываю голосовое…' : voiceError}
+          </p>
+        ) : null}
         <p className="mt-2 text-center text-[10px] text-[color:var(--color-smoke)]">
           Нажмите Enter для отправки · Shift+Enter для новой строки
         </p>
