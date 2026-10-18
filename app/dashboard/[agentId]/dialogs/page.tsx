@@ -12,12 +12,37 @@ interface Lead {
   name: string;
   status: string;
   external_id: string;
+  phone?: string | null;
   created_at: string;
   updated_at: string;
   last_message?: string;
   channel_type?: string;
   ai_enabled?: boolean;
   conversation_id?: string;
+}
+
+function formatPhone(raw: string) {
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length === 11 && (digits.startsWith('7') || digits.startsWith('8'))) {
+    return `+7 ${digits.slice(1, 4)} ${digits.slice(4, 7)} ${digits.slice(7, 9)} ${digits.slice(9, 11)}`;
+  }
+  return `+${digits}`;
+}
+
+function leadTitle(lead?: Lead | null) {
+  if (!lead) return '';
+  return lead.phone ? formatPhone(lead.phone) : lead.name;
+}
+
+function leadInitial(lead?: Lead | null) {
+  const c = lead?.name?.trim()?.[0] ?? '';
+  return /\p{L}/u.test(c) ? c.toUpperCase() : '#';
+}
+
+function leadSubtitle(lead?: Lead | null) {
+  if (!lead) return '';
+  if (lead.phone) return lead.name;
+  return lead.external_id?.endsWith('@lid') ? 'номер скрыт' : lead.external_id;
 }
 
 interface MessageItem {
@@ -259,7 +284,7 @@ export default function DialogsPage({ params }: { params: { agentId: string } })
               }`}
             >
               <div className="mb-1 flex items-center justify-between">
-                <span className="truncate text-sm font-medium text-[color:var(--color-chalk)]">{lead.name}</span>
+                <span className="truncate text-sm font-medium text-[color:var(--color-chalk)]">{leadTitle(lead)}</span>
                 <span className="ml-2 flex-shrink-0 text-[10px] text-[color:var(--color-smoke)]">
                   {formatDistanceToNow(new Date(lead.updated_at ?? lead.created_at), { locale: ru, addSuffix: true })}
                 </span>
@@ -287,11 +312,11 @@ export default function DialogsPage({ params }: { params: { agentId: string } })
             <div className="flex h-14 items-center justify-between border-b border-[color:var(--color-graphite)] px-6">
               <div className="flex items-center gap-3">
                 <div className="flex h-9 w-9 items-center justify-center rounded-full border border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] text-sm font-semibold text-[color:var(--color-chalk)]">
-                  {selectedLead?.name?.[0] ?? '?'}
+                  {leadInitial(selectedLead)}
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <p className="text-sm font-semibold text-[color:var(--color-chalk)]">{selectedLead?.name}</p>
+                    <p className="text-sm font-semibold text-[color:var(--color-chalk)]">{leadTitle(selectedLead)}</p>
                     <span className={`rounded-full border border-[color:var(--color-graphite)] px-2 py-0.5 text-[10px] font-medium ${
                       selectedLead?.status === 'new' ? 'bg-[color:var(--color-carbon)] text-[color:var(--color-chalk)]' :
                       selectedLead?.status === 'in_progress' ? 'bg-[color:var(--color-carbon)] text-[color:var(--color-smoke)]' :
@@ -300,7 +325,7 @@ export default function DialogsPage({ params }: { params: { agentId: string } })
                       {selectedLead?.status === 'new' ? 'new' : selectedLead?.status === 'in_progress' ? 'in progress' : selectedLead?.status === 'done' ? 'done' : selectedLead?.status}
                     </span>
                   </div>
-                  <p className="text-xs text-[color:var(--color-smoke)]">{selectedLead?.external_id}</p>
+                  <p className="text-xs text-[color:var(--color-smoke)]">{leadSubtitle(selectedLead)}</p>
                 </div>
               </div>
               <button
