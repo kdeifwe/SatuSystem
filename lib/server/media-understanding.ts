@@ -1,26 +1,26 @@
-import { GEMINI_CHAT_MODEL, geminiFetch } from '@/lib/server/ai/gemini-client';
+// Понимание медиа от клиента без Gemini: всё идёт через OpenRouter (тот же ключ и баланс, что у Claude).
+//  - голосовые: OpenRouter Speech-to-Text (Whisper), модель из OPENROUTER_STT_MODEL
+//  - фото: Claude с поддержкой изображений (OPENROUTER_VISION_MODEL или OPENROUTER_DEFAULT_MODEL)
+//  - видео: содержимое не анализируется, агент только узнаёт, что клиент прислал видео
 
 export type MediaKind = 'audio' | 'image' | 'video';
 
-const GEMINI_MEDIA_MODEL = process.env.GEMINI_MEDIA_MODEL || GEMINI_CHAT_MODEL;
-// inlineData: лимит запроса ~20 МБ, base64 раздувает на ~33%
-const MAX_INLINE_BYTES = 14 * 1024 * 1024;
+const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
+const MAX_BYTES = 20 * 1024 * 1024;
 
-const PROMPTS: Record<MediaKind, string> = {
-  audio:
-    'Расшифруй это голосовое сообщение дословно на том языке, на котором оно сказано (русский или казахский). ' +
-    'Верни ТОЛЬКО текст расшифровки, без комментариев. Если речи нет — верни пустую строку.',
-  image:
-    'Это фото от клиента в чате. Опиши кратко, что на нём (1–3 предложения). ' +
-    'Затем дословно перепиши весь видимый текст: цены, названия, никнеймы, суммы, даты, номера. ' +
-    'Если это чек или скриншот оплаты — укажи сумму, дату, статус и получателя. ' +
-    'Формат: «Описание: ... Текст на фото: ...». Без лишних вступлений.',
-  video:
-    'Это видео от клиента в чате. Кратко опиши, что в нём происходит (1–3 предложения), ' +
-    'и дословно перепиши речь, если она есть. Без лишних вступлений.',
-};
+const STT_MODELS: string[] = [
+  process.env.OPENROUTER_STT_MODEL || '',
+  'openai/whisper-large-v3',
+  'openai/whisper-1',
+].filter((name, index, all) => Boolean(name) && all.indexOf(name) === index);
 
-const LABELS: Record<MediaKind, string> = {
+const IMAGE_PROMPT =
+  'Это фото от клиента в чате. Опиши кратко, что на нём (1–3 предложения). ' +
+  'Затем дословно перепиши весь видимый текст: цены, названия, никнеймы, суммы, даты, номера. ' +
+  'Если это чек или скриншот оплаты — укажи сумму, дату, статус и получателя. ' +
+  'Формат: «Описание: ... Текст на фото: ...». Без лишних вступлений.';
+
+const LABELS = {
   audio: '',
   image: '[Клиент прислал фото]',
   video: '[Клиент прислал видео]',
@@ -33,41 +33,106 @@ export function cleanMimeType(mime: string | null | undefined, kind: MediaKind):
   return kind === 'audio' ? 'audio/ogg' : kind === 'image' ? 'image/jpeg' : 'video/mp4';
 }
 
+function audioFormatFromMime(mimeType: string): string {
+  const mime = cleanMimeType(mimeType, 'audio');
+  if (mime.includes('mpeg') || mime.includes('mp3')) return 'mp3';
+  if (mime.includes('mp4') || mime.includes('m4a')) return 'm4a';
+  if (mime.includes('wav')) return 'wav';
+  if (mime.includes('webm')) return 'webm';
+  if (mime.includes('aac')) return 'aac';
+  if (mime.includes('flac')) return 'flac';
+  return 'ogg';
+}
+
+async function transcribeAudio(buffer: Buffer, mimeType: string): Promise<string> {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) throw new Error('OPENROUTER_API_KEY is not set');
+
+  const format = audioFormatFromMime(mimeType);
+  const data = buffer.toString('base64');
+  let lastError = '';
+
+  for (const model of STT_MODELS) {
+    const res = await fetch(`${OPENROUTER_BASE}/audio/transcriptions`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, input_audio: { data, format } }),
+    });
+
+    if (res.ok) {
+      const json: any = await res.json();
+      return String(json?.text ?? '').trim();
+    }
+
+    const body = await res.text().catch(() => '');
+    lastError = `${model}: ${res.status} ${body.slice(0, 300)}`;
+    // Ключ или баланс: другая модель не поможет.
+    if (res.status === 401 || res.status === 402 || res.status === 403) break;
+  }
+
+  throw new Error(`OpenRouter STT failed: ${lastError}`);
+}
+
+async function describeImage(buffer: Buffer, mimeType: string): Promise<string> {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) throw new Error('OPENROUTER_API_KEY is not set');
+  const model = process.env.OPENROUTER_VISION_MODEL || process.env.OPENROUTER_DEFAULT_MODEL;
+  if (!model) throw new Error('OPENROUTER_VISION_MODEL / OPENROUTER_DEFAULT_MODEL is not set');
+
+  const res = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model,
+      max_tokens: 600,
+      temperature: 0,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'image_url', image_url: { url: `data:${mimeType};base64,${buffer.toString('base64')}` } },
+            { type: 'text', text: IMAGE_PROMPT },
+          ],
+        },
+      ],
+    }),
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`OpenRouter vision failed: ${model}: ${res.status} ${body.slice(0, 300)}`);
+  }
+
+  const json: any = await res.json();
+  const content = json?.choices?.[0]?.message?.content;
+  if (typeof content === 'string') return content.trim();
+  if (Array.isArray(content)) return content.map((part: any) => part?.text ?? '').join('').trim();
+  return '';
+}
+
 export async function understandMedia(
   buffer: Buffer,
   mimeType: string,
   kind: MediaKind,
   caption?: string | null,
 ): Promise<string> {
-  if (buffer.length > MAX_INLINE_BYTES) {
-    throw new Error(`Media too large for inline processing: ${buffer.length} bytes`);
+  if (buffer.length > MAX_BYTES) {
+    throw new Error(`Media too large for processing: ${buffer.length} bytes`);
   }
 
-  const res = await geminiFetch(GEMINI_MEDIA_MODEL, 'generateContent', {
-    contents: [
-      {
-        role: 'user',
-        parts: [
-          { inlineData: { mimeType: cleanMimeType(mimeType, kind), data: buffer.toString('base64') } },
-          { text: PROMPTS[kind] },
-        ],
-      },
-    ],
-    generationConfig: { temperature: 0, maxOutputTokens: 1024, thinkingConfig: { thinkingBudget: 0 } },
-  });
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`Gemini media failed: ${res.status} ${body.slice(0, 300)}`);
-  }
-
-  const json: any = await res.json();
-  const described = String(
-    (json?.candidates?.[0]?.content?.parts ?? []).map((p: any) => p?.text ?? '').join('')
-  ).trim();
+  const mime = cleanMimeType(mimeType, kind);
   const cap = String(caption ?? '').trim();
 
-  if (kind === 'audio') return described;
-  if (!described && !cap) return '';
-  return [LABELS[kind], described, cap ? `Подпись клиента: ${cap}` : ''].filter(Boolean).join('\n');
+  if (kind === 'audio') {
+    return transcribeAudio(buffer, mime);
+  }
+
+  if (kind === 'image') {
+    const described = await describeImage(buffer, mime);
+    if (!described && !cap) return '';
+    return [LABELS.image, described, cap ? `Подпись клиента: ${cap}` : ''].filter(Boolean).join('\n');
+  }
+
+  // Видео: содержимое не разбираем, сообщаем агенту сам факт и подпись.
+  return [LABELS.video, cap ? `Подпись клиента: ${cap}` : ''].filter(Boolean).join('\n');
 }

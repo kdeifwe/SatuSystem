@@ -101,9 +101,12 @@ async function ingestIncomingMessage(
         if (!download) throw new Error('downloadMedia dependency is not provided');
         const understand = deps.understandMedia ?? understandMedia;
         const buffer = await download(message);
+        console.log(`[WA] media downloaded kind=${media.kind} mime=${media.mimeType} bytes=${buffer.length}`);
         const understood = await understand(buffer, media.mimeType, media.kind, media.caption ?? text);
+        console.log(`[WA] media understood kind=${media.kind} chars=${String(understood ?? '').length}`);
         if (understood) text = understood;
       } catch (error) {
+        console.error(`[WA] media failed kind=${media.kind} mime=${media.mimeType} reason=${(error instanceof Error ? error.message : String(error)).slice(0, 600)}`);
         logger.error({ agentId, error }, 'Failed to understand WhatsApp media');
         try {
           await sock.sendMessage(remoteJid, { text: 'Извините, не получилось открыть файл, напишите, пожалуйста, текстом' });
