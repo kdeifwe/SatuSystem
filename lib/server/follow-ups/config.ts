@@ -11,6 +11,8 @@ export interface RepeatTouchesConfig {
   window_end_hour: number;
   message_mode: RepeatTouchesMode;
   fixed_templates: string[];
+  /** Доп. указания владельца для ИИ (тон, язык, что предлагать, чего не упоминать). */
+  ai_instructions: string;
   /** Лидов в этих статусах не трогаем. */
   stop_statuses: string[];
   stop_if_ai_disabled: boolean;
@@ -21,6 +23,7 @@ export interface RepeatTouchesConfig {
 }
 
 export const MAX_TOUCHES = 3;
+export const MAX_AI_INSTRUCTIONS_LENGTH = 800;
 export const MAX_DELAY_MINUTES = 7 * 24 * 60;
 
 export const DEFAULT_REPEAT_TOUCHES_CONFIG: RepeatTouchesConfig = {
@@ -33,6 +36,7 @@ export const DEFAULT_REPEAT_TOUCHES_CONFIG: RepeatTouchesConfig = {
     'Чтобы не потерять нить разговора — вы ещё думаете над предложением? Если удобнее, можем вернуться к этому позже.',
     'Последнее напоминание с моей стороны 🙂 Если актуально — просто напишите, и мы всё оформим.',
   ],
+  ai_instructions: '',
   stop_statuses: ['won', 'lost', 'closed', 'done'],
   stop_if_ai_disabled: true,
   max_silence_hours: 96,
@@ -77,6 +81,8 @@ export function normalizeRepeatTouchesConfig(raw: unknown): RepeatTouchesConfig 
     window_end_hour: end,
     message_mode: src.message_mode === 'fixed_templates' ? 'fixed_templates' : 'ai_generated',
     fixed_templates: templates.length > 0 ? templates : [...d.fixed_templates],
+    ai_instructions:
+      typeof src.ai_instructions === 'string' ? src.ai_instructions.trim().slice(0, MAX_AI_INSTRUCTIONS_LENGTH) : '',
     stop_statuses: stopStatuses,
     stop_if_ai_disabled: src.stop_if_ai_disabled === false ? false : true,
     max_silence_hours: clampInt(src.max_silence_hours, 6, 24 * 30, d.max_silence_hours),
