@@ -5,6 +5,7 @@ import { ToggleLeft } from 'lucide-react';
 import { getRepeatTouchesSettings, saveRepeatTouchesSettings } from './repeat-touches-actions';
 import {
   DEFAULT_REPEAT_TOUCHES_CONFIG,
+  MAX_AI_INSTRUCTIONS_LENGTH,
   MAX_DELAY_MINUTES,
   MAX_TOUCHES,
   type RepeatTouchesConfig,
@@ -169,10 +170,26 @@ export default function RepeatTouchesPanel({ agentId }: { agentId: string }) {
           <option value="fixed_templates">Фиксированные шаблоны</option>
         </select>
         {cfg.message_mode === 'ai_generated' ? (
-          <p className="mt-2 text-xs leading-5 text-slate-400">
-            ИИ учитывает историю диалога и стиль агента, не повторяется и не выдумывает акции. Если клиент отказался или уже записался,
-            касание не отправляется.
-          </p>
+          <>
+            <p className="mt-2 text-xs leading-5 text-slate-400">
+              ИИ учитывает историю диалога и стиль агента, не повторяется и не выдумывает акции. Если клиент отказался или уже записался,
+              касание не отправляется.
+            </p>
+            <div className="mt-3">
+              <label className="block text-xs text-slate-400">Инструкция для ИИ (необязательно)</label>
+              <textarea
+                rows={4}
+                maxLength={MAX_AI_INSTRUCTIONS_LENGTH}
+                className={input}
+                placeholder="Например: пиши на «вы», без смайликов; предлагай записаться на тест; не упоминай оплату и Kaspi."
+                value={cfg.ai_instructions}
+                onChange={(e) => setCfg({ ...cfg, ai_instructions: e.target.value })}
+              />
+              <div className="mt-1 text-right text-[11px] text-slate-500">
+                {cfg.ai_instructions.length}/{MAX_AI_INSTRUCTIONS_LENGTH}
+              </div>
+            </div>
+          </>
         ) : (
           <div className="mt-3 space-y-3">
             {rows.map((_, index) => (
