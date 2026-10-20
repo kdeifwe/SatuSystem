@@ -1,13 +1,15 @@
 import pino from 'pino';
-import { IgApiClient } from 'instagram-private-api';
-import { withRealtime, type IgApiClientRealtime } from 'instagram_mqtt';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { runAgentTurnWithLead } from '@/lib/server/ai/orchestrator';
-import { handleIncomingMessageWithDependencies } from './instagram-handler';
 
-const { normalizeConnectionStatus, buildChannelStatusUpdate } = require('@/lib/channels/status-utils');
+/**
+ * Тонкий клиент к службе ig-worker (services/ig-worker).
+ * Вся работа с Instagram (вход, сессия, опрос директа, отправка) живёт в воркере.
+ * Здесь только HTTP-вызовы и поиск канала в БД. Пароли нигде не логируются и не сохраняются.
+ */
 
-export type InstagramStatus = 'connected' | 'disconnected' | 'challenge' | '2fa' | 'error';
+const logger = pino({ level: process.env.NODE_ENV === 'development' ? 'info' : 'warn' });
+
+export type InstagramStatus = 'connected' | 'disconnected' | 'connecting' | 'challenge' | '2fa' | 'error';
 
 export interface InstagramClientInfo {
   status: InstagramStatus;
@@ -16,590 +18,222 @@ export interface InstagramClientInfo {
   challengeType?: 'challenge' | '2fa';
 }
 
-interface InstagramClientEntry extends InstagramClientInfo {
-  client: IgApiClientRealtime;
-  reconnectAttempts: number;
-  reconnectTimer?: ReturnType<typeof setTimeout>;
-  lastReconnectAt?: number;
-  username?: string;
+export class InstagramWorkerError extends Error {
+  constructor(
+    message: string,
+    public readonly httpStatus: number,
+    public readonly code: string,
+  ) {
+    super(message);
+    this.name = 'InstagramWorkerError';
+  }
 }
 
-declare global {
-  // eslint-disable-next-line no-var
-  var __instagramClients: Map<string, InstagramClientEntry> | undefined;
-  // eslint-disable-next-line no-var
-  var __instagramClientInitLocks: Map<string, Promise<InstagramClientEntry>> | undefined;
+interface WorkerStatusResponse {
+  status?: string;
+  username?: string | null;
+  last_error?: string | null;
+  challenge_type?: string | null;
 }
 
-const clientStore = globalThis.__instagramClients ?? new Map<string, InstagramClientEntry>();
-globalThis.__instagramClients = clientStore;
-const clientInitLocks = globalThis.__instagramClientInitLocks ?? new Map<string, Promise<InstagramClientEntry>>();
-globalThis.__instagramClientInitLocks = clientInitLocks;
+const KNOWN_STATUSES: InstagramStatus[] = ['connected', 'disconnected', 'connecting', 'challenge', '2fa', 'error'];
 
-const logger = pino({ level: process.env.NODE_ENV === 'development' ? 'info' : 'warn' });
-
-function getInstagramFriendlyError(error: unknown, fallback: string): string {
-  const rawText = error instanceof Error ? error.message : String(error ?? '');
-  const message = rawText.toLowerCase();
-
-  if (message.includes('two factor') || message.includes('2fa') || message.includes('twofactor')) {
-    return 'Instagram требует код подтверждения в приложении.';
-  }
-
-  if (message.includes('checkpoint') || message.includes('challenge') || message.includes('security')) {
-    return 'Instagram запросил проверку безопасности. Введите код из приложения или письма.';
-  }
-
-  if (message.includes('password') || message.includes('incorrect') || message.includes('invalid') || message.includes('login')) {
-    return 'Неверный логин или пароль Instagram.';
-  }
-
-  if (message.includes('verification') || message.includes('code')) {
-    return 'Код подтверждения не подходит. Проверьте его и попробуйте снова.';
-  }
-
-  return fallback;
+function normalizeStatus(value: unknown): InstagramStatus {
+  return KNOWN_STATUSES.includes(value as InstagramStatus) ? (value as InstagramStatus) : 'disconnected';
 }
 
-async function ensureInstagramChannel(agentId: string) {
+function toClientInfo(data: WorkerStatusResponse): InstagramClientInfo {
+  const status = normalizeStatus(data.status);
+  return {
+    status,
+    username: data.username ?? undefined,
+    lastError: data.last_error ?? undefined,
+    challengeType: status === 'challenge' || status === '2fa' ? status : undefined,
+  };
+}
+
+async function workerFetch<T>(path: string, init: { method?: 'GET' | 'POST'; body?: unknown; timeoutMs?: number } = {}): Promise<T> {
+  const base = process.env.IG_WORKER_URL?.trim().replace(/\/+$/, '');
+  const secret = process.env.IG_WORKER_SECRET?.trim();
+  if (!base || !secret) {
+    throw new InstagramWorkerError('Служба Instagram не настроена (IG_WORKER_URL / IG_WORKER_SECRET).', 503, 'not_configured');
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(`${base}${path}`, {
+      method: init.method ?? 'GET',
+      headers: {
+        Authorization: `Bearer ${secret}`,
+        'Content-Type': 'application/json',
+      },
+      body: init.body === undefined ? undefined : JSON.stringify(init.body),
+      signal: AbortSignal.timeout(init.timeoutMs ?? 20_000),
+      cache: 'no-store',
+    });
+  } catch (error) {
+    logger.warn({ path, errorName: error instanceof Error ? error.name : 'unknown' }, 'ig-worker unreachable');
+    throw new InstagramWorkerError('Служба Instagram недоступна. Попробуйте позже.', 503, 'worker_unreachable');
+  }
+
+  const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!response.ok) {
+    const message = typeof payload.error === 'string' ? payload.error : `Ошибка службы Instagram (${response.status})`;
+    const code = typeof payload.code === 'string' ? payload.code : 'worker_error';
+    throw new InstagramWorkerError(message, response.status, code);
+  }
+  return payload as T;
+}
+
+// ---------------------------------------------------------------- channels
+
+export interface InstagramChannelRow {
+  id: string;
+  org_id: string;
+  credentials: Record<string, unknown> | null;
+  is_active: boolean | null;
+  connection_status: string | null;
+}
+
+async function getOrgId(agentId: string): Promise<string> {
   const admin = createAdminClient();
-  const { data: agent, error: agentError } = await admin
-    .from('agents')
-    .select('org_id')
-    .eq('id', agentId)
-    .single();
-
-  if (agentError || !agent?.org_id) {
+  const { data: agent, error } = await admin.from('agents').select('org_id').eq('id', agentId).single();
+  if (error || !agent?.org_id) {
     throw new Error(`Agent not found: ${agentId}`);
   }
+  return agent.org_id as string;
+}
 
-  const { data: existingChannel } = await admin
+export async function findInstagramChannel(agentId: string): Promise<InstagramChannelRow | null> {
+  const admin = createAdminClient();
+  const orgId = await getOrgId(agentId);
+  const { data } = await admin
     .from('channels')
     .select('id, org_id, credentials, is_active, connection_status')
-    .eq('org_id', agent.org_id)
+    .eq('org_id', orgId)
     .eq('type', 'instagram')
     .maybeSingle();
+  return (data as InstagramChannelRow | null) ?? null;
+}
 
-  if (existingChannel) {
-    return existingChannel;
+/** Создаёт (или перевязывает) канал Instagram для режима «логин/пароль». OAuth-токены при этом сбрасываются. */
+export async function ensureInstagramUserbotChannel(agentId: string, username: string): Promise<InstagramChannelRow> {
+  const admin = createAdminClient();
+  const orgId = await getOrgId(agentId);
+  const existing = await findInstagramChannel(agentId);
+
+  const previous = (existing?.credentials ?? {}) as Record<string, unknown>;
+  const sameAccount = previous.provider === 'userbot' && previous.username === username;
+  const credentials: Record<string, unknown> = {
+    agent_id: agentId,
+    provider: 'userbot',
+    username,
+    // сохранённая сессия остаётся только если это тот же аккаунт; воркер всё равно перезапишет её при входе
+    ...(sameAccount && typeof previous.session === 'string' ? { session: previous.session } : {}),
+  };
+
+  if (existing) {
+    const { error } = await admin
+      .from('channels')
+      .update({ credentials, is_active: false, connection_status: 'disconnected' })
+      .eq('id', existing.id);
+    if (error) throw new Error(`Failed to update Instagram channel: ${error.message}`);
+    return { ...existing, credentials, is_active: false, connection_status: 'disconnected' };
   }
 
-  const { data: createdChannel, error: createError } = await admin
+  const { data, error } = await admin
     .from('channels')
-    .insert({
-      org_id: agent.org_id,
-      type: 'instagram',
-      credentials: { agent_id: agentId },
-      is_active: false,
-      connection_status: 'disconnected',
-    })
+    .insert({ org_id: orgId, type: 'instagram', credentials, is_active: false, connection_status: 'disconnected' })
     .select('id, org_id, credentials, is_active, connection_status')
     .single();
-
-  if (createError || !createdChannel) {
-    throw new Error(`Failed to create Instagram channel: ${createError?.message}`);
-  }
-
-  return createdChannel;
+  if (error || !data) throw new Error(`Failed to create Instagram channel: ${error?.message}`);
+  return data as InstagramChannelRow;
 }
 
-export async function resetStaleInstagramStatuses() {
-  try {
-    const admin = createAdminClient();
-    await admin
-      .from('channels')
-      .update({ is_active: false, connection_status: 'disconnected' })
-      .eq('type', 'instagram');
-  } catch (error) {
-    logger.warn({ error }, 'Failed to reset Instagram channel statuses on cold start');
-  }
+// ---------------------------------------------------------------- public API
+
+export async function loginInstagram(agentId: string, username: string, password: string): Promise<InstagramClientInfo> {
+  const cleanUsername = username.trim().replace(/^@+/, '');
+  const channel = await ensureInstagramUserbotChannel(agentId, cleanUsername);
+  const data = await workerFetch<WorkerStatusResponse>('/login', {
+    method: 'POST',
+    body: { channel_id: channel.id, username: cleanUsername, password },
+    timeoutMs: 135_000,
+  });
+  return toClientInfo(data);
 }
 
-export async function syncInstagramChannelState(agentId: string, connectionStatus: InstagramStatus, active: boolean) {
+export async function submitInstagramCode(agentId: string, code: string): Promise<InstagramClientInfo> {
+  const channel = await findInstagramChannel(agentId);
+  if (!channel) return { status: 'disconnected', lastError: 'Сначала выполните вход в Instagram' };
   try {
-    const normalizedStatus = normalizeConnectionStatus(connectionStatus);
-    const payload = buildChannelStatusUpdate(normalizedStatus, active);
-    const admin = createAdminClient();
-    const { data: agent } = await admin
-      .from('agents')
-      .select('org_id')
-      .eq('id', agentId)
-      .single();
-
-    if (!agent?.org_id) return;
-
-    await admin
-      .from('channels')
-      .update(payload)
-      .eq('org_id', agent.org_id)
-      .eq('type', 'instagram');
+    const data = await workerFetch<WorkerStatusResponse>('/verify', {
+      method: 'POST',
+      body: { channel_id: channel.id, code },
+      timeoutMs: 135_000,
+    });
+    return toClientInfo(data);
   } catch (error) {
-    logger.error({ agentId, error }, 'Failed to update Instagram channel connection state');
-  }
-}
-
-async function storeInstagramSession(agentId: string, username: string | null | undefined, ig: IgApiClientRealtime) {
-  try {
-    const admin = createAdminClient();
-    const serializedState = await ig.exportState();
-    const { data: agent } = await admin.from('agents').select('org_id').eq('id', agentId).single();
-    if (!agent?.org_id) return;
-
-    const { data: channel } = await admin
-      .from('channels')
-      .select('id, credentials')
-      .eq('org_id', agent.org_id)
-      .eq('type', 'instagram')
-      .maybeSingle();
-
-    const previousCredentials = (channel?.credentials as Record<string, unknown> | null) ?? {};
-    const nextCredentials = {
-      ...previousCredentials,
-      agent_id: agentId,
-      username: username ?? previousCredentials.username ?? null,
-      state: serializedState,
-      session_version: 'instagram_mqtt_v1',
-    } as Record<string, unknown>;
-
-    await admin
-      .from('channels')
-      .update({ credentials: nextCredentials, is_active: true, connection_status: 'connected' })
-      .eq('id', channel?.id ?? '');
-  } catch (error) {
-    logger.warn({ agentId, error }, 'Failed to persist Instagram session state');
+    if (error instanceof InstagramWorkerError && error.httpStatus < 500) {
+      return { status: 'error', lastError: error.message };
+    }
+    throw error;
   }
 }
 
 export async function getInstagramStatus(agentId: string): Promise<InstagramClientInfo> {
-  const existing = clientStore.get(agentId);
-  if (existing) {
-    return {
-      status: existing.status,
-      lastError: existing.lastError,
-      username: existing.username,
-      challengeType: existing.challengeType,
-    };
+  let channel: InstagramChannelRow | null = null;
+  try {
+    channel = await findInstagramChannel(agentId);
+  } catch (error) {
+    logger.warn({ agentId, errorName: error instanceof Error ? error.name : 'unknown' }, 'Instagram channel lookup failed');
+    return { status: 'disconnected' };
+  }
+  if (!channel) return { status: 'disconnected' };
+
+  const credentials = (channel.credentials ?? {}) as Record<string, unknown>;
+  if (credentials.provider !== 'userbot') {
+    // старое OAuth-подключение: в этом режиме не используется
+    return { status: 'disconnected', lastError: 'Требуется подключение по логину и паролю' };
   }
 
   try {
-    const admin = createAdminClient();
-    const { data: agent } = await admin
-      .from('agents')
-      .select('org_id')
-      .eq('id', agentId)
-      .single();
-
-    if (!agent?.org_id) {
-      return { status: 'disconnected' };
-    }
-
-    const { data: channel } = await admin
-      .from('channels')
-      .select('connection_status, is_active, credentials')
-      .eq('org_id', agent.org_id)
-      .eq('type', 'instagram')
-      .maybeSingle();
-
-    const credentials = (channel?.credentials as Record<string, unknown> | null) ?? {};
-    const dbStatus = normalizeConnectionStatus((channel?.connection_status as InstagramStatus | null) ?? (channel?.is_active ? 'connected' : 'disconnected'));
-    return {
-      status: dbStatus,
-      username: typeof credentials.username === 'string' ? credentials.username : undefined,
-    };
+    const data = await workerFetch<WorkerStatusResponse>(`/status/${encodeURIComponent(channel.id)}`);
+    return toClientInfo(data);
   } catch (error) {
-    logger.warn({ agentId, error }, 'Failed to load Instagram status from database');
-    return { status: 'disconnected' };
+    // воркер недоступен: показываем то, что записано в БД, и честно говорим о проблеме
+    return {
+      status: normalizeStatus(channel.connection_status) === 'connected' ? 'error' : normalizeStatus(channel.connection_status),
+      username: typeof credentials.username === 'string' ? credentials.username : undefined,
+      lastError: error instanceof Error ? error.message : 'Служба Instagram недоступна',
+    };
   }
 }
 
 export async function disconnectInstagram(agentId: string): Promise<InstagramClientInfo> {
-  const existing = clientStore.get(agentId);
-  if (existing) {
-    try {
-      await existing.client.realtime.disconnect();
-    } catch (error) {
-      logger.warn({ agentId, error }, 'Failed to disconnect Instagram realtime client gracefully');
-    }
-    clientStore.delete(agentId);
-    clientInitLocks.delete(agentId);
-  }
-
+  const channel = await findInstagramChannel(agentId);
+  if (!channel) return { status: 'disconnected' };
   try {
-    const admin = createAdminClient();
-    const { data: agent } = await admin.from('agents').select('org_id').eq('id', agentId).single();
-    if (agent?.org_id) {
-      const { data: channel } = await admin
-        .from('channels')
-        .select('id, credentials')
-        .eq('org_id', agent.org_id)
-        .eq('type', 'instagram')
-        .maybeSingle();
-
-      await admin
-        .from('channels')
-        .update({
-          is_active: false,
-          connection_status: 'disconnected',
-          credentials: {
-            ...(channel?.credentials as Record<string, unknown> | null),
-            agent_id: agentId,
-            username: (channel?.credentials as Record<string, unknown> | null)?.username ?? null,
-            state: null,
-            password: undefined,
-          },
-        })
-        .eq('id', channel?.id ?? '');
-    }
+    await workerFetch<WorkerStatusResponse>(`/logout/${encodeURIComponent(channel.id)}`, { method: 'POST', timeoutMs: 40_000 });
   } catch (error) {
-    logger.warn({ agentId, error }, 'Failed to clear Instagram state after disconnect');
+    // воркер недоступен — всё равно гасим канал в БД, чтобы он не считался активным
+    logger.warn({ agentId, errorName: error instanceof Error ? error.name : 'unknown' }, 'ig-worker logout failed, clearing channel locally');
+    const admin = createAdminClient();
+    const credentials = { ...((channel.credentials ?? {}) as Record<string, unknown>) };
+    delete credentials.session;
+    delete credentials.last_error;
+    await admin.from('channels').update({ credentials, is_active: false, connection_status: 'disconnected' }).eq('id', channel.id);
   }
-
-  await syncInstagramChannelState(agentId, 'disconnected', false);
   return { status: 'disconnected' };
 }
 
-function scheduledReconnect(agentId: string, entry: InstagramClientEntry, reason: string) {
-  if (entry.reconnectTimer) {
-    clearTimeout(entry.reconnectTimer);
-  }
-
-  const delay = Math.min(30_000, 2000 * (2 ** Math.min(entry.reconnectAttempts, 4)));
-  entry.reconnectAttempts += 1;
-  entry.lastReconnectAt = Date.now();
-  entry.reconnectTimer = setTimeout(async () => {
-    try {
-      await restoreFromState(agentId);
-    } catch (error) {
-      logger.warn({ agentId, reason, error }, 'Instagram reconnect attempt failed');
-    }
-  }, delay);
-}
-
-async function attachRealtimeHandlers(agentId: string, ig: IgApiClientRealtime, username?: string) {
-  ig.realtime.on('close', () => {
-    const current = clientStore.get(agentId);
-    if (!current) return;
-    current.status = 'disconnected';
-    void syncInstagramChannelState(agentId, 'disconnected', false);
-    scheduledReconnect(agentId, current, 'instagram_realtime_close');
-  });
-
-  ig.realtime.on('error', (error: Error) => {
-    const current = clientStore.get(agentId);
-    if (!current) return;
-    current.status = 'error';
-    current.lastError = error instanceof Error ? error.message : 'Ошибка соединения Instagram';
-    void syncInstagramChannelState(agentId, 'error', false);
-    scheduledReconnect(agentId, current, 'instagram_realtime_error');
-  });
-
-  ig.realtime.on('message', async (payload: any) => {
-    const message = payload?.message ?? payload;
-    if (!message || !message.thread_id || !message.item_id) return;
-    if (String(message.user_id) === String(ig.state.cookieUserId)) return;
-
-    try {
-      await handleIncomingMessageWithDependencies(
-        agentId,
-        ig,
-        message,
-        {
-          createAdminClient,
-          ensureInstagramChannel,
-          runAgentTurnWithLead,
-          logger,
-          getSenderInfo: async (userId: string | number) => {
-            try {
-              const userRepo = (ig as any)?.user;
-              if (!userRepo || typeof userRepo.getInfo !== 'function') {
-                return null;
-              }
-              const user = await userRepo.getInfo(userId as any);
-              return user ?? null;
-            } catch {
-              return null;
-            }
-          },
-          sendText: async (currentAgentId: string, threadId: string, text: string) => {
-            await sendInstagramText(currentAgentId, threadId, text);
-          },
-        }
-      );
-    } catch (error) {
-      logger.error({ agentId, error }, 'Failed to process incoming Instagram message');
-    }
-  });
-
-  try {
-    const snapshot = await ig.feed.directInbox().request();
-    await ig.realtime.connect({ irisData: snapshot });
-    await ig.realtime.direct?.sendForegroundState({
-      inForegroundApp: true,
-      inForegroundDevice: true,
-      keepAliveTimeout: 60,
-      subscribeTopics: [],
-      subscribeGenericTopics: [],
-      unsubscribeTopics: [],
-      unsubscribeGenericTopics: [],
-      requestId: BigInt(Date.now()),
-    });
-    const current = clientStore.get(agentId);
-    if (current) {
-      current.status = 'connected';
-      current.username = username ?? current.username;
-      current.lastError = undefined;
-      current.reconnectAttempts = 0;
-      current.challengeType = undefined;
-      await syncInstagramChannelState(agentId, 'connected', true);
-      await storeInstagramSession(agentId, username ?? current.username, ig);
-    }
-  } catch (error) {
-    logger.warn({ agentId, error }, 'Instagram realtime connection failed');
-    const current = clientStore.get(agentId);
-    if (current) {
-      current.status = 'error';
-      current.lastError = error instanceof Error ? error.message : 'Ошибка подключения Instagram';
-      await syncInstagramChannelState(agentId, 'error', false);
-    }
-    throw error;
-  }
-}
-
-export async function restoreFromState(agentId: string) {
-  const existing = clientStore.get(agentId);
-  if (existing) {
-    return existing;
-  }
-
-  const admin = createAdminClient();
-  const { data: agent } = await admin.from('agents').select('org_id').eq('id', agentId).single();
-  if (!agent?.org_id) {
-    throw new Error(`Agent not found: ${agentId}`);
-  }
-
-  const { data: channel } = await admin
-    .from('channels')
-    .select('id, credentials, connection_status')
-    .eq('org_id', agent.org_id)
-    .eq('type', 'instagram')
-    .maybeSingle();
-
-  if (!channel?.credentials || typeof (channel.credentials as Record<string, unknown>)?.state !== 'string') {
-    return null;
-  }
-
-  const creds = channel.credentials as Record<string, unknown>;
-  const username = typeof creds.username === 'string' ? creds.username : undefined;
-  const client = withRealtime(new IgApiClient()) as IgApiClientRealtime;
-  client.state.generateDevice(username ?? `agent-${agentId}`);
-  await client.importState(String(creds.state));
-
-  const entry: InstagramClientEntry = {
-    client,
-    status: 'disconnected',
-    reconnectAttempts: 0,
-    username,
-  };
-
-  clientStore.set(agentId, entry);
-
-  try {
-    await client.account.currentUser();
-    await attachRealtimeHandlers(agentId, client, username);
-    entry.status = 'connected';
-    entry.lastError = undefined;
-    return entry;
-  } catch (error) {
-    if (error instanceof Error && error.name === 'IgCheckpointError') {
-      entry.status = 'challenge';
-      entry.challengeType = 'challenge';
-      entry.lastError = 'Instagram запросил проверку безопасности';
-      await syncInstagramChannelState(agentId, 'challenge', false);
-      return entry;
-    }
-    if (error instanceof Error && error.name === 'IgLoginTwoFactorRequiredError') {
-      entry.status = '2fa';
-      entry.challengeType = '2fa';
-      entry.lastError = 'Instagram требует двухфакторную проверку';
-      await syncInstagramChannelState(agentId, '2fa', false);
-      return entry;
-    }
-    entry.status = 'error';
-    entry.lastError = error instanceof Error ? error.message : 'Ошибка восстановления Instagram';
-    await syncInstagramChannelState(agentId, 'error', false);
-    throw error;
-  }
-}
-
-export async function loginInstagram(agentId: string, username: string, password: string): Promise<InstagramClientInfo> {
-  const existing = clientStore.get(agentId);
-  if (existing) {
-    return { status: existing.status, lastError: existing.lastError, username: existing.username, challengeType: existing.challengeType };
-  }
-
-  try {
-    const client = withRealtime(new IgApiClient()) as IgApiClientRealtime;
-    const proxyUrl = process.env.IG_PROXY?.trim();
-    if (proxyUrl) {
-      client.state.proxyUrl = proxyUrl;
-    }
-    client.state.generateDevice(username);
-    await client.account.login(username, password);
-
-    const entry: InstagramClientEntry = {
-      client,
-      status: 'connected',
-      reconnectAttempts: 0,
-      username,
-    };
-
-    clientStore.set(agentId, entry);
-    await attachRealtimeHandlers(agentId, client, username);
-    await syncInstagramChannelState(agentId, 'connected', true);
-    return { status: 'connected', username };
-  } catch (error) {
-    if ((error as any)?.constructor?.name === 'IgLoginTwoFactorRequiredError' || error instanceof Error && error.name === 'IgLoginTwoFactorRequiredError') {
-      const client = withRealtime(new IgApiClient()) as IgApiClientRealtime;
-      const proxyUrl = process.env.IG_PROXY?.trim();
-      if (proxyUrl) {
-        client.state.proxyUrl = proxyUrl;
-      }
-      client.state.generateDevice(username);
-      const entry: InstagramClientEntry = { client, status: '2fa', reconnectAttempts: 0, username, challengeType: '2fa' };
-      clientStore.set(agentId, entry);
-      await syncInstagramChannelState(agentId, '2fa', false);
-      return { status: '2fa', username, challengeType: '2fa' };
-    }
-
-    if ((error as any)?.constructor?.name === 'IgCheckpointError' || error instanceof Error && error.name === 'IgCheckpointError') {
-      const client = withRealtime(new IgApiClient()) as IgApiClientRealtime;
-      const proxyUrl = process.env.IG_PROXY?.trim();
-      if (proxyUrl) {
-        client.state.proxyUrl = proxyUrl;
-      }
-      client.state.generateDevice(username);
-      const entry: InstagramClientEntry = { client, status: 'challenge', reconnectAttempts: 0, username, challengeType: 'challenge' };
-      clientStore.set(agentId, entry);
-      await syncInstagramChannelState(agentId, 'challenge', false);
-      return { status: 'challenge', username, challengeType: 'challenge' };
-    }
-
-    const info: InstagramClientInfo = {
-      status: 'error',
-      lastError: getInstagramFriendlyError(error, 'Не удалось войти в Instagram'),
-      username,
-    };
-    await syncInstagramChannelState(agentId, 'error', false);
-    return info;
-  }
-}
-
-export async function submitInstagramCode(agentId: string, code: string): Promise<InstagramClientInfo> {
-  const entry = clientStore.get(agentId);
-  if (!entry || !entry.client) {
-    return { status: 'disconnected', lastError: 'Сессия Instagram не найдена' };
-  }
-
-  try {
-    const client = entry.client;
-    const username = entry.username ?? '';
-    const challengeInfo = (client.state as any).challenge as Record<string, any> | undefined;
-    const twoFactorIdentifiers = challengeInfo?.two_factor_info?.two_factor_identifier ?? challengeInfo?.two_factor_identifier;
-
-    await client.account.twoFactorLogin({
-      username,
-      verificationCode: code,
-      twoFactorIdentifier: twoFactorIdentifiers,
-      trustThisDevice: '1',
-      verificationMethod: '1',
-    });
-
-    entry.status = 'connected';
-    entry.challengeType = undefined;
-    entry.lastError = undefined;
-    await attachRealtimeHandlers(agentId, client, username);
-    await syncInstagramChannelState(agentId, 'connected', true);
-    return { status: 'connected', username };
-  } catch (error) {
-    entry.status = 'error';
-    entry.lastError = getInstagramFriendlyError(error, 'Ошибка подтверждения кода Instagram');
-    await syncInstagramChannelState(agentId, 'error', false);
-    return { status: 'error', lastError: entry.lastError, username: entry.username };
-  }
-}
-
-export async function sendInstagramText(agentId: string, threadId: string, text: string) {
-  const admin = createAdminClient();
-  const { data: agent } = await admin.from('agents').select('org_id').eq('id', agentId).single();
-  if (!agent?.org_id) throw new Error(`Agent not found: ${agentId}`);
-
-  const { data: channel } = await admin
-    .from('channels')
-    .select('id, credentials, connection_status, is_active')
-    .eq('org_id', agent.org_id)
-    .eq('type', 'instagram')
-    .maybeSingle();
-
-  const credentials = (channel?.credentials as Record<string, unknown> | null) ?? {};
-  const token = typeof credentials.access_token === 'string' ? credentials.access_token : null;
-  const igUserId = typeof credentials.ig_user_id === 'string' ? credentials.ig_user_id : null;
-
-  if (!token || !igUserId) {
-    throw new Error('Instagram channel is not connected');
-  }
-
-  const response = await fetch(`https://graph.instagram.com/v22.0/${igUserId}/messages`, {
+/** Отправка текста в Instagram-тред (thread_id хранится в leads.external_id). */
+export async function sendInstagramText(agentId: string, threadId: string, text: string): Promise<void> {
+  const channel = await findInstagramChannel(agentId);
+  if (!channel) throw new Error('Instagram channel is not connected');
+  await workerFetch<{ ok: boolean }>('/send', {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      recipient: { id: threadId },
-      message: { text },
-    }),
+    body: { channel_id: channel.id, thread_id: threadId, text },
+    timeoutMs: 30_000,
   });
-
-  if (!response.ok) {
-    const payload = await response.json().catch(() => ({}));
-    const errorCode = payload?.error?.code ?? payload?.error_code ?? null;
-    if (errorCode === 190) {
-      await admin.from('channels').update({
-        connection_status: 'error',
-        is_active: false,
-        credentials: { ...credentials, access_token: null },
-      }).eq('id', channel?.id ?? '');
-      throw new Error('Instagram token expired or invalid. Подключите аккаунт заново.');
-    }
-    throw new Error(payload?.error?.message ?? 'Не удалось отправить сообщение в Instagram');
-  }
 }
-
-export async function restoreAllInstagramSessions() {
-  await resetStaleInstagramStatuses();
-  try {
-    const admin = createAdminClient();
-    const { data: channels } = await admin
-      .from('channels')
-      .select('credentials, org_id')
-      .eq('type', 'instagram');
-
-    const channelList = channels ?? [];
-    logger.info({ count: channelList.length }, 'Restoring persisted Instagram sessions on cold start');
-
-    for (const channel of channelList) {
-      const credentials = (channel.credentials as Record<string, unknown> | null) ?? {};
-      const agentId = typeof credentials.agent_id === 'string' ? credentials.agent_id : null;
-      const state = typeof credentials.state === 'string' ? credentials.state : null;
-      if (!agentId || !state) continue;
-      try {
-        await restoreFromState(agentId);
-      } catch (error) {
-        logger.warn({ agentId, error }, 'Failed to restore persisted Instagram session');
-      }
-    }
-  } catch (error) {
-    logger.warn({ error }, 'Failed to scan Instagram channels for cold-start rebuild');
-  }
-}
-

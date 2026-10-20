@@ -63,3 +63,5 @@ root.txt
 status.txt
 send_phone_*
 temp_samat_*
+.venv/
+__pycache__/
