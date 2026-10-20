@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
+import LostAnalysisCard from './LostAnalysisCard';
 import { useSearchParams } from 'next/navigation';
 import { Sparkles, FileText, AlertCircle, CheckCircle2, AlertTriangle, AlertOctagon } from 'lucide-react';
 import { ImproveTabs } from './tabs';
@@ -21,6 +22,9 @@ interface ImprovementResult {
   current_prompt: string;
 }
 
+type LostStat = { reason: string; label: string; count: number; share: number; fixable: boolean };
+type LostStatsResponse = { total: number; days: number; reasons: LostStat[] };
+
 export default function ImprovePage({ params }: { params: { agentId: string } }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -29,6 +33,9 @@ export default function ImprovePage({ params }: { params: { agentId: string } })
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [applying, setApplying] = useState(false);
+  const [lostStats, setLostStats] = useState<LostStatsResponse | null>(null);
+  const [selectedReason, setSelectedReason] = useState<string | null>(null);
+  const [statsVersion, setStatsVersion] = useState(0);
 
   useEffect(() => {
     const feedbackParam = searchParams.get('feedback');
@@ -36,6 +43,32 @@ export default function ImprovePage({ params }: { params: { agentId: string } })
       setFeedback(decodeURIComponent(feedbackParam));
     }
   }, [searchParams]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/agents/${params.agentId}/lost-reasons`, { cache: 'no-store' });
+        if (!res.ok) return;
+        const data = (await res.json()) as LostStatsResponse;
+        if (!cancelled) setLostStats(data);
+      } catch {
+        // причины отказов необязательны для работы страницы
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [params.agentId, statsVersion]);
+
+  const pickReason = (stat: LostStat) => {
+    if (!lostStats) return;
+    setSelectedReason(stat.reason);
+    setFeedback(
+      `За последние ${lostStats.days} дней потеряно диалогов: ${lostStats.total}. Причина «${stat.label}» встречается у ${stat.count} (${stat.share}%). ` +
+        'Проанализируй эти реальные отказы и улучши работу агента так, чтобы чаще удерживать клиента.',
+    );
+  };
 
   const handleSubmit = async () => {
     if (!feedback.trim()) {
@@ -51,7 +84,7 @@ export default function ImprovePage({ params }: { params: { agentId: string } })
       const res = await fetch(`/api/agents/${params.agentId}/improve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ feedback }),
+        body: JSON.stringify({ feedback, lost_reason: selectedReason }),
       });
 
       const data = await res.json();
@@ -133,6 +166,41 @@ export default function ImprovePage({ params }: { params: { agentId: string } })
               <p className="mt-3 text-sm text-[color:var(--color-smoke)]">Опишите проблему, и я помогу улучшить промпт агента.</p>
 
               <div className="mt-10 space-y-6 text-left">
+                <LostAnalysisCard agentId={params.agentId} onApplied={() => setStatsVersion((v) => v + 1)} />
+                {lostStats && lostStats.total > 0 ? (
+                  <div className="rounded-2xl border border-[color:var(--color-graphite)] bg-[color:var(--color-obsidian)] p-4">
+                    <div className="text-sm font-semibold text-[color:var(--color-chalk)]">Почему клиенты не купили ({lostStats.days} дней)</div>
+                    <p className="mt-1 text-xs text-[color:var(--color-smoke)]">
+                      Потеряно диалогов: {lostStats.total}. Нажмите на причину, чтобы улучшить агента по реальным отказам.
+                    </p>
+                    <div className="mt-3 space-y-2">
+                      {lostStats.reasons.map((stat) => (
+                        <button
+                          key={stat.reason}
+                          type="button"
+                          disabled={!stat.fixable}
+                          onClick={() => pickReason(stat)}
+                          title={stat.fixable ? undefined : 'Эта причина связана не с промптом агента'}
+                          className={`block w-full rounded-xl border px-3 py-2 text-left text-sm transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                            selectedReason === stat.reason
+                              ? 'border-[color:var(--color-chalk)] bg-[color:var(--color-carbon)]'
+                              : 'border-[color:var(--color-graphite)] hover:bg-[color:var(--color-carbon)]'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between text-[color:var(--color-chalk)]">
+                            <span>{stat.label}</span>
+                            <span className="text-xs text-[color:var(--color-smoke)]">
+                              {stat.count} · {stat.share}%
+                            </span>
+                          </div>
+                          <div className="mt-2 h-1.5 w-full rounded-full bg-[color:var(--color-graphite)]">
+                            <div className="h-1.5 rounded-full bg-[color:var(--color-chalk)]" style={{ width: `${Math.max(4, stat.share)}%` }} />
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
                 <div>
                   <label className="text-sm font-semibold text-[color:var(--color-chalk)]">Опишите задачу</label>
                   <textarea

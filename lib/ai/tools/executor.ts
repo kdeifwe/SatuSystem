@@ -1,4 +1,5 @@
 import { createServiceClient } from '../../supabase/service.ts';
+import { LOST_NOTE_MAX, normalizeLostReason } from '@/lib/lost-reasons';
 import { generateQueryEmbedding } from '../embeddings.ts';
 import { enqueueNotification } from '../../notifications.ts';
 import { sendTelegramNotification } from '../../extensions/telegram-notify.ts';
@@ -102,9 +103,9 @@ async function dispatch(call: ToolCall, ctx: ToolContext): Promise<unknown> {
     case 'sendMediaToClient':
       return sendMediaToClient(call.args as { file_id?: string; category?: string; caption?: string }, ctx);
     case 'update_lead_status':
-      return updateLeadStatus(call.args as { lead_id: string; status: string }, ctx);
+      return updateLeadStatus(call.args as LeadStatusArgs, ctx);
     case 'updateLeadStatus':
-      return updateLeadStatus(call.args as { lead_id: string; status: string }, ctx);
+      return updateLeadStatus(call.args as LeadStatusArgs, ctx);
     case 'createKaspiInvoice':
       if (ctx.isSandbox) return { success: true, sandbox_mode: true, simulated: true };
       return createKaspiInvoice(call.args as { phone: string; amount: number; comment?: string }, ctx);
@@ -698,7 +699,9 @@ async function sendMediaToClient(args: { file_id?: string; category?: string; ca
   };
 }
 
-async function updateLeadStatus(args: { lead_id: string; status: string }, ctx: ToolContext) {
+type LeadStatusArgs = { lead_id: string; status: string; lost_reason?: string; lost_note?: string };
+
+async function updateLeadStatus(args: LeadStatusArgs, ctx: ToolContext) {
   // Игнорируем lead_id из аргументов модели и всегда используем реальный ID
   // текущего лида из контекста диалога — модель не должна сама выбирать,
   // чей статус менять.
@@ -712,7 +715,31 @@ async function updateLeadStatus(args: { lead_id: string; status: string }, ctx: 
     return { success: true, changed: false, current_status: args.status };
   }
 
-  const { error } = await supabase.from('leads').update({ status: args.status, updated_at: new Date().toISOString() }).eq('id', targetLeadId);
+  const nowIso = new Date().toISOString();
+  const baseUpdate: Record<string, unknown> = { status: args.status, updated_at: nowIso };
+  const lostFields: Record<string, unknown> = {};
+  let savedReason: string | null = null;
+
+  if (args.status === 'lost') {
+    // Причина отказа нужна для статистики и улучшения промпта; если модель не указала, считаем «другое».
+    savedReason = normalizeLostReason(args.lost_reason) ?? 'other';
+    const note = String(args.lost_note ?? '').trim().slice(0, LOST_NOTE_MAX);
+    lostFields.lost_reason = savedReason;
+    lostFields.lost_note = note || null;
+    lostFields.lost_at = nowIso;
+  } else if (lead.status === 'lost') {
+    // Лид вернулся в работу: причину отказа сбрасываем, чтобы статистика не врала.
+    lostFields.lost_reason = null;
+    lostFields.lost_note = null;
+    lostFields.lost_at = null;
+  }
+
+  let { error } = await supabase.from('leads').update({ ...baseUpdate, ...lostFields }).eq('id', targetLeadId);
+  if (error && Object.keys(lostFields).length > 0 && /lost_(reason|note|at)/i.test(error.message)) {
+    // Миграция с колонками lost_* ещё не применена: статус всё равно обновляем.
+    console.warn('[updateLeadStatus] lost_* columns are missing, saving status only');
+    ({ error } = await supabase.from('leads').update(baseUpdate).eq('id', targetLeadId));
+  }
   if (error) throw new Error(`Ошибка обновления статуса: ${error.message}`);
 
   return {
@@ -720,6 +747,7 @@ async function updateLeadStatus(args: { lead_id: string; status: string }, ctx: 
     changed: true,
     previous_status: lead.status,
     new_status: args.status,
+    ...(savedReason ? { lost_reason: savedReason } : {}),
   };
 }
 
