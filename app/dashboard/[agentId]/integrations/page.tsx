@@ -53,11 +53,11 @@ const INTEGRATIONS: Integration[] = [
   {
     id: 'instagram',
     name: 'Instagram',
-    description: 'Интегрируйтесь с Instagram Direct для автоматических ответов на сообщения и взаимодействия с подписчиками',
+    description: 'Автоматические ответы на сообщения в Instagram Direct. Подключение по логину и паролю аккаунта',
     icon: '📷',
     iconBg: 'bg-[color:var(--color-carbon)] border border-[color:var(--color-graphite)]',
     isOfficial: false,
-    warning: 'Требует бизнес-аккаунт Instagram привязанный к Facebook. Используйте на свой страх и риск.',
+    warning: 'Неофициальное подключение. Instagram может ограничить или заблокировать аккаунт. Используйте отдельный аккаунт, не основной.',
   },
   {
     id: 'kaspi',
@@ -749,23 +749,34 @@ function WhatsAppForm({ agentId, onStatusChanged }: { agentId: string; onStatusC
   );
 }
 
+type InstagramFormStatus = 'disconnected' | 'connecting' | 'connected' | 'challenge' | '2fa' | 'error';
+
 function InstagramForm({ agentId }: { agentId: string }) {
-  const [status, setStatus] = useState<'disconnected' | 'connected' | 'error'>('disconnected');
-  const [username, setUsername] = useState<string | null>(null);
-  const [tokenExpiresAt, setTokenExpiresAt] = useState<string | null>(null);
+  const [status, setStatus] = useState<InstagramFormStatus>('disconnected');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [code, setCode] = useState('');
+  const [connectedUsername, setConnectedUsername] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  const applyInfo = (data: { status?: string; username?: string | null; lastError?: string | null }) => {
+    const next = (['disconnected', 'connecting', 'connected', 'challenge', '2fa', 'error'] as const).find((item) => item === data?.status) ?? 'disconnected';
+    setStatus(next);
+    setConnectedUsername(data?.username ?? null);
+    setMessage(data?.lastError ?? null);
+    if (next === 'connected') {
+      setPassword('');
+      setCode('');
+    }
+  };
+
   const fetchStatus = async () => {
     try {
-      const response = await fetch(`/api/integrations/status?agentId=${agentId}`);
+      const response = await fetch(`/api/instagram/status?agentId=${agentId}`);
       const data = await response.json();
-      const instagram = data?.instagram ?? null;
-      const nextStatus = instagram?.connected ? 'connected' : 'disconnected';
-      setStatus(nextStatus);
-      setUsername(instagram?.username ?? null);
-      setTokenExpiresAt(instagram?.token_expires_at ?? null);
-      setMessage(instagram?.message ?? (nextStatus === 'connected' ? 'Подключено' : null));
+      applyInfo(data);
+      if (data?.username) setUsername(data.username);
     } catch {
       setStatus('error');
       setMessage('Не удалось получить статус Instagram');
@@ -776,50 +787,92 @@ function InstagramForm({ agentId }: { agentId: string }) {
     void fetchStatus();
   }, [agentId]);
 
-  const connect = () => {
-    window.location.href = `/api/instagram/oauth/start?agentId=${agentId}`;
+  const connect = async () => {
+    if (!username.trim() || !password) {
+      setMessage('Введите логин и пароль');
+      return;
+    }
+    setLoading(true);
+    setMessage(null);
+    try {
+      const response = await fetch('/api/instagram/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentId, username: username.trim(), password }),
+      });
+      applyInfo(await response.json());
+    } catch {
+      setStatus('error');
+      setMessage('Не удалось подключить Instagram');
+    } finally {
+      setPassword('');
+      setLoading(false);
+    }
+  };
+
+  const submitCode = async () => {
+    if (!code.trim()) return;
+    setLoading(true);
+    setMessage(null);
+    try {
+      const response = await fetch('/api/instagram/verify-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentId, code: code.trim() }),
+      });
+      applyInfo(await response.json());
+    } catch {
+      setStatus('error');
+      setMessage('Не удалось подтвердить код');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const disconnect = async () => {
     setLoading(true);
     setMessage(null);
     try {
-      const response = await fetch('/api/instagram/disconnect', {
+      await fetch('/api/instagram/disconnect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ agentId }),
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data?.error ?? 'Ошибка отключения');
       setStatus('disconnected');
-      setUsername(null);
-      setTokenExpiresAt(null);
+      setConnectedUsername(null);
       setMessage('Instagram отключён');
-    } catch (error) {
+    } catch {
       setStatus('error');
-      setMessage(error instanceof Error ? error.message : 'Ошибка отключения');
+      setMessage('Ошибка отключения');
     } finally {
       setLoading(false);
     }
   };
 
+  const inputClass =
+    'w-full px-3 py-2 border border-[color:var(--color-graphite)] rounded-[var(--radius-cards)] bg-[color:var(--color-carbon)] text-[color:var(--color-chalk)] text-sm placeholder-[color:var(--color-smoke)] focus:outline-none focus:border-[color:var(--color-ash)]';
+  const buttonClass =
+    'px-6 py-2.5 bg-[color:var(--color-obsidian)] border border-[color:var(--color-graphite)] text-[color:var(--color-chalk)] text-sm rounded-[var(--radius-cards)] hover:border-[color:var(--color-ash)] disabled:opacity-50';
+  const waitingForCode = status === 'challenge' || status === '2fa';
+
   return (
     <div>
       <h2 className="font-medium text-[color:var(--color-chalk)] mb-2">Instagram</h2>
       <p className="text-sm text-[color:var(--color-smoke)] mb-4">
-        Нужен профессиональный аккаунт Instagram (Business или Creator). В режиме разработки подключать можно только аккаунты с ролью Instagram Tester.
+        Агент будет отвечать на личные сообщения аккаунта. Входящие проверяются примерно раз в 20–40 секунд.
       </p>
 
       <div className="flex gap-3 p-4 bg-[color:var(--color-carbon)] border border-[color:var(--color-graphite)] rounded-[var(--radius-cards)] mb-6">
         <span className="flex-shrink-0">⚠️</span>
-        <p className="text-sm text-[color:var(--color-smoke)]">Подключение идёт через официальный Instagram Login (Business Login) без Facebook-страницы.</p>
+        <p className="text-sm text-[color:var(--color-smoke)]">
+          Неофициальное подключение: Instagram может ограничить или заблокировать аккаунт. Используйте отдельный аккаунт, не основной. Пароль не сохраняется, хранится только зашифрованная сессия.
+        </p>
       </div>
 
       {status === 'connected' && (
         <div className="rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-4 mb-4 space-y-3">
           <p className="text-sm font-medium text-[color:var(--color-chalk)]">Instagram подключён</p>
-          {username && <p className="text-sm text-[color:var(--color-smoke)]">@{username}</p>}
-          {tokenExpiresAt && <p className="text-xs text-[color:var(--color-smoke)]">Срок токена: {new Date(tokenExpiresAt).toLocaleString('ru-RU')}</p>}
+          {connectedUsername && <p className="text-sm text-[color:var(--color-smoke)]">@{connectedUsername}</p>}
           <button
             onClick={disconnect}
             disabled={loading}
@@ -830,17 +883,64 @@ function InstagramForm({ agentId }: { agentId: string }) {
         </div>
       )}
 
-      {status !== 'connected' && (
-        <button
-          onClick={connect}
-          disabled={loading}
-          className="px-6 py-2.5 bg-[color:var(--color-obsidian)] border border-[color:var(--color-graphite)] text-[color:var(--color-chalk)] text-sm rounded-[var(--radius-cards)] hover:border-[color:var(--color-ash)] disabled:opacity-50"
-        >
-          {loading ? 'Подключаю...' : 'Подключить Instagram'}
-        </button>
+      {waitingForCode && (
+        <div className="rounded-[var(--radius-cards)] border border-[color:var(--color-graphite)] bg-[color:var(--color-carbon)] p-4 mb-4 space-y-3">
+          <p className="text-sm text-[color:var(--color-chalk)]">
+            {status === '2fa'
+              ? 'Введите код двухфакторной аутентификации из приложения или SMS.'
+              : 'Instagram отправил код подтверждения на почту или в SMS. Введите его здесь.'}
+          </p>
+          <input
+            value={code}
+            onChange={(event) => setCode(event.target.value)}
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            placeholder="123456"
+            className={inputClass}
+          />
+          <div className="flex gap-3">
+            <button onClick={submitCode} disabled={loading || !code.trim()} className={buttonClass}>
+              {loading ? 'Проверяю...' : 'Подтвердить'}
+            </button>
+            <button onClick={disconnect} disabled={loading} className={buttonClass}>
+              Отмена
+            </button>
+          </div>
+        </div>
       )}
 
-      {message && <p className="text-sm text-[color:var(--color-smoke)] mt-4">{message}</p>}
+      {status !== 'connected' && !waitingForCode && (
+        <div className="space-y-3 max-w-sm">
+          <div>
+            <label className="block text-xs font-medium text-[color:var(--color-chalk)] mb-1">Логин Instagram</label>
+            <input
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+              autoComplete="off"
+              placeholder="username"
+              className={inputClass}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-[color:var(--color-chalk)] mb-1">Пароль</label>
+            <input
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              type="password"
+              autoComplete="new-password"
+              placeholder="••••••••"
+              className={inputClass}
+            />
+          </div>
+          <button onClick={connect} disabled={loading || !username.trim() || !password} className={buttonClass}>
+            {loading ? 'Подключаю, это может занять до пары минут...' : 'Подключить Instagram'}
+          </button>
+        </div>
+      )}
+
+      {message && (
+        <p className={`text-sm mt-4 ${status === 'error' ? 'text-[color:var(--color-chalk)]' : 'text-[color:var(--color-smoke)]'}`}>{message}</p>
+      )}
     </div>
   );
 }

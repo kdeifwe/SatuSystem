@@ -42,8 +42,9 @@ export async function GET(req: NextRequest) {
       result.whatsapp = { connected: true };
     }
     if (ch.type === 'instagram') {
+      const isUserbot = credentials?.provider === 'userbot';
       result.instagram = {
-        connected: Boolean(ch.is_active && credentials?.ig_user_id),
+        connected: Boolean(ch.is_active && (isUserbot ? credentials?.session : credentials?.ig_user_id)),
         status: ch.connection_status ?? (ch.is_active ? 'connected' : 'disconnected'),
         username: typeof credentials?.username === 'string' ? credentials.username : null,
         token_expires_at: credentials?.expires_at ?? null,
