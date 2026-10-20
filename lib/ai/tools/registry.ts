@@ -308,12 +308,18 @@ export const PRODUCTION_TOOL_DECLARATIONS: GeminiFunctionDeclaration[] = [
   },
   {
     name: 'updateLeadStatus',
-    description: 'Обновляет статус лида в CRM (new, contacted, interested, negotiation, won, lost). Вызывай при явном событии: клиент согласился, отказался или дал критичную информацию.',
+    description: 'Обновляет статус лида в CRM (new, contacted, interested, negotiation, won, lost). Вызывай при явном событии: клиент согласился, отказался или дал критичную информацию. Статус lost ставь только при ЯВНОМ отказе клиента («не нужно», «не буду», «выбрал другого»); «подумаю», «позже», молчание отказом не считаются. При lost обязательно укажи lost_reason.',
     parameters: {
       type: 'OBJECT',
       properties: {
         lead_id: { type: 'STRING', description: 'ID лида из контекста диалога.' },
         status: { type: 'STRING', enum: ['new', 'contacted', 'interested', 'negotiation', 'won', 'lost'], description: 'Новый статус лида.' },
+        lost_reason: {
+          type: 'STRING',
+          enum: ['price', 'timing', 'competitor', 'postponed', 'wrong_product', 'other'],
+          description: 'Причина отказа (только для status=lost): price — не устроила цена, timing — не устраивают сроки, competitor — выбрал конкурента, postponed — передумал или отложил решение, wrong_product — нужен другой продукт, other — иное.',
+        },
+        lost_note: { type: 'STRING', description: 'Короткая заметка о причине отказа своими словами клиента (до 300 символов), только для status=lost.' },
       },
       required: ['lead_id', 'status'],
     },

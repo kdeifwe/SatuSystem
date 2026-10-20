@@ -9,6 +9,8 @@ import {
   callGeminiForImproveWithRetry,
   type PromptPatch,
 } from '@/lib/server/ai/improve-agent';
+import { normalizeLostReason } from '@/lib/lost-reasons';
+import { formatLostStats, getLostDialogueExamples, getLostReasonStats } from '@/lib/server/lost-reasons';
 
 function getAdmin() {
   return createClient(
@@ -96,11 +98,28 @@ export async function POST(
     console.warn('[improve] failed to fetch example dialogues for critic', e);
   }
 
+  // Реальные отказы: статистика причин и диалоги потерянных лидов (если лиды помечаются как lost с причиной).
+  let lostContextText = '';
+  try {
+    const requestedReason = normalizeLostReason(body?.lost_reason);
+    const lostStats = await getLostReasonStats(admin, params.agentId, 30);
+    if (lostStats.total > 0) {
+      lostContextText = formatLostStats(lostStats);
+      const lostExamples = await getLostDialogueExamples(admin, params.agentId, requestedReason);
+      if (lostExamples) lostContextText += '\n\n' + lostExamples;
+    }
+  } catch (e) {
+    console.warn('[improve] failed to load lost-lead context', e);
+  }
+
   try {
     console.log('[improve] Step 1: Critic analysis...');
     let criticExamplesSection = '';
     if (exampleDialoguesText && exampleDialoguesText.trim().length > 0) {
       criticExamplesSection = `\n\nEXAMPLE DIALOGUES:\n${exampleDialoguesText}`;
+    }
+    if (lostContextText) {
+      criticExamplesSection += `\n\nREAL LOST LEADS (why customers refused). Use them as evidence of concrete failures, but only fix what the prompt itself can influence:\n${lostContextText}`;
     }
 
     const criticPrompt = `You are an expert AI sales agent prompt critic.
@@ -168,7 +187,10 @@ IDENTIFIED PROBLEMS:
 - Weak sections: ${JSON.stringify(criticism.weak_sections ?? [])}
 - Required fixes: ${JSON.stringify(criticism.specific_fixes_needed ?? [])}
 
-USER FEEDBACK: "${feedback}"
+USER FEEDBACK: "${feedback}"${lostContextText ? `
+
+REAL LOST DIALOGUES (use them to write concrete good/bad examples for the fix):
+${lostContextText}` : ''}
 
 IMPROVEMENT RULES:
 1. Keep all existing good parts — only fix the identified problems.
