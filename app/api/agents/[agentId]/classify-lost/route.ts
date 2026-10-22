@@ -7,7 +7,7 @@ export const fetchCache = 'force-no-store';
 export const maxDuration = 120;
 
 // Ручная разметка причин отказов.
-//   { mode: 'analyze', limit?, excludeLeadIds? } — ИИ предлагает кого считать потерянным и почему (в базу ничего не пишется)
+//   { mode: 'analyze', limit?, excludeLeadIds?, quick? } — ИИ предлагает кого считать потерянным и почему (в базу ничего не пишется)
 //   { mode: 'apply', items: [{ leadId, reason, note?, lostAt? }] } — записывает то, что подтвердил человек
 export async function POST(req: NextRequest, { params }: { params: { agentId: string } }) {
   const access = await requireAgentAccess(params.agentId);
@@ -26,6 +26,7 @@ export async function POST(req: NextRequest, { params }: { params: { agentId: st
     const result = await analyzeLostCandidates(access.admin, params.agentId, {
       limit: Number(body?.limit) || 25,
       excludeLeadIds,
+      quick: body?.quick === true,
     });
     return NextResponse.json(result);
   } catch (e) {

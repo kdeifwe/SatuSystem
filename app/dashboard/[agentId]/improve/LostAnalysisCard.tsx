@@ -24,6 +24,9 @@ export default function LostAnalysisCard({ agentId, onApplied }: { agentId: stri
   const [processed, setProcessed] = useState<string[]>([]);
   const [remaining, setRemaining] = useState<number | null>(null);
   const [checked, setChecked] = useState(0);
+  const [skippedNoReply, setSkippedNoReply] = useState(0);
+  const [failed, setFailed] = useState(0);
+  const [lastQuick, setLastQuick] = useState<boolean | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [applying, setApplying] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -31,7 +34,7 @@ export default function LostAnalysisCard({ agentId, onApplied }: { agentId: stri
 
   const selectedCount = rows.filter((r) => r.selected).length;
 
-  const analyze = async () => {
+  const analyze = async (quick: boolean) => {
     setError(null);
     setMessage(null);
     setAnalyzing(true);
@@ -39,7 +42,7 @@ export default function LostAnalysisCard({ agentId, onApplied }: { agentId: stri
       const res = await fetch(`/api/agents/${agentId}/classify-lost`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'analyze', limit: 25, excludeLeadIds: processed }),
+        body: JSON.stringify({ mode: 'analyze', limit: quick ? 40 : 25, excludeLeadIds: processed, quick }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -51,7 +54,24 @@ export default function LostAnalysisCard({ agentId, onApplied }: { agentId: stri
       setProcessed((current) => [...current, ...(data.processedLeadIds as string[])]);
       setRemaining(data.remaining as number);
       setChecked((n) => n + (data.processedLeadIds as string[]).length);
-      if (incoming.length === 0) setMessage('В этой пачке явных отказов не найдено.');
+      setSkippedNoReply((n) => n + ((data.skippedNoReply as number) ?? 0));
+      setFailed((n) => n + ((data.failed as number) ?? 0));
+      setLastQuick(quick);
+
+      const checkedNow = (data.processedLeadIds as string[]).length;
+      const details = [
+        `Проверено: ${checkedNow}`,
+        `найдено отказов: ${incoming.length}`,
+        data.skippedNoReply ? `клиент не отвечал: ${data.skippedNoReply}` : null,
+        data.failed ? `не удалось разобрать: ${data.failed}` : null,
+      ]
+        .filter(Boolean)
+        .join(', ');
+      if (checkedNow === 0) {
+        setMessage(quick ? 'Диалогов с признаками отказа больше не нашлось.' : 'Новых диалогов для проверки нет.');
+      } else {
+        setMessage(`${details}.`);
+      }
     } catch {
       setError('Ошибка сети, попробуйте ещё раз.');
     } finally {
@@ -103,19 +123,33 @@ export default function LostAnalysisCard({ agentId, onApplied }: { agentId: stri
       <div className="mt-3 flex flex-wrap items-center gap-3">
         <button
           type="button"
-          onClick={analyze}
+          onClick={() => analyze(true)}
           disabled={analyzing || applying}
           className="hyper-primary-btn px-4 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {analyzing ? 'Анализирую...' : checked > 0 ? 'Проанализировать ещё 25' : 'Проанализировать диалоги'}
+          {analyzing && lastQuick !== false ? 'Ищу...' : 'Быстрый поиск отказов'}
+        </button>
+        <button
+          type="button"
+          onClick={() => analyze(false)}
+          disabled={analyzing || applying}
+          className="rounded-full border border-[color:var(--color-graphite)] px-4 py-2 text-sm text-[color:var(--color-chalk)] transition hover:bg-[color:var(--color-carbon)] disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {analyzing && lastQuick === false ? 'Анализирую...' : 'Проверить подряд (25)'}
         </button>
         {checked > 0 ? (
           <span className="text-xs text-[color:var(--color-smoke)]">
-            Проверено диалогов: {checked}
-            {remaining !== null ? `, осталось: ${remaining}` : ''}
+            Всего проверено: {checked}
+            {skippedNoReply > 0 ? `, клиент молчал: ${skippedNoReply}` : ''}
+            {failed > 0 ? `, не разобрано: ${failed}` : ''}
+            {remaining !== null ? `, осталось в выборке: ${remaining}` : ''}
           </span>
         ) : null}
       </div>
+      <p className="mt-2 text-[11px] text-[color:var(--color-smoke)]">
+        «Быстрый поиск» читает ИИ только диалоги, где клиент писал слова вроде «не надо», «дорого», «керек емес». «Проверить подряд» идёт по всем
+        диалогам и находит и неявные отказы, но дольше.
+      </p>
 
       {error ? <p className="mt-2 text-sm text-rose-600">{error}</p> : null}
       {message ? <p className="mt-2 text-sm text-[color:var(--color-chalk)]">{message}</p> : null}
