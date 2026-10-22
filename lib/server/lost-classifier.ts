@@ -24,7 +24,42 @@ export interface AnalyzeResult {
 }
 
 const MAX_BATCH = 40;
-const CONCURRENCY = 5;
+const CONCURRENCY = 8;
+
+// Признаки возможного отказа в сообщениях клиента (русский и казахский) для быстрого поиска.
+const REFUSAL_MARKERS = new RegExp(
+  [
+    'не надо', 'не нужно', 'не нужен', 'не нужна', 'не интересно', 'неинтересно', 'не буду', 'отказыва', 'отказ ',
+    'дорого', 'дороговато', 'слишком дорог', 'передумал', 'уже купил', 'выбрал друг', 'нашел друг', 'нашёл друг',
+    'не актуал', 'не пишите', 'не беспокойте', 'отпишитесь', 'керек емес', 'қажет емес', 'қымбат', 'қызық емес',
+    'ойымнан шықты', 'жазбаңыз', 'алмаймын',
+  ].join('|'),
+  'i',
+);
+
+async function findConversationsWithRefusalWords(admin: SupabaseClient, convIds: string[]): Promise<Set<string>> {
+  const matched = new Set<string>();
+  const chunks: string[][] = [];
+  for (let i = 0; i < convIds.length; i += 50) chunks.push(convIds.slice(i, i + 50));
+
+  for (let i = 0; i < chunks.length; i += 4) {
+    await Promise.all(
+      chunks.slice(i, i + 4).map(async (chunk) => {
+        const { data, error } = await admin
+          .from('messages')
+          .select('conversation_id, content')
+          .in('conversation_id', chunk)
+          .eq('sender', 'user')
+          .limit(2000);
+        if (error) throw new Error(error.message);
+        for (const row of data ?? []) {
+          if (REFUSAL_MARKERS.test(String((row as any).content ?? ''))) matched.add((row as any).conversation_id);
+        }
+      }),
+    );
+  }
+  return matched;
+}
 // Для ручной разметки причин берём только то, что клиент выразил явно.
 const SELECTABLE_REASONS: LostReason[] = ['price', 'timing', 'competitor', 'postponed', 'wrong_product', 'other'];
 
@@ -47,6 +82,7 @@ function extractJson(text: string): Record<string, unknown> | null {
 const SYSTEM_PROMPT = `You review a chat between an AI sales agent and a client (Russian or Kazakh) and decide whether the client was LOST, and why.
 
 Verdict "lost" ONLY if the client EXPLICITLY declined or clearly ended the deal: said no or "not interested", refused because of price/terms and left, chose a competitor, bought elsewhere, said the product is not what they need, or asked to stop writing.
+Messages about the client's personal state or distress, jokes, or topics unrelated to buying are NOT refusals: return "not_lost".
 Verdict "not_lost" for everything else: "I'll think", "later", still asking questions, negotiating, booked/paid/agreed, unclear, or simply no answer.
 
 If lost, "reason" is one of:
@@ -82,7 +118,7 @@ async function classifyTranscript(transcript: string): Promise<{ lost: boolean; 
 export async function analyzeLostCandidates(
   admin: SupabaseClient,
   agentId: string,
-  options: { limit?: number; excludeLeadIds?: string[] } = {},
+  options: { limit?: number; excludeLeadIds?: string[]; quick?: boolean } = {},
 ): Promise<AnalyzeResult> {
   const limit = Math.min(Math.max(Math.round(options.limit ?? 25), 1), MAX_BATCH);
   const exclude = new Set(options.excludeLeadIds ?? []);
@@ -106,11 +142,21 @@ export async function analyzeLostCandidates(
     queue.push({ convId: (row as any).id, lead });
   }
 
-  const batch = queue.slice(0, limit);
+  let pool = queue;
+  if (options.quick) {
+    // Быстрый поиск: ИИ читает только диалоги, где клиент писал что-то похожее на отказ.
+    const matched = await findConversationsWithRefusalWords(
+      admin,
+      queue.map((q) => q.convId),
+    );
+    pool = queue.filter((q) => matched.has(q.convId));
+  }
+
+  const batch = pool.slice(0, limit);
   const result: AnalyzeResult = {
     processedLeadIds: batch.map((b) => b.lead.id),
     verdicts: [],
-    remaining: Math.max(queue.length - batch.length, 0),
+    remaining: Math.max(pool.length - batch.length, 0),
     skippedNoReply: 0,
     failed: 0,
   };
